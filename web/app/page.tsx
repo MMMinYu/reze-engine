@@ -34,9 +34,9 @@ export default function Home() {
       // Initialize engine
       try {
         const engine = new Engine(canvasRef.current, {
-          ambientColor: new Vec3(0.85, 0.9, 1.0),
-          bloomIntensity: 0.13,
-          rimLightIntensity: 0.35,
+          ambientColor: new Vec3(0.75, 0.85, 1.0),
+          bloomIntensity: 0.15,
+          rimLightIntensity: 0.4,
           cameraDistance: 13.5,
           cameraTarget: new Vec3(0, 17.1, 0),
         })
@@ -56,10 +56,10 @@ export default function Home() {
         await new Promise((resolve) => requestAnimationFrame(resolve))
         engine.playAnimation({
           breathBones: {
-            右ひじ: 0.015,
-            左ひじ: 0.015,
+            右ひじ: 0.02,
+            左ひじ: 0.02,
             腰: 0.002,
-            首: 0.005,
+            首: 0.003,
           },
           breathDuration: 5000,
         })
