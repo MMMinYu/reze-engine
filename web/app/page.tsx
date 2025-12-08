@@ -34,7 +34,6 @@ export default function Home() {
       // Initialize engine
       try {
         const engine = new Engine(canvasRef.current, {
-          ambient: 1.0,
           ambientColor: new Vec3(0.85, 0.9, 1.0),
           bloomIntensity: 0.13,
           rimLightIntensity: 0.35,

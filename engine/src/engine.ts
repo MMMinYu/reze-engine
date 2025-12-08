@@ -6,7 +6,6 @@ import { Physics } from "./physics"
 import { VMDKeyFrame, VMDLoader } from "./vmd-loader"
 
 export type EngineOptions = {
-  ambient?: number
   ambientColor?: Vec3
   bloomIntensity?: number
   rimLightIntensity?: number
@@ -17,7 +16,6 @@ export type EngineOptions = {
 export interface EngineStats {
   fps: number
   frameTime: number // ms
-  gpuMemory: number // MB (estimated total GPU memory)
 }
 
 interface DrawCall {
@@ -44,8 +42,7 @@ export class Engine {
   private cameraDistance: number = 26.6
   private cameraTarget: Vec3 = new Vec3(0, 12.5, 0)
   private lightUniformBuffer!: GPUBuffer
-  private lightData = new Float32Array(64)
-  private lightCount = 0
+  private lightData = new Float32Array(4)
   private vertexBuffer!: GPUBuffer
   private indexBuffer?: GPUBuffer
   private resizeObserver: ResizeObserver | null = null
@@ -77,7 +74,6 @@ export class Engine {
   private readonly COMPUTE_WORKGROUP_SIZE = 64
   private readonly BLOOM_DOWNSCALE_FACTOR = 2
   // Ambient light settings
-  private ambient: number = 1.0
   private ambientColor: Vec3 = new Vec3(1.0, 1.0, 1.0)
   // Bloom post-processing textures
   private sceneRenderTexture!: GPUTexture
@@ -101,7 +97,7 @@ export class Engine {
   private bloomBlurVBindGroup?: GPUBindGroup
   private bloomComposeBindGroup?: GPUBindGroup
   // Bloom settings
-  private bloomThreshold: number = 0.3
+  private bloomThreshold: number = 0.01
   private bloomIntensity: number = 0.12
   // Rim light settings
   private rimLightIntensity: number = 0.45
@@ -131,14 +127,12 @@ export class Engine {
   private stats: EngineStats = {
     fps: 0,
     frameTime: 0,
-    gpuMemory: 0,
   }
   private animationFrameId: number | null = null
   private renderLoopCallback: (() => void) | null = null
 
   private animationFrames: VMDKeyFrame[] = []
   private animationTimeouts: number[] = []
-  private gpuMemoryMB: number = 0
   private hasAnimation = false // Set to true when loadAnimation is called
   private playingAnimation = false // Set to true when playAnimation is called
   private breathingTimeout: number | null = null
@@ -147,7 +141,6 @@ export class Engine {
   constructor(canvas: HTMLCanvasElement, options?: EngineOptions) {
     this.canvas = canvas
     if (options) {
-      this.ambient = options.ambient ?? 1.0
       this.ambientColor = options.ambientColor ?? new Vec3(1.0, 1.0, 1.0)
       this.bloomIntensity = options.bloomIntensity ?? 0.12
       this.rimLightIntensity = options.rimLightIntensity ?? 0.45
@@ -205,20 +198,8 @@ export class Engine {
           _padding: f32,
         };
 
-        struct Light {
-          direction: vec3f,
-          _padding1: f32,
-          color: vec3f,
-          intensity: f32,
-        };
-
         struct LightUniforms {
-          ambient: f32,
           ambientColor: vec3f,
-          lightCount: f32,
-          _padding1: f32,
-          _padding2: f32,
-          lights: array<Light, 4>,
         };
 
         struct MaterialUniforms {
@@ -292,16 +273,7 @@ export class Engine {
           let n = normalize(input.normal);
           let albedo = textureSample(diffuseTexture, diffuseSampler, input.uv).rgb;
 
-          var lightAccum = light.ambient * light.ambientColor;
-          let numLights = u32(light.lightCount);
-          for (var i = 0u; i < numLights; i++) {
-            let l = -light.lights[i].direction;
-            let nDotL = max(dot(n, l), 0.0);
-            let toonUV = vec2f(nDotL, 0.5);
-            let toonFactor = textureSample(toonTexture, toonSampler, toonUV).rgb;
-            let radiance = light.lights[i].color * light.lights[i].intensity;
-            lightAccum += toonFactor * radiance * nDotL;
-          }
+          let lightAccum = light.ambientColor;
           
           // Rim light calculation
           let viewDir = normalize(camera.viewPos - input.worldPos);
@@ -1384,53 +1356,21 @@ export class Engine {
   private setupLighting() {
     this.lightUniformBuffer = this.device.createBuffer({
       label: "light uniforms",
-      size: 64 * 4,
+      size: 4 * 4, // 4 floats: ambientColor vec3f (3) + padding (1)
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     })
 
-    this.lightCount = 0
-
-    this.setAmbient(this.ambient)
     this.setAmbientColor(this.ambientColor)
 
-    this.addLight(new Vec3(-0.5, -0.8, 0.5).normalize(), new Vec3(1.0, 0.95, 0.9), 0.02)
-    this.addLight(new Vec3(0.7, -0.5, 0.3).normalize(), new Vec3(0.8, 0.85, 1.0), 0.015)
-    this.addLight(new Vec3(0.3, -0.5, -1.0).normalize(), new Vec3(0.9, 0.9, 1.0), 0.01)
     this.device.queue.writeBuffer(this.lightUniformBuffer, 0, this.lightData)
   }
 
-  private addLight(direction: Vec3, color: Vec3, intensity: number = 1.0): boolean {
-    if (this.lightCount >= 4) return false
-
-    const normalized = direction.normalize()
-    const baseIndex = 12 + this.lightCount * 8
-    this.lightData[baseIndex] = normalized.x
-    this.lightData[baseIndex + 1] = normalized.y
-    this.lightData[baseIndex + 2] = normalized.z
-    this.lightData[baseIndex + 3] = 0
-    this.lightData[baseIndex + 4] = color.x
-    this.lightData[baseIndex + 5] = color.y
-    this.lightData[baseIndex + 6] = color.z
-    this.lightData[baseIndex + 7] = intensity
-
-    this.lightCount++
-    // lightCount: f32 at offset 28 (index 7)
-    // Layout: ambient (0), padding (1-3), ambientColor (4-6, padding 7), lightCount (8), _padding1 (9), _padding2 (10), lights start at 12
-    this.lightData[8] = this.lightCount
-    return true
-  }
-
-  private setAmbient(intensity: number) {
-    // ambient: f32 at offset 0 (index 0)
-    this.lightData[0] = intensity
-  }
-
   private setAmbientColor(color: Vec3) {
-    this.lightData[4] = color.x
-    this.lightData[5] = color.y
-    this.lightData[6] = color.z
-    // Index 7 is padding for vec3f alignment (must be 0)
-    this.lightData[7] = 0.0
+    // Layout: ambientColor (0-2), padding (3)
+    this.lightData[0] = color.x
+    this.lightData[1] = color.y
+    this.lightData[2] = color.z
+    this.lightData[3] = 0.0 // Padding for vec3f alignment
   }
 
   public async loadAnimation(url: string) {
@@ -1725,14 +1665,7 @@ export class Engine {
     this.modelDir = dir
 
     const model = await PmxLoader.load(path)
-    // console.log({
-    //   vertices: Array.from(model.getVertices()),
-    //   indices: Array.from(model.getIndices()),
-    //   materials: model.getMaterials(),
-    //   textures: model.getTextures(),
-    //   bones: model.getSkeleton().bones,
-    //   skinning: { joints: Array.from(model.getSkinning().joints), weights: Array.from(model.getSkinning().weights) },
-    // })
+
     this.physics = new Physics(model.getRigidbodies(), model.getJoints())
     await this.setupModelBuffers(model)
   }
@@ -2099,8 +2032,6 @@ export class Engine {
 
       currentIndexOffset += indexCount
     }
-
-    this.gpuMemoryMB = this.calculateGpuMemory()
   }
 
   private async createTextureFromPath(path: string): Promise<GPUTexture | null> {
@@ -2457,88 +2388,5 @@ export class Engine {
       this.framesSinceLastUpdate = 0
       this.lastFpsUpdate = now
     }
-
-    this.stats.gpuMemory = this.gpuMemoryMB
-  }
-
-  private calculateGpuMemory(): number {
-    let textureMemoryBytes = 0
-    for (const texture of this.textureCache.values()) {
-      textureMemoryBytes += texture.width * texture.height * 4
-    }
-
-    let bufferMemoryBytes = 0
-    if (this.vertexBuffer) {
-      const vertices = this.currentModel?.getVertices()
-      if (vertices) bufferMemoryBytes += vertices.byteLength
-    }
-    if (this.indexBuffer) {
-      const indices = this.currentModel?.getIndices()
-      if (indices) bufferMemoryBytes += indices.byteLength
-    }
-    if (this.jointsBuffer) {
-      const skinning = this.currentModel?.getSkinning()
-      if (skinning) bufferMemoryBytes += skinning.joints.byteLength
-    }
-    if (this.weightsBuffer) {
-      const skinning = this.currentModel?.getSkinning()
-      if (skinning) bufferMemoryBytes += skinning.weights.byteLength
-    }
-    if (this.skinMatrixBuffer) {
-      const skeleton = this.currentModel?.getSkeleton()
-      if (skeleton) bufferMemoryBytes += Math.max(256, skeleton.bones.length * 16 * 4)
-    }
-    if (this.worldMatrixBuffer) {
-      const skeleton = this.currentModel?.getSkeleton()
-      if (skeleton) bufferMemoryBytes += Math.max(256, skeleton.bones.length * 16 * 4)
-    }
-    if (this.inverseBindMatrixBuffer) {
-      const skeleton = this.currentModel?.getSkeleton()
-      if (skeleton) bufferMemoryBytes += Math.max(256, skeleton.bones.length * 16 * 4)
-    }
-    bufferMemoryBytes += 40 * 4
-    bufferMemoryBytes += 64 * 4
-    bufferMemoryBytes += 32
-    bufferMemoryBytes += 32
-    bufferMemoryBytes += 32
-    bufferMemoryBytes += 32
-    if (this.fullscreenQuadBuffer) {
-      bufferMemoryBytes += 24 * 4
-    }
-    const totalMaterialDraws =
-      this.opaqueDraws.length +
-      this.eyeDraws.length +
-      this.hairDrawsOverEyes.length +
-      this.hairDrawsOverNonEyes.length +
-      this.transparentDraws.length
-    bufferMemoryBytes += totalMaterialDraws * 32
-
-    const totalOutlineDraws =
-      this.opaqueOutlineDraws.length +
-      this.eyeOutlineDraws.length +
-      this.hairOutlineDraws.length +
-      this.transparentOutlineDraws.length
-    bufferMemoryBytes += totalOutlineDraws * 32
-
-    let renderTargetMemoryBytes = 0
-    if (this.multisampleTexture) {
-      const width = this.canvas.width
-      const height = this.canvas.height
-      renderTargetMemoryBytes += width * height * 4 * this.sampleCount
-      renderTargetMemoryBytes += width * height * 4
-    }
-    if (this.sceneRenderTexture) {
-      const width = this.canvas.width
-      const height = this.canvas.height
-      renderTargetMemoryBytes += width * height * 4
-    }
-    if (this.bloomExtractTexture) {
-      const width = Math.floor(this.canvas.width / this.BLOOM_DOWNSCALE_FACTOR)
-      const height = Math.floor(this.canvas.height / this.BLOOM_DOWNSCALE_FACTOR)
-      renderTargetMemoryBytes += width * height * 4 * 3
-    }
-
-    const totalGPUMemoryBytes = textureMemoryBytes + bufferMemoryBytes + renderTargetMemoryBytes
-    return Math.round((totalGPUMemoryBytes / 1024 / 1024) * 100) / 100
   }
 }

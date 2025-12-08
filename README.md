@@ -28,11 +28,7 @@ export default function Scene() {
   const initEngine = useCallback(async () => {
     if (canvasRef.current) {
       try {
-        const engine = new Engine(canvasRef.current, {
-          ambient: 1.0,
-          rimLightIntensity: 0.1,
-          bloomIntensity: 0.1,
-        })
+        const engine = new Engine(canvasRef.current)
         engineRef.current = engine
         await engine.init()
         await engine.loadModel("/models/塞尔凯特/塞尔凯特.pmx")
