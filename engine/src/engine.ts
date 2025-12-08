@@ -7,6 +7,7 @@ import { VMDKeyFrame, VMDLoader } from "./vmd-loader"
 
 export type EngineOptions = {
   ambient?: number
+  ambientColor?: Vec3
   bloomIntensity?: number
   rimLightIntensity?: number
   cameraDistance?: number
@@ -77,6 +78,7 @@ export class Engine {
   private readonly BLOOM_DOWNSCALE_FACTOR = 2
   // Ambient light settings
   private ambient: number = 1.0
+  private ambientColor: Vec3 = new Vec3(1.0, 1.0, 1.0)
   // Bloom post-processing textures
   private sceneRenderTexture!: GPUTexture
   private sceneRenderTextureView!: GPUTextureView
@@ -146,6 +148,7 @@ export class Engine {
     this.canvas = canvas
     if (options) {
       this.ambient = options.ambient ?? 1.0
+      this.ambientColor = options.ambientColor ?? new Vec3(1.0, 1.0, 1.0)
       this.bloomIntensity = options.bloomIntensity ?? 0.12
       this.rimLightIntensity = options.rimLightIntensity ?? 0.45
       this.cameraDistance = options.cameraDistance ?? 26.6
@@ -211,6 +214,7 @@ export class Engine {
 
         struct LightUniforms {
           ambient: f32,
+          ambientColor: vec3f,
           lightCount: f32,
           _padding1: f32,
           _padding2: f32,
@@ -288,7 +292,7 @@ export class Engine {
           let n = normalize(input.normal);
           let albedo = textureSample(diffuseTexture, diffuseSampler, input.uv).rgb;
 
-          var lightAccum = vec3f(light.ambient);
+          var lightAccum = light.ambient * light.ambientColor;
           let numLights = u32(light.lightCount);
           for (var i = 0u; i < numLights; i++) {
             let l = -light.lights[i].direction;
@@ -1387,6 +1391,8 @@ export class Engine {
     this.lightCount = 0
 
     this.setAmbient(this.ambient)
+    this.setAmbientColor(this.ambientColor)
+
     this.addLight(new Vec3(-0.5, -0.8, 0.5).normalize(), new Vec3(1.0, 0.95, 0.9), 0.02)
     this.addLight(new Vec3(0.7, -0.5, 0.3).normalize(), new Vec3(0.8, 0.85, 1.0), 0.015)
     this.addLight(new Vec3(0.3, -0.5, -1.0).normalize(), new Vec3(0.9, 0.9, 1.0), 0.01)
@@ -1397,7 +1403,7 @@ export class Engine {
     if (this.lightCount >= 4) return false
 
     const normalized = direction.normalize()
-    const baseIndex = 4 + this.lightCount * 8
+    const baseIndex = 12 + this.lightCount * 8
     this.lightData[baseIndex] = normalized.x
     this.lightData[baseIndex + 1] = normalized.y
     this.lightData[baseIndex + 2] = normalized.z
@@ -1408,12 +1414,23 @@ export class Engine {
     this.lightData[baseIndex + 7] = intensity
 
     this.lightCount++
-    this.lightData[1] = this.lightCount
+    // lightCount: f32 at offset 28 (index 7)
+    // Layout: ambient (0), padding (1-3), ambientColor (4-6, padding 7), lightCount (8), _padding1 (9), _padding2 (10), lights start at 12
+    this.lightData[8] = this.lightCount
     return true
   }
 
   private setAmbient(intensity: number) {
+    // ambient: f32 at offset 0 (index 0)
     this.lightData[0] = intensity
+  }
+
+  private setAmbientColor(color: Vec3) {
+    this.lightData[4] = color.x
+    this.lightData[5] = color.y
+    this.lightData[6] = color.z
+    // Index 7 is padding for vec3f alignment (must be 0)
+    this.lightData[7] = 0.0
   }
 
   public async loadAnimation(url: string) {
