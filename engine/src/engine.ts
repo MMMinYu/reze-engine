@@ -88,6 +88,7 @@ export class Engine {
   private ambientColor: Vec3 = new Vec3(1.0, 1.0, 1.0)
   // Bloom post-processing textures
   private sceneRenderTexture!: GPUTexture
+  private sceneRenderTextureView!: GPUTextureView // Cached view (recreated on resize)
   private bloomExtractTexture!: GPUTexture
   private bloomBlurTexture1!: GPUTexture
   private bloomBlurTexture2!: GPUTexture
@@ -744,137 +745,76 @@ export class Engine {
       multisample: { count: this.sampleCount },
     })
 
-    // Hair pipeline for rendering over eyes (stencil == 1)
-    this.hairPipelineOverEyes = this.device.createRenderPipeline({
-      label: "hair pipeline (over eyes)",
-      layout: mainPipelineLayout,
-      vertex: {
-        module: shaderModule,
-        buffers: [
-          {
-            arrayStride: 8 * 4,
-            attributes: [
-              { shaderLocation: 0, offset: 0, format: "float32x3" as GPUVertexFormat },
-              { shaderLocation: 1, offset: 3 * 4, format: "float32x3" as GPUVertexFormat },
-              { shaderLocation: 2, offset: 6 * 4, format: "float32x2" as GPUVertexFormat },
-            ],
-          },
-          {
-            arrayStride: 4 * 2,
-            attributes: [{ shaderLocation: 3, offset: 0, format: "uint16x4" as GPUVertexFormat }],
-          },
-          {
-            arrayStride: 4,
-            attributes: [{ shaderLocation: 4, offset: 0, format: "unorm8x4" as GPUVertexFormat }],
-          },
-        ],
-      },
-      fragment: {
-        module: shaderModule,
-        targets: [
-          {
-            format: this.presentationFormat,
-            blend: {
-              color: {
-                srcFactor: "src-alpha",
-                dstFactor: "one-minus-src-alpha",
-                operation: "add",
-              },
-              alpha: {
-                srcFactor: "one",
-                dstFactor: "one-minus-src-alpha",
-                operation: "add",
+    // Hair pipelines for rendering over eyes vs non-eyes (only differ in stencil compare mode)
+    const createHairPipeline = (isOverEyes: boolean): GPURenderPipeline => {
+      return this.device.createRenderPipeline({
+        label: `hair pipeline (${isOverEyes ? "over eyes" : "over non-eyes"})`,
+        layout: mainPipelineLayout,
+        vertex: {
+          module: shaderModule,
+          buffers: [
+            {
+              arrayStride: 8 * 4,
+              attributes: [
+                { shaderLocation: 0, offset: 0, format: "float32x3" as GPUVertexFormat },
+                { shaderLocation: 1, offset: 3 * 4, format: "float32x3" as GPUVertexFormat },
+                { shaderLocation: 2, offset: 6 * 4, format: "float32x2" as GPUVertexFormat },
+              ],
+            },
+            {
+              arrayStride: 4 * 2,
+              attributes: [{ shaderLocation: 3, offset: 0, format: "uint16x4" as GPUVertexFormat }],
+            },
+            {
+              arrayStride: 4,
+              attributes: [{ shaderLocation: 4, offset: 0, format: "unorm8x4" as GPUVertexFormat }],
+            },
+          ],
+        },
+        fragment: {
+          module: shaderModule,
+          targets: [
+            {
+              format: this.presentationFormat,
+              blend: {
+                color: {
+                  srcFactor: "src-alpha",
+                  dstFactor: "one-minus-src-alpha",
+                  operation: "add",
+                },
+                alpha: {
+                  srcFactor: "one",
+                  dstFactor: "one-minus-src-alpha",
+                  operation: "add",
+                },
               },
             },
+          ],
+        },
+        primitive: { cullMode: "front" },
+        depthStencil: {
+          format: "depth24plus-stencil8",
+          depthWriteEnabled: false, // Don't write depth (already written in pre-pass)
+          depthCompare: "less-equal", // More lenient than "equal" to avoid precision issues with MSAA
+          stencilFront: {
+            compare: isOverEyes ? "equal" : "not-equal", // Over eyes: stencil == 1, over non-eyes: stencil != 1
+            failOp: "keep",
+            depthFailOp: "keep",
+            passOp: "keep",
           },
-        ],
-      },
-      primitive: { cullMode: "front" },
-      depthStencil: {
-        format: "depth24plus-stencil8",
-        depthWriteEnabled: false, // Don't write depth (already written in pre-pass)
-        depthCompare: "less-equal", // More lenient than "equal" to avoid precision issues with MSAA
-        stencilFront: {
-          compare: "equal", // Only render where stencil == 1 (over eyes)
-          failOp: "keep",
-          depthFailOp: "keep",
-          passOp: "keep",
+          stencilBack: {
+            compare: isOverEyes ? "equal" : "not-equal",
+            failOp: "keep",
+            depthFailOp: "keep",
+            passOp: "keep",
+          },
         },
-        stencilBack: {
-          compare: "equal",
-          failOp: "keep",
-          depthFailOp: "keep",
-          passOp: "keep",
-        },
-      },
-      multisample: { count: this.sampleCount },
-    })
+        multisample: { count: this.sampleCount },
+      })
+    }
 
-    // Hair pipeline for rendering over non-eyes (stencil != 1)
-    this.hairPipelineOverNonEyes = this.device.createRenderPipeline({
-      label: "hair pipeline (over non-eyes)",
-      layout: mainPipelineLayout,
-      vertex: {
-        module: shaderModule,
-        buffers: [
-          {
-            arrayStride: 8 * 4,
-            attributes: [
-              { shaderLocation: 0, offset: 0, format: "float32x3" as GPUVertexFormat },
-              { shaderLocation: 1, offset: 3 * 4, format: "float32x3" as GPUVertexFormat },
-              { shaderLocation: 2, offset: 6 * 4, format: "float32x2" as GPUVertexFormat },
-            ],
-          },
-          {
-            arrayStride: 4 * 2,
-            attributes: [{ shaderLocation: 3, offset: 0, format: "uint16x4" as GPUVertexFormat }],
-          },
-          {
-            arrayStride: 4,
-            attributes: [{ shaderLocation: 4, offset: 0, format: "unorm8x4" as GPUVertexFormat }],
-          },
-        ],
-      },
-      fragment: {
-        module: shaderModule,
-        targets: [
-          {
-            format: this.presentationFormat,
-            blend: {
-              color: {
-                srcFactor: "src-alpha",
-                dstFactor: "one-minus-src-alpha",
-                operation: "add",
-              },
-              alpha: {
-                srcFactor: "one",
-                dstFactor: "one-minus-src-alpha",
-                operation: "add",
-              },
-            },
-          },
-        ],
-      },
-      primitive: { cullMode: "front" },
-      depthStencil: {
-        format: "depth24plus-stencil8",
-        depthWriteEnabled: false, // Don't write depth (already written in pre-pass)
-        depthCompare: "less-equal", // More lenient than "equal" to avoid precision issues with MSAA
-        stencilFront: {
-          compare: "not-equal", // Only render where stencil != 1 (over non-eyes)
-          failOp: "keep",
-          depthFailOp: "keep",
-          passOp: "keep",
-        },
-        stencilBack: {
-          compare: "not-equal",
-          failOp: "keep",
-          depthFailOp: "keep",
-          passOp: "keep",
-        },
-      },
-      multisample: { count: this.sampleCount },
-    })
+    this.hairPipelineOverEyes = createHairPipeline(true)
+    this.hairPipelineOverNonEyes = createHairPipeline(false)
   }
 
   // Create compute shader for skin matrix computation
@@ -1263,20 +1203,21 @@ export class Engine {
       this.setupBloom(width, height)
 
       const depthTextureView = this.depthTexture.createView()
-      const sceneRenderTextureView = this.sceneRenderTexture.createView()
+      // Cache the scene render texture view (only recreate on resize)
+      this.sceneRenderTextureView = this.sceneRenderTexture.createView()
 
       // Render scene to texture instead of directly to canvas
       const colorAttachment: GPURenderPassColorAttachment =
         this.sampleCount > 1
           ? {
               view: this.multisampleTexture.createView(),
-              resolveTarget: sceneRenderTextureView,
+              resolveTarget: this.sceneRenderTextureView,
               clearValue: { r: 0, g: 0, b: 0, a: 0 },
               loadOp: "clear",
               storeOp: "store",
             }
           : {
-              view: sceneRenderTextureView,
+              view: this.sceneRenderTextureView,
               clearValue: { r: 0, g: 0, b: 0, a: 0 },
               loadOp: "clear",
               storeOp: "store",
@@ -1986,6 +1927,61 @@ export class Engine {
     }
   }
 
+  // Helper: Render eyes with stencil writing (for post-alpha-eye effect)
+  private renderEyes(pass: GPURenderPassEncoder) {
+    pass.setPipeline(this.eyePipeline)
+    pass.setStencilReference(this.STENCIL_EYE_VALUE)
+    for (const draw of this.eyeDraws) {
+      pass.setBindGroup(0, draw.bindGroup)
+      pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
+    }
+  }
+
+  // Helper: Render hair with post-alpha-eye effect (depth pre-pass + stencil-based shading + outlines)
+  private renderHair(pass: GPURenderPassEncoder) {
+    // Hair depth pre-pass (reduces overdraw via early depth rejection)
+    const hasHair = this.hairDrawsOverEyes.length > 0 || this.hairDrawsOverNonEyes.length > 0
+    if (hasHair) {
+      pass.setPipeline(this.hairDepthPipeline)
+      for (const draw of this.hairDrawsOverEyes) {
+        pass.setBindGroup(0, draw.bindGroup)
+        pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
+      }
+      for (const draw of this.hairDrawsOverNonEyes) {
+        pass.setBindGroup(0, draw.bindGroup)
+        pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
+      }
+    }
+
+    // Hair shading (split by stencil for transparency over eyes)
+    if (this.hairDrawsOverEyes.length > 0) {
+      pass.setPipeline(this.hairPipelineOverEyes)
+      pass.setStencilReference(this.STENCIL_EYE_VALUE)
+      for (const draw of this.hairDrawsOverEyes) {
+        pass.setBindGroup(0, draw.bindGroup)
+        pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
+      }
+    }
+
+    if (this.hairDrawsOverNonEyes.length > 0) {
+      pass.setPipeline(this.hairPipelineOverNonEyes)
+      pass.setStencilReference(this.STENCIL_EYE_VALUE)
+      for (const draw of this.hairDrawsOverNonEyes) {
+        pass.setBindGroup(0, draw.bindGroup)
+        pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
+      }
+    }
+
+    // Hair outlines
+    if (this.hairOutlineDraws.length > 0) {
+      pass.setPipeline(this.hairOutlinePipeline)
+      for (const draw of this.hairOutlineDraws) {
+        pass.setBindGroup(0, draw.bindGroup)
+        pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
+      }
+    }
+  }
+
   // Render strategy: 1) Opaque non-eye/hair 2) Eyes (stencil=1) 3) Hair (depth pre-pass + split by stencil) 4) Transparent 5) Bloom
   public render() {
     if (this.multisampleTexture && this.camera && this.device) {
@@ -2025,56 +2021,12 @@ export class Engine {
         }
 
         // Pass 2: Eyes (writes stencil value for hair to test against)
-        pass.setPipeline(this.eyePipeline)
-        pass.setStencilReference(this.STENCIL_EYE_VALUE)
-        for (const draw of this.eyeDraws) {
-          pass.setBindGroup(0, draw.bindGroup)
-          pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
-        }
+        this.renderEyes(pass)
 
-        // Pass 3: Hair rendering (depth pre-pass + shading + outlines)
         this.drawOutlines(pass, false)
 
-        // 3a: Hair depth pre-pass (reduces overdraw via early depth rejection)
-        if (this.hairDrawsOverEyes.length > 0 || this.hairDrawsOverNonEyes.length > 0) {
-          pass.setPipeline(this.hairDepthPipeline)
-          for (const draw of this.hairDrawsOverEyes) {
-            pass.setBindGroup(0, draw.bindGroup)
-            pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
-          }
-          for (const draw of this.hairDrawsOverNonEyes) {
-            pass.setBindGroup(0, draw.bindGroup)
-            pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
-          }
-        }
-
-        // 3b: Hair shading (split by stencil for transparency over eyes)
-        if (this.hairDrawsOverEyes.length > 0) {
-          pass.setPipeline(this.hairPipelineOverEyes)
-          pass.setStencilReference(this.STENCIL_EYE_VALUE)
-          for (const draw of this.hairDrawsOverEyes) {
-            pass.setBindGroup(0, draw.bindGroup)
-            pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
-          }
-        }
-
-        if (this.hairDrawsOverNonEyes.length > 0) {
-          pass.setPipeline(this.hairPipelineOverNonEyes)
-          pass.setStencilReference(this.STENCIL_EYE_VALUE)
-          for (const draw of this.hairDrawsOverNonEyes) {
-            pass.setBindGroup(0, draw.bindGroup)
-            pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
-          }
-        }
-
-        // 3c: Hair outlines
-        if (this.hairOutlineDraws.length > 0) {
-          pass.setPipeline(this.hairOutlinePipeline)
-          for (const draw of this.hairOutlineDraws) {
-            pass.setBindGroup(0, draw.bindGroup)
-            pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
-          }
-        }
+        // Pass 3: Hair rendering (depth pre-pass + shading + outlines)
+        this.renderHair(pass)
 
         // Pass 4: Transparent
         pass.setPipeline(this.modelPipeline)
@@ -2207,12 +2159,12 @@ export class Engine {
   }
 
   private updateRenderTarget() {
+    // Use cached view (only recreated on resize in handleResize)
     const colorAttachment = (this.renderPassDescriptor.colorAttachments as GPURenderPassColorAttachment[])[0]
-    const sceneRenderTextureView = this.sceneRenderTexture.createView()
     if (this.sampleCount > 1) {
-      colorAttachment.resolveTarget = sceneRenderTextureView
+      colorAttachment.resolveTarget = this.sceneRenderTextureView
     } else {
-      colorAttachment.view = sceneRenderTextureView
+      colorAttachment.view = this.sceneRenderTextureView
     }
   }
 

@@ -12,11 +12,10 @@ A lightweight engine built with WebGPU and TypeScript for real-time 3D anime cha
 - Rim lighting
 - Bloom
 - Outlines
-- Toon shading with directional lights
 - MSAA 4x anti-aliasing
 - GPU-accelerated skinning
 - Bone rotation api
-- VMD animation
+- VMD animation with breathing
 
 ## Usage
 

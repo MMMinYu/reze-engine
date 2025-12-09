@@ -20,30 +20,10 @@ export default function Header({ stats }: { stats: EngineStats | null }) {
             Reze Engine
           </h1>
         </Link>
-
-        {/* <Link href="/tutorial" className="hidden md:block">
-          <Button className="cursor-pointer text-white " variant="link" size="sm">
-            Tutorial
-          </Button>
-        </Link>
-
-        <Link href="https://github.com/AmyangXYZ/reze-engine" target="_blank" className="hidden md:block z-50">
-          <Button className="cursor-pointer text-white" variant="link" size="sm">
-            GitHub
-          </Button>
-        </Link> */}
       </div>
 
       {stats && (
         <div className="ml-auto flex items-center gap-3 text-xs text-white/90 pointer-events-none bg-black h-7 px-3 md:py-2 md:px-4 rounded-full font-mono font-medium  hidden md:flex">
-          {/* <div className="flex items-center justify-end gap-4 tabular-nums flex-wrap md:hidden">
-            <div>
-              FPS: <span>{stats.fps}</span>
-            </div>
-
-
-          </div> */}
-
           <div className="flex items-center gap-4 tabular-nums">
             <div>
               FPS: <span>{stats.fps}</span>
