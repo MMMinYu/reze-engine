@@ -29,6 +29,20 @@ export default function Home() {
   const touchIdentifier = useRef<number | null>(null)
   const lastTouchPos = useRef({ x: 0, y: 0 })
 
+  // Start audio playback from 22 seconds (called on first user interaction)
+  const startAudio = useCallback(() => {
+    if (audioRef.current && !audioStartedRef.current) {
+      audioStartedRef.current = true
+      audioRef.current.currentTime = 22
+      audioRef.current.volume = 1.0
+      audioRef.current.loop = true
+      audioRef.current.play().catch(() => {
+        // Silently handle autoplay restrictions
+        audioStartedRef.current = false
+      })
+    }
+  }, [])
+
   const initEngine = useCallback(async () => {
     if (canvasRef.current) {
       // Initialize engine
@@ -67,21 +81,13 @@ export default function Home() {
         // Attempt to autoplay audio after model is rendered and animation starts
         // This will fail silently if browser blocks autoplay, and will start on first user interaction
         setTimeout(() => {
-          if (audioRef.current && !audioStartedRef.current) {
-            audioStartedRef.current = true
-            audioRef.current.currentTime = 22
-            audioRef.current.volume = 1.0
-            audioRef.current.play().catch(() => {
-              // Autoplay blocked - will start on user interaction
-              audioStartedRef.current = false
-            })
-          }
+          startAudio()
         }, 100)
       } catch (error) {
         setEngineError(error instanceof Error ? error.message : "Unknown error")
       }
     }
-  }, [])
+  }, [startAudio])
 
   useEffect(() => {
     void (async () => {
@@ -99,19 +105,6 @@ export default function Home() {
       }
     }
   }, [initEngine])
-
-  // Start audio playback from 22 seconds (called on first user interaction)
-  const startAudio = useCallback(() => {
-    if (audioRef.current && !audioStartedRef.current) {
-      audioStartedRef.current = true
-      audioRef.current.currentTime = 22
-      audioRef.current.volume = 1.0
-      audioRef.current.play().catch(() => {
-        // Silently handle autoplay restrictions
-        audioStartedRef.current = false
-      })
-    }
-  }, [])
 
   // Handle mute/unmute toggle
   const toggleMute = useCallback(() => {
