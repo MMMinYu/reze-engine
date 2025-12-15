@@ -116,6 +116,7 @@ export class Engine {
   private physics: Physics | null = null
   private materialSampler!: GPUSampler
   private textureCache = new Map<string, GPUTexture>()
+  private vertexBufferNeedsUpdate = false
   // Draw lists
   private opaqueDraws: DrawCall[] = []
   private eyeDraws: DrawCall[] = []
@@ -1577,6 +1578,21 @@ export class Engine {
     this.currentModel?.rotateBones(bones, rotations, durationMs)
   }
 
+  public setMorphWeight(name: string, weight: number, durationMs?: number): void {
+    if (!this.currentModel) return
+    this.currentModel.setMorphWeight(name, weight, durationMs)
+    if (!durationMs || durationMs === 0) {
+      this.vertexBufferNeedsUpdate = true
+    }
+  }
+
+  private updateVertexBuffer(): void {
+    if (!this.currentModel || !this.vertexBuffer) return
+    const vertices = this.currentModel.getVertices()
+    if (!vertices || vertices.length === 0) return
+    this.device.queue.writeBuffer(this.vertexBuffer, 0, vertices)
+  }
+
   // Step 7: Create vertex, index, and joint buffers
   private async setupModelBuffers(model: Model) {
     this.currentModel = model
@@ -1992,6 +2008,21 @@ export class Engine {
       this.updateCameraUniforms()
       this.updateRenderTarget()
 
+      // Update model pose first (this may update morph weights via tweens)
+      // We need to do this before creating the encoder to ensure vertex buffer is ready
+      if (this.currentModel) {
+        const hasActiveMorphTweens = this.currentModel.evaluatePose()
+        if (hasActiveMorphTweens) {
+          this.vertexBufferNeedsUpdate = true
+        }
+      }
+
+      // Update vertex buffer if morphs changed
+      if (this.vertexBufferNeedsUpdate) {
+        this.updateVertexBuffer()
+        this.vertexBufferNeedsUpdate = false
+      }
+
       // Use single encoder for both compute and render (reduces sync points)
       const encoder = this.device.createCommandEncoder()
 
@@ -2169,7 +2200,8 @@ export class Engine {
   }
 
   private updateModelPose(deltaTime: number, encoder: GPUCommandEncoder) {
-    this.currentModel!.evaluatePose()
+    // Note: evaluatePose is called earlier in render() to update vertex buffer before encoder creation
+    // Here we just get the matrices and update physics/compute
     const worldMats = this.currentModel!.getBoneWorldMatrices()
 
     if (this.physics) {

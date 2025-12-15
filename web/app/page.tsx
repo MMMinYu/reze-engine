@@ -65,6 +65,15 @@ export default function Home() {
           setStats(engine.getStats())
         })
 
+        // Blink animation
+        setInterval(() => {
+          engine.setMorphWeight("まばたき", 0.9, 300)
+          setTimeout(() => {
+            engine.setMorphWeight("まばたき", 0, 350)
+          }, 350)
+        }, 5000)
+
+
         // Wait a frame to ensure render loop has started and model is fully initialized
         // This prevents physics explosion when animation starts
         await new Promise((resolve) => requestAnimationFrame(resolve))

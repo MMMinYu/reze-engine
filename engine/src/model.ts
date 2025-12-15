@@ -49,6 +49,31 @@ export interface Skinning {
   weights: Uint8Array // UNORM8, length = vertexCount * 4, sums ~ 255 per-vertex
 }
 
+// Vertex morph offset data
+export interface VertexMorphOffset {
+  vertexIndex: number
+  positionOffset: [number, number, number]
+}
+
+// Group morph reference (for type 0)
+export interface GroupMorphReference {
+  morphIndex: number
+  ratio: number
+}
+
+// Morph definition
+export interface Morph {
+  name: string
+  type: number // 0=group, 1=vertex, 2=bone, 3=UV, 8=material
+  vertexOffsets: VertexMorphOffset[] // Only for type 1 (vertex morph)
+  groupReferences?: GroupMorphReference[] // Only for type 0 (group morph)
+}
+
+export interface Morphing {
+  morphs: Morph[]
+  offsetsBuffer: Float32Array // Dense buffer: morphCount * vertexCount * 3 floats
+}
+
 // Runtime skeleton pose state (updated each frame)
 export interface SkeletonRuntime {
   nameIndex: Record<string, number> // Cached lookup: bone name -> bone index (built on initialization)
@@ -56,6 +81,12 @@ export interface SkeletonRuntime {
   localTranslations: Float32Array // vec3 per bone length = boneCount*3
   worldMatrices: Float32Array // mat4 per bone length = boneCount*16
   computedBones: boolean[] // length = boneCount
+}
+
+// Runtime morph state
+export interface MorphRuntime {
+  nameIndex: Record<string, number> // Cached lookup: morph name -> morph index
+  weights: Float32Array // One weight per morph (0.0 to 1.0)
 }
 
 // Rotation tween state per bone
@@ -67,8 +98,18 @@ interface RotationTweenState {
   durationMs: Float32Array // one float per bone (ms)
 }
 
+// Morph weight tween state per morph
+interface MorphWeightTweenState {
+  active: Uint8Array // 0/1 per morph
+  startWeight: Float32Array // one float per morph
+  targetWeight: Float32Array // one float per morph
+  startTimeMs: Float32Array // one float per morph (ms)
+  durationMs: Float32Array // one float per morph (ms)
+}
+
 export class Model {
   private vertexData: Float32Array<ArrayBuffer>
+  private baseVertexData: Float32Array<ArrayBuffer> // Original vertex data before morphing
   private vertexCount: number
   private indexData: Uint32Array<ArrayBuffer>
   private textures: Texture[] = []
@@ -77,6 +118,9 @@ export class Model {
   private skeleton: Skeleton
   private skinning: Skinning
 
+  // Static morph data (from PMX)
+  private morphing: Morphing
+
   // Physics data from PMX
   private rigidbodies: Rigidbody[] = []
   private joints: Joint[] = []
@@ -84,11 +128,15 @@ export class Model {
   // Runtime skeleton pose state (updated each frame)
   private runtimeSkeleton!: SkeletonRuntime
 
+  // Runtime morph state
+  private runtimeMorph!: MorphRuntime
+
   // Cached identity matrices to avoid allocations in computeWorldMatrices
   private cachedIdentityMat1 = Mat4.identity()
   private cachedIdentityMat2 = Mat4.identity()
 
   private rotTweenState!: RotationTweenState
+  private morphTweenState!: MorphWeightTweenState
 
   constructor(
     vertexData: Float32Array<ArrayBuffer>,
@@ -97,9 +145,12 @@ export class Model {
     materials: Material[],
     skeleton: Skeleton,
     skinning: Skinning,
+    morphing: Morphing,
     rigidbodies: Rigidbody[] = [],
     joints: Joint[] = []
   ) {
+    // Store base vertex data (original positions before morphing)
+    this.baseVertexData = new Float32Array(vertexData)
     this.vertexData = vertexData
     this.vertexCount = vertexData.length / VERTEX_STRIDE
     this.indexData = indexData
@@ -107,6 +158,7 @@ export class Model {
     this.materials = materials
     this.skeleton = skeleton
     this.skinning = skinning
+    this.morphing = morphing
     this.rigidbodies = rigidbodies
     this.joints = joints
 
@@ -116,6 +168,9 @@ export class Model {
 
     this.initializeRuntimeSkeleton()
     this.initializeRotTweenBuffers()
+    this.initializeRuntimeMorph()
+    this.initializeMorphTweenBuffers()
+    this.applyMorphs() // Apply initial morphs (all weights are 0, so no change)
   }
 
   private initializeRuntimeSkeleton(): void {
@@ -155,6 +210,28 @@ export class Model {
     }
   }
 
+  private initializeMorphTweenBuffers(): void {
+    const n = this.morphing.morphs.length
+    this.morphTweenState = {
+      active: new Uint8Array(n),
+      startWeight: new Float32Array(n),
+      targetWeight: new Float32Array(n),
+      startTimeMs: new Float32Array(n),
+      durationMs: new Float32Array(n),
+    }
+  }
+
+  private initializeRuntimeMorph(): void {
+    const morphCount = this.morphing.morphs.length
+    this.runtimeMorph = {
+      nameIndex: this.morphing.morphs.reduce((acc, morph, index) => {
+        acc[morph.name] = index
+        return acc
+      }, {} as Record<string, number>),
+      weights: new Float32Array(morphCount),
+    }
+  }
+
   private updateRotationTweens(): void {
     const state = this.rotTweenState
     const now = performance.now()
@@ -191,6 +268,33 @@ export class Model {
 
       if (t >= 1) state.active[i] = 0
     }
+  }
+
+  private updateMorphWeightTweens(): boolean {
+    const state = this.morphTweenState
+    const now = performance.now()
+    const weights = this.runtimeMorph.weights
+    const morphCount = this.morphing.morphs.length
+    let hasActiveTweens = false
+
+    for (let i = 0; i < morphCount; i++) {
+      if (state.active[i] !== 1) continue
+
+      hasActiveTweens = true
+      const startMs = state.startTimeMs[i]
+      const durMs = Math.max(1, state.durationMs[i])
+      const t = Math.max(0, Math.min(1, (now - startMs) / durMs))
+      const e = easeInOut(t)
+
+      weights[i] = state.startWeight[i] + (state.targetWeight[i] - state.startWeight[i]) * e
+
+      if (t >= 1) {
+        weights[i] = state.targetWeight[i]
+        state.active[i] = 0
+      }
+    }
+
+    return hasActiveTweens
   }
 
   // Get interleaved vertex data for GPU upload
@@ -235,6 +339,15 @@ export class Model {
 
   getJoints(): Joint[] {
     return this.joints
+  }
+
+  // Accessors for morphing
+  getMorphing(): Morphing {
+    return this.morphing
+  }
+
+  getMorphWeights(): Float32Array {
+    return this.runtimeMorph.weights
   }
 
   // ------- Bone helpers (public API) -------
@@ -322,9 +435,124 @@ export class Model {
     return this.skeleton.inverseBindMatrices
   }
 
-  evaluatePose(): void {
+  getMorphNames(): string[] {
+    return this.morphing.morphs.map((m) => m.name)
+  }
+
+  setMorphWeight(name: string, weight: number, durationMs?: number): void {
+    const idx = this.runtimeMorph.nameIndex[name] ?? -1
+    if (idx < 0 || idx >= this.runtimeMorph.weights.length) return
+
+    const clampedWeight = Math.max(0, Math.min(1, weight))
+    const dur = durationMs && durationMs > 0 ? durationMs : 0
+
+    if (dur === 0) {
+      // Instant change
+      this.runtimeMorph.weights[idx] = clampedWeight
+      this.morphTweenState.active[idx] = 0
+      this.applyMorphs()
+      return
+    }
+
+    // Animated change
+    const state = this.morphTweenState
+    const now = performance.now()
+    const currentWeight = this.runtimeMorph.weights[idx]
+
+    // If already tweening, start from current interpolated value
+    let startWeight = currentWeight
+    if (state.active[idx] === 1) {
+      const startMs = state.startTimeMs[idx]
+      const prevDur = Math.max(1, state.durationMs[idx])
+      const t = Math.max(0, Math.min(1, (now - startMs) / prevDur))
+      const e = easeInOut(t)
+      startWeight = state.startWeight[idx] + (state.targetWeight[idx] - state.startWeight[idx]) * e
+    }
+
+    state.startWeight[idx] = startWeight
+    state.targetWeight[idx] = clampedWeight
+    state.startTimeMs[idx] = now
+    state.durationMs[idx] = dur
+    state.active[idx] = 1
+
+    // Immediately apply morphs with current weight
+    this.runtimeMorph.weights[idx] = startWeight
+    this.applyMorphs()
+  }
+
+  private applyMorphs(): void {
+    // Reset vertex data to base positions
+    this.vertexData.set(this.baseVertexData)
+
+    const vertexCount = this.vertexCount
+    const morphCount = this.morphing.morphs.length
+    const weights = this.runtimeMorph.weights
+
+    // First pass: Compute effective weights for all morphs (handling group morphs)
+    const effectiveWeights = new Float32Array(morphCount)
+    effectiveWeights.set(weights) // Start with direct weights
+
+    // Apply group morphs: group morph weight * ratio affects referenced morphs
+    for (let morphIdx = 0; morphIdx < morphCount; morphIdx++) {
+      const morph = this.morphing.morphs[morphIdx]
+      if (morph.type === 0 && morph.groupReferences) {
+        const groupWeight = weights[morphIdx]
+        if (groupWeight > 0.0001) {
+          for (const ref of morph.groupReferences) {
+            if (ref.morphIndex >= 0 && ref.morphIndex < morphCount) {
+              // Add group morph's contribution to the referenced morph
+              effectiveWeights[ref.morphIndex] += groupWeight * ref.ratio
+            }
+          }
+        }
+      }
+    }
+
+    // Clamp effective weights to [0, 1]
+    for (let i = 0; i < morphCount; i++) {
+      effectiveWeights[i] = Math.max(0, Math.min(1, effectiveWeights[i]))
+    }
+
+    // Second pass: Apply vertex morphs with their effective weights
+    for (let morphIdx = 0; morphIdx < morphCount; morphIdx++) {
+      const effectiveWeight = effectiveWeights[morphIdx]
+      if (effectiveWeight === 0 || effectiveWeight < 0.0001) continue
+
+      const morph = this.morphing.morphs[morphIdx]
+      if (morph.type !== 1) continue // Only process vertex morphs
+
+      // For vertex morphs, iterate through vertices that have offsets
+      for (const vertexOffset of morph.vertexOffsets) {
+        const vIdx = vertexOffset.vertexIndex
+        if (vIdx < 0 || vIdx >= vertexCount) continue
+
+        // Get morph offset for this vertex
+        const offsetX = vertexOffset.positionOffset[0]
+        const offsetY = vertexOffset.positionOffset[1]
+        const offsetZ = vertexOffset.positionOffset[2]
+
+        // Skip if offset is zero
+        if (Math.abs(offsetX) < 0.0001 && Math.abs(offsetY) < 0.0001 && Math.abs(offsetZ) < 0.0001) {
+          continue
+        }
+
+        // Apply weighted offset to vertex position (positions are at stride 0, 8, 16, ...)
+        const vertexIdx = vIdx * VERTEX_STRIDE
+        this.vertexData[vertexIdx] += offsetX * effectiveWeight
+        this.vertexData[vertexIdx + 1] += offsetY * effectiveWeight
+        this.vertexData[vertexIdx + 2] += offsetZ * effectiveWeight
+      }
+    }
+  }
+
+  evaluatePose(): boolean {
     this.updateRotationTweens()
+    const hasActiveMorphTweens = this.updateMorphWeightTweens()
+    if (hasActiveMorphTweens) {
+      this.applyMorphs()
+    }
     this.computeWorldMatrices()
+    return hasActiveMorphTweens
   }
 
   private computeWorldMatrices(): void {

@@ -1,4 +1,15 @@
-import { Model, Texture, Material, Bone, Skeleton, Skinning } from "./model"
+import {
+  Model,
+  Texture,
+  Material,
+  Bone,
+  Skeleton,
+  Skinning,
+  Morph,
+  Morphing,
+  VertexMorphOffset,
+  GroupMorphReference,
+} from "./model"
 import { Mat4, Vec3 } from "./math"
 import { Rigidbody, Joint, RigidbodyShape, RigidbodyType } from "./physics"
 
@@ -20,6 +31,8 @@ export class PmxLoader {
   private inverseBindMatrices: Float32Array | null = null
   private joints0: Uint16Array | null = null
   private weights0: Uint8Array | null = null
+  private morphs: Morph[] = []
+  private vertexCount: number = 0
   private rigidbodies: Rigidbody[] = []
   private joints: Joint[] = []
 
@@ -35,12 +48,13 @@ export class PmxLoader {
   private parse(): Model {
     this.parseHeader()
     const { positions, normals, uvs } = this.parseVertices()
+    this.vertexCount = positions.length / 3
     const indices = this.parseIndices()
     this.parseTextures()
     this.parseMaterials()
     this.parseBones()
-    // Skip morphs and display frames before parsing rigidbodies
-    this.skipMorphs()
+    // Parse morphs and display frames before parsing rigidbodies
+    this.parseMorphs()
     this.skipDisplayFrames()
     this.parseRigidbodies()
     this.parseJoints()
@@ -447,108 +461,146 @@ export class PmxLoader {
     }
   }
 
-  private skipMorphs(): boolean {
+  private parseMorphs(): void {
     try {
       // Check if we have enough bytes to read the count
       if (this.offset + 4 > this.view.buffer.byteLength) {
-        return false
+        this.morphs = []
+        return
       }
       const count = this.getInt32()
       if (count < 0 || count > 100000) {
-        // Suspicious count, likely corrupted - restore offset
-        this.offset -= 4
-        return false
+        // Suspicious count, likely corrupted
+        console.warn(`Suspicious morph count: ${count}`)
+        this.morphs = []
+        return
       }
+
+      this.morphs = []
+
       for (let i = 0; i < count; i++) {
         // Check bounds before reading each morph
         if (this.offset >= this.view.buffer.byteLength) {
-          return false
+          break
         }
         try {
-          this.getText() // name
-          this.getText() // englishName
-          this.getUint8() // panelType
+          const name = this.getText()
+          this.getText() // englishName (skip)
+          this.getUint8() // panelType (skip)
           const morphType = this.getUint8()
           const offsetCount = this.getInt32()
 
-          // Skip offsets based on morph type
-          for (let j = 0; j < offsetCount; j++) {
-            if (this.offset >= this.view.buffer.byteLength) {
-              return false
+          const morph: Morph = {
+            name,
+            type: morphType,
+            vertexOffsets: [],
+            groupReferences: [],
+          }
+
+          // Parse vertex morphs (type 1)
+          if (morphType === 1) {
+            for (let j = 0; j < offsetCount; j++) {
+              if (this.offset >= this.view.buffer.byteLength) {
+                break
+              }
+              const vertexIndex = this.getIndex(this.vertexIndexSize)
+              const x = this.getFloat32()
+              const y = this.getFloat32()
+              const z = this.getFloat32()
+
+              if (vertexIndex >= 0 && vertexIndex < this.vertexCount) {
+                morph.vertexOffsets.push({
+                  vertexIndex,
+                  positionOffset: [x, y, z],
+                })
+              }
             }
-            if (morphType === 0) {
-              // Group morph
-              this.getNonVertexIndex(this.morphIndexSize) // morphIndex
-              this.getFloat32() // ratio
-            } else if (morphType === 1) {
-              // Vertex morph
-              this.getIndex(this.vertexIndexSize) // vertexIndex
-              this.getFloat32() // x
-              this.getFloat32() // y
-              this.getFloat32() // z
-            } else if (morphType === 2) {
-              // Bone morph
-              this.getNonVertexIndex(this.boneIndexSize) // boneIndex
-              this.getFloat32() // x
-              this.getFloat32() // y
-              this.getFloat32() // z
-              this.getFloat32() // rx
-              this.getFloat32() // ry
-              this.getFloat32() // rz
-            } else if (morphType === 3) {
-              // UV morph
-              this.getIndex(this.vertexIndexSize) // vertexIndex
-              this.getFloat32() // u
-              this.getFloat32() // v
-            } else if (morphType === 4 || morphType === 5 || morphType === 6 || morphType === 7) {
-              // UV morph types 4-7 (additional UV channels)
-              this.getIndex(this.vertexIndexSize) // vertexIndex
-              this.getFloat32() // u
-              this.getFloat32() // v
-            } else if (morphType === 8) {
-              // Material morph
-              this.getNonVertexIndex(this.materialIndexSize) // materialIndex
-              this.getUint8() // offsetType
-              this.getFloat32() // diffuse r
-              this.getFloat32() // diffuse g
-              this.getFloat32() // diffuse b
-              this.getFloat32() // diffuse a
-              this.getFloat32() // specular r
-              this.getFloat32() // specular g
-              this.getFloat32() // specular b
-              this.getFloat32() // specular power
-              this.getFloat32() // ambient r
-              this.getFloat32() // ambient g
-              this.getFloat32() // ambient b
-              this.getFloat32() // edgeColor r
-              this.getFloat32() // edgeColor g
-              this.getFloat32() // edgeColor b
-              this.getFloat32() // edgeColor a
-              this.getFloat32() // edgeSize
-              this.getFloat32() // textureCoeff r
-              this.getFloat32() // textureCoeff g
-              this.getFloat32() // textureCoeff b
-              this.getFloat32() // textureCoeff a
-              this.getFloat32() // sphereCoeff r
-              this.getFloat32() // sphereCoeff g
-              this.getFloat32() // sphereCoeff b
-              this.getFloat32() // sphereCoeff a
-              this.getFloat32() // toonCoeff r
-              this.getFloat32() // toonCoeff g
-              this.getFloat32() // toonCoeff b
-              this.getFloat32() // toonCoeff a
+          } else if (morphType === 0) {
+            // Parse group morphs
+            for (let j = 0; j < offsetCount; j++) {
+              if (this.offset >= this.view.buffer.byteLength) {
+                break
+              }
+              const morphIndex = this.getNonVertexIndex(this.morphIndexSize)
+              const ratio = this.getFloat32()
+
+              if (morphIndex >= 0) {
+                morph.groupReferences!.push({
+                  morphIndex,
+                  ratio,
+                })
+              }
+            }
+          } else {
+            // Skip other morph types for now
+            for (let j = 0; j < offsetCount; j++) {
+              if (this.offset >= this.view.buffer.byteLength) {
+                break
+              }
+              if (morphType === 2) {
+                // Bone morph
+                this.getNonVertexIndex(this.boneIndexSize) // boneIndex
+                this.getFloat32() // x
+                this.getFloat32() // y
+                this.getFloat32() // z
+                this.getFloat32() // rx
+                this.getFloat32() // ry
+                this.getFloat32() // rz
+              } else if (morphType === 3) {
+                // UV morph
+                this.getIndex(this.vertexIndexSize) // vertexIndex
+                this.getFloat32() // u
+                this.getFloat32() // v
+              } else if (morphType === 4 || morphType === 5 || morphType === 6 || morphType === 7) {
+                // UV morph types 4-7 (additional UV channels)
+                this.getIndex(this.vertexIndexSize) // vertexIndex
+                this.getFloat32() // u
+                this.getFloat32() // v
+              } else if (morphType === 8) {
+                // Material morph
+                this.getNonVertexIndex(this.materialIndexSize) // materialIndex
+                this.getUint8() // offsetType
+                this.getFloat32() // diffuse r
+                this.getFloat32() // diffuse g
+                this.getFloat32() // diffuse b
+                this.getFloat32() // diffuse a
+                this.getFloat32() // specular r
+                this.getFloat32() // specular g
+                this.getFloat32() // specular b
+                this.getFloat32() // specular power
+                this.getFloat32() // ambient r
+                this.getFloat32() // ambient g
+                this.getFloat32() // ambient b
+                this.getFloat32() // edgeColor r
+                this.getFloat32() // edgeColor g
+                this.getFloat32() // edgeColor b
+                this.getFloat32() // edgeColor a
+                this.getFloat32() // edgeSize
+                this.getFloat32() // textureCoeff r
+                this.getFloat32() // textureCoeff g
+                this.getFloat32() // textureCoeff b
+                this.getFloat32() // textureCoeff a
+                this.getFloat32() // sphereCoeff r
+                this.getFloat32() // sphereCoeff g
+                this.getFloat32() // sphereCoeff b
+                this.getFloat32() // sphereCoeff a
+                this.getFloat32() // toonCoeff r
+                this.getFloat32() // toonCoeff g
+                this.getFloat32() // toonCoeff b
+                this.getFloat32() // toonCoeff a
+              }
             }
           }
+
+          this.morphs.push(morph)
         } catch (e) {
-          // If we fail to read a morph, stop skipping
+          // If we fail to read a morph, skip it
           console.warn(`Error reading morph ${i}:`, e)
-          return false
         }
       }
-      return true
     } catch (e) {
-      console.warn("Error skipping morphs:", e)
-      return false
+      console.warn("Error parsing morphs:", e)
+      this.morphs = []
     }
   }
 
@@ -825,10 +877,10 @@ export class PmxLoader {
 
   private toModel(positions: number[], normals: number[], uvs: number[], indices: number[]): Model {
     // Create indexed vertex buffer
-    const vertexCount = positions.length / 3
-    const vertexData = new Float32Array(vertexCount * 8)
+    // Format: [x,y,z, nx,ny,nz, u,v, x,y,z, ...]
+    const vertexData = new Float32Array(this.vertexCount * 8)
 
-    for (let i = 0; i < vertexCount; i++) {
+    for (let i = 0; i < this.vertexCount; i++) {
       const pi = i * 3
       const ui = i * 2
       const vi = i * 8
@@ -940,14 +992,52 @@ export class PmxLoader {
       skinning = { joints, weights }
     } else {
       // Create default skinning (single bone per vertex)
-      const vertexCount = positions.length / 3
-      const joints = new Uint16Array(vertexCount * 4)
-      const weights = new Uint8Array(vertexCount * 4)
-      for (let i = 0; i < vertexCount; i++) {
+      const joints = new Uint16Array(this.vertexCount * 4)
+      const weights = new Uint8Array(this.vertexCount * 4)
+      for (let i = 0; i < this.vertexCount; i++) {
         joints[i * 4] = 0
         weights[i * 4] = 255
       }
       skinning = { joints, weights }
+    }
+
+    // Create morphing data structure
+    const morphCount = this.morphs.length
+    // Dense buffer: morphCount * vertexCount * 3 floats (one vec3 per morph per vertex)
+    const offsetsBuffer = new Float32Array(morphCount * this.vertexCount * 3)
+
+    // Initialize all offsets to zero
+    offsetsBuffer.fill(0)
+
+    // Fill in actual offsets for vertex morphs
+    for (let morphIdx = 0; morphIdx < morphCount; morphIdx++) {
+      const morph = this.morphs[morphIdx]
+      if (morph.type === 1) {
+        // Vertex morph
+        // Store offsets in dense buffer: [morph0_v0, morph0_v1, ..., morph1_v0, ...]
+        // Each vec3 is 3 consecutive floats
+        for (const offset of morph.vertexOffsets) {
+          // Calculate index in the dense buffer
+          // Layout: morphIdx * (vertexCount * 3) + vertexIndex * 3
+          // This gives us the starting float index for this morph's vertex offset
+          const bufferIdx = morphIdx * this.vertexCount * 3 + offset.vertexIndex * 3
+          if (
+            bufferIdx >= 0 &&
+            bufferIdx + 2 < offsetsBuffer.length &&
+            offset.vertexIndex >= 0 &&
+            offset.vertexIndex < this.vertexCount
+          ) {
+            offsetsBuffer[bufferIdx] = offset.positionOffset[0]
+            offsetsBuffer[bufferIdx + 1] = offset.positionOffset[1]
+            offsetsBuffer[bufferIdx + 2] = offset.positionOffset[2]
+          }
+        }
+      }
+    }
+
+    const morphing: Morphing = {
+      morphs: this.morphs,
+      offsetsBuffer,
     }
 
     return new Model(
@@ -957,6 +1047,7 @@ export class PmxLoader {
       this.materials,
       skeleton,
       skinning,
+      morphing,
       this.rigidbodies,
       this.joints
     )
