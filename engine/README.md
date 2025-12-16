@@ -14,6 +14,7 @@ A lightweight engine built with WebGPU and TypeScript for real-time 3D anime cha
 - GPU-accelerated skinning
 - Bone and morph api
 - VMD animation
+- Ik solver
 
 ## Usage
 

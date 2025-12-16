@@ -5,7 +5,7 @@ import { Engine, EngineStats, Quat, Vec3 } from "reze-engine"
 import { useCallback, useEffect, useRef, useState } from "react"
 import Loading from "@/components/loading"
 import { Button } from "@/components/ui/button"
-import { Music, VolumeX } from "lucide-react"
+import { Music, VolumeX, Play } from "lucide-react"
 import Image from "next/image"
 
 export default function Home() {
@@ -16,6 +16,7 @@ export default function Home() {
   const [loading, setLoading] = useState(true)
   const [stats, setStats] = useState<EngineStats | null>(null)
   const [isMuted, setIsMuted] = useState(false)
+  const [isPlaying, setIsPlaying] = useState(false)
   const audioStartedRef = useRef(false)
 
   // Model rotation state
@@ -29,19 +30,30 @@ export default function Home() {
   const touchIdentifier = useRef<number | null>(null)
   const lastTouchPos = useRef({ x: 0, y: 0 })
 
-  // Start audio playback from 22 seconds (called on first user interaction)
+  // Start audio playback from 22 seconds
   const startAudio = useCallback(() => {
     if (audioRef.current && !audioStartedRef.current) {
       audioStartedRef.current = true
-      audioRef.current.currentTime = 22
+      audioRef.current.currentTime = 0
       audioRef.current.volume = 1.0
-      audioRef.current.loop = true
+      // audioRef.current.loop = true
       audioRef.current.play().catch(() => {
         // Silently handle autoplay restrictions
         audioStartedRef.current = false
       })
     }
   }, [])
+
+  // Start both animation and audio together
+  const handlePlay = useCallback(async () => {
+    if (engineRef.current && !isPlaying) {
+      await engineRef.current.loadAnimation("/animations/IRIS OUT.vmd")
+
+      engineRef.current.playAnimation()
+      startAudio()
+      setIsPlaying(true)
+    }
+  }, [isPlaying, startAudio])
 
   const initEngine = useCallback(async () => {
     if (canvasRef.current) {
@@ -51,13 +63,12 @@ export default function Home() {
           ambientColor: new Vec3(0.75, 0.85, 1.0),
           bloomIntensity: 0.15,
           rimLightIntensity: 0.4,
-          cameraDistance: 13.5,
-          cameraTarget: new Vec3(0, 17.1, 0),
+          cameraDistance: 26.5,
+          cameraTarget: new Vec3(0, 12.1, 0),
         })
         engineRef.current = engine
         await engine.init()
         await engine.loadModel("/models/塞尔凯特2/塞尔凯特2.pmx")
-        await engine.loadAnimation("/animations/pool.vmd")
 
         setLoading(false)
 
@@ -65,38 +76,15 @@ export default function Home() {
           setStats(engine.getStats())
         })
 
-        // Blink animation
-        setInterval(() => {
-          engine.setMorphWeight("まばたき", 0.9, 300)
-          setTimeout(() => {
-            engine.setMorphWeight("まばたき", 0, 350)
-          }, 350)
-        }, 5000)
-
-
         // Wait a frame to ensure render loop has started and model is fully initialized
         // This prevents physics explosion when animation starts
         await new Promise((resolve) => requestAnimationFrame(resolve))
-        engine.playAnimation({
-          breathBones: {
-            右ひじ: 0.02,
-            左ひじ: 0.02,
-            腰: 0.002,
-            首: 0.003,
-          },
-          breathDuration: 5000,
-        })
-
-        // Attempt to autoplay audio after model is rendered and animation starts
-        // This will fail silently if browser blocks autoplay, and will start on first user interaction
-        setTimeout(() => {
-          startAudio()
-        }, 100)
+        // Don't auto-start animation - wait for user to click play button
       } catch (error) {
         setEngineError(error instanceof Error ? error.message : "Unknown error")
       }
     }
-  }, [startAudio])
+  }, [])
 
   useEffect(() => {
     void (async () => {
@@ -117,34 +105,11 @@ export default function Home() {
 
   // Handle mute/unmute toggle
   const toggleMute = useCallback(() => {
-    // Start audio on first interaction if not started yet
-    startAudio()
-
     if (audioRef.current) {
       audioRef.current.muted = !isMuted
       setIsMuted(!isMuted)
     }
-  }, [isMuted, startAudio])
-
-  // Start audio on first user interaction (click or touch)
-  useEffect(() => {
-    if (loading) return
-
-    const handleFirstInteraction = () => {
-      startAudio()
-      // Remove listeners after first interaction
-      document.removeEventListener("click", handleFirstInteraction)
-      document.removeEventListener("touchstart", handleFirstInteraction)
-    }
-
-    document.addEventListener("click", handleFirstInteraction, { once: true })
-    document.addEventListener("touchstart", handleFirstInteraction, { once: true })
-
-    return () => {
-      document.removeEventListener("click", handleFirstInteraction)
-      document.removeEventListener("touchstart", handleFirstInteraction)
-    }
-  }, [loading, startAudio])
+  }, [isMuted])
 
   // Mouse event handlers for model rotation
   // Use capture phase to intercept events before camera handlers
@@ -316,18 +281,34 @@ export default function Home() {
       <canvas ref={canvasRef} className="absolute inset-0 w-full h-full touch-none z-1" />
 
       {/* Audio element */}
-      <audio ref={audioRef} src="/in the pool.mp3" loop preload="auto" className="hidden" />
+      <audio ref={audioRef} src="/IRIS OUT.wav" preload="auto" className="hidden" />
 
-      {/* Floating mute button */}
-      <Button
-        onClick={toggleMute}
-        variant="secondary"
-        size="icon"
-        className="fixed bottom-6 right-6 z-50 rounded-full shadow-lg hover:shadow-xl transition-all"
-        aria-label={isMuted ? "Unmute audio" : "Mute audio"}
-      >
-        {isMuted ? <VolumeX className="h-6 w-6" /> : <Music className="h-6 w-6" />}
-      </Button>
+      {/* Play button overlay */}
+      {!loading && !isPlaying && !engineError && (
+        <div className="absolute inset-0 w-full h-full flex items-center justify-center z-40 bg-black/30 backdrop-blur-sm">
+          <Button
+            onClick={handlePlay}
+            size="lg"
+            className="rounded-full w-20 h-20 shadow-2xl hover:shadow-3xl hover:scale-110 transition-all bg-white/70 hover:bg-white text-black"
+            aria-label="Play animation and audio"
+          >
+            <Play className="size-6" fill="currentColor" />
+          </Button>
+        </div>
+      )}
+
+      {/* Floating mute button - only show when playing */}
+      {isPlaying && (
+        <Button
+          onClick={toggleMute}
+          variant="secondary"
+          size="icon"
+          className="fixed bottom-6 right-6 z-50 rounded-full shadow-lg hover:shadow-xl transition-all"
+          aria-label={isMuted ? "Unmute audio" : "Mute audio"}
+        >
+          {isMuted ? <VolumeX className="h-6 w-6" /> : <Music className="h-6 w-6" />}
+        </Button>
+      )}
     </div>
   )
 }
