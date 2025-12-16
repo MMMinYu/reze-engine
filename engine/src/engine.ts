@@ -1956,15 +1956,6 @@ export class Engine {
 
       this.updateModelPose(deltaTime, encoder)
 
-      // Hide model if animation is loaded but hasn't started playing yet (prevents A-pose flash)
-      // Once animation has played (even if it stopped), continue rendering normally
-      // Still update physics and poses, just don't render visually before first play
-      if (this.hasAnimation && !this.player.isPlayingState() && this.animationStartTime === 0) {
-        // Submit encoder to ensure matrices are uploaded and physics initializes
-        this.device.queue.submit([encoder.finish()])
-        return
-      }
-
       const pass = encoder.beginRenderPass(this.renderPassDescriptor)
 
       if (this.currentModel) {

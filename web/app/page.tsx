@@ -139,9 +139,7 @@ export default function Home() {
         })
 
         await new Promise((resolve) => requestAnimationFrame(resolve))
-        engineRef.current.playAnimation()
-        engineRef.current.pauseAnimation()
-        // Don't auto-start animation - wait for user to click play button
+        engineRef.current.seekAnimation(0)
       } catch (error) {
         setEngineError(error instanceof Error ? error.message : "Unknown error")
       }
