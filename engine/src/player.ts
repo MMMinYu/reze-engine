@@ -61,6 +61,23 @@ export class Player {
       const audio = new Audio(url)
       audio.preload = "auto"
 
+      // iOS Safari requires playsinline attribute for inline playback
+      // This must be set before loading
+      audio.setAttribute("playsinline", "true")
+      audio.setAttribute("webkit-playsinline", "true")
+
+      // Set volume to ensure audio is ready
+      audio.volume = 1.0
+
+      // iOS sometimes requires audio element to be in DOM
+      // Add it hidden to the document body
+      audio.style.display = "none"
+      audio.style.position = "absolute"
+      audio.style.visibility = "hidden"
+      audio.style.width = "0"
+      audio.style.height = "0"
+      document.body.appendChild(audio)
+
       audio.addEventListener("loadeddata", () => {
         this.audioElement = audio
         this.audioLoaded = true
@@ -70,6 +87,10 @@ export class Player {
       audio.addEventListener("error", (e) => {
         console.warn("Failed to load audio:", url, e)
         this.audioLoaded = false
+        // Remove from DOM on error
+        if (audio.parentNode) {
+          audio.parentNode.removeChild(audio)
+        }
         // Don't reject - animation should still work without audio
         resolve()
       })
@@ -174,10 +195,21 @@ export class Player {
 
     // Play audio if available
     if (this.audioElement && this.audioLoaded) {
+      // Ensure audio is ready for iOS
       this.audioElement.currentTime = this.currentTime
-      this.audioElement.play().catch((error) => {
-        console.warn("Audio play failed:", error)
-      })
+      this.audioElement.muted = false
+      this.audioElement.volume = 1.0
+
+      // iOS requires play() to be called synchronously during user interaction
+      // This must happen directly from the user's click/touch event
+      const playPromise = this.audioElement.play()
+
+      if (playPromise !== undefined) {
+        playPromise.catch((error) => {
+          // Log error but don't block animation playback
+          console.warn("Audio play failed:", error, error.name)
+        })
+      }
     }
   }
 
