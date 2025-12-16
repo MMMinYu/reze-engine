@@ -1,4 +1,4 @@
-import { Mat4, Quat, easeInOut } from "./math"
+import { Mat4, Quat, Vec3, easeInOut } from "./math"
 import { Rigidbody, Joint } from "./physics"
 
 const VERTEX_STRIDE = 8
@@ -107,6 +107,15 @@ interface MorphWeightTweenState {
   durationMs: Float32Array // one float per morph (ms)
 }
 
+// Translation tween state per bone
+interface TranslationTweenState {
+  active: Uint8Array // 0/1 per bone
+  startVec: Float32Array // vec3 per bone (x,y,z)
+  targetVec: Float32Array // vec3 per bone (x,y,z)
+  startTimeMs: Float32Array // one float per bone (ms)
+  durationMs: Float32Array // one float per bone (ms)
+}
+
 export class Model {
   private vertexData: Float32Array<ArrayBuffer>
   private baseVertexData: Float32Array<ArrayBuffer> // Original vertex data before morphing
@@ -136,6 +145,7 @@ export class Model {
   private cachedIdentityMat2 = Mat4.identity()
 
   private rotTweenState!: RotationTweenState
+  private transTweenState!: TranslationTweenState
   private morphTweenState!: MorphWeightTweenState
 
   constructor(
@@ -168,6 +178,7 @@ export class Model {
 
     this.initializeRuntimeSkeleton()
     this.initializeRotTweenBuffers()
+    this.initializeTransTweenBuffers()
     this.initializeRuntimeMorph()
     this.initializeMorphTweenBuffers()
     this.applyMorphs() // Apply initial morphs (all weights are 0, so no change)
@@ -205,6 +216,17 @@ export class Model {
       active: new Uint8Array(n),
       startQuat: new Float32Array(n * 4),
       targetQuat: new Float32Array(n * 4),
+      startTimeMs: new Float32Array(n),
+      durationMs: new Float32Array(n),
+    }
+  }
+
+  private initializeTransTweenBuffers(): void {
+    const n = this.skeleton.bones.length
+    this.transTweenState = {
+      active: new Uint8Array(n),
+      startVec: new Float32Array(n * 3),
+      targetVec: new Float32Array(n * 3),
       startTimeMs: new Float32Array(n),
       durationMs: new Float32Array(n),
     }
@@ -265,6 +287,29 @@ export class Model {
       rotations[qi + 1] = result.y
       rotations[qi + 2] = result.z
       rotations[qi + 3] = result.w
+
+      if (t >= 1) state.active[i] = 0
+    }
+  }
+
+  private updateTranslationTweens(): void {
+    const state = this.transTweenState
+    const now = performance.now()
+    const translations = this.runtimeSkeleton.localTranslations
+    const boneCount = this.skeleton.bones.length
+
+    for (let i = 0; i < boneCount; i++) {
+      if (state.active[i] !== 1) continue
+
+      const startMs = state.startTimeMs[i]
+      const durMs = Math.max(1, state.durationMs[i])
+      const t = Math.max(0, Math.min(1, (now - startMs) / durMs))
+      const e = easeInOut(t)
+
+      const ti = i * 3
+      translations[ti] = state.startVec[ti] + (state.targetVec[ti] - state.startVec[ti]) * e
+      translations[ti + 1] = state.startVec[ti + 1] + (state.targetVec[ti + 1] - state.startVec[ti + 1]) * e
+      translations[ti + 2] = state.startVec[ti + 2] + (state.targetVec[ti + 2] - state.startVec[ti + 2]) * e
 
       if (t >= 1) state.active[i] = 0
     }
@@ -427,6 +472,108 @@ export class Model {
     }
   }
 
+  // Move bones using VMD-style relative translations (relative to bind pose world position)
+  // This is the default behavior for VMD animations
+  moveBones(names: string[], relativeTranslations: Vec3[], durationMs?: number): void {
+    const state = this.transTweenState
+    const now = performance.now()
+    const dur = durationMs && durationMs > 0 ? durationMs : 0
+    const localRot = this.runtimeSkeleton.localRotations
+
+    // Compute bind pose world positions for all bones
+    const skeleton = this.skeleton
+    const computeBindPoseWorldPosition = (idx: number): Vec3 => {
+      const bone = skeleton.bones[idx]
+      const bindPos = new Vec3(bone.bindTranslation[0], bone.bindTranslation[1], bone.bindTranslation[2])
+      if (bone.parentIndex >= 0 && bone.parentIndex < skeleton.bones.length) {
+        const parentWorldPos = computeBindPoseWorldPosition(bone.parentIndex)
+        return parentWorldPos.add(bindPos)
+      } else {
+        return bindPos
+      }
+    }
+
+    for (let i = 0; i < names.length; i++) {
+      const name = names[i]
+      const idx = this.runtimeSkeleton.nameIndex[name] ?? -1
+      if (idx < 0 || idx >= this.skeleton.bones.length) continue
+
+      const bone = this.skeleton.bones[idx]
+      const ti = idx * 3
+      const qi = idx * 4
+      const translations = this.runtimeSkeleton.localTranslations
+      const vmdRelativeTranslation = relativeTranslations[i]
+
+      // VMD translation is relative to bind pose world position
+      // targetWorldPos = bindPoseWorldPos + vmdRelativeTranslation
+      const bindPoseWorldPos = computeBindPoseWorldPosition(idx)
+      const targetWorldPos = bindPoseWorldPos.add(vmdRelativeTranslation)
+
+      // Convert target world position to local translation
+      // We need parent's bind pose world position to transform to parent space
+      let parentBindPoseWorldPos: Vec3
+      if (bone.parentIndex >= 0) {
+        parentBindPoseWorldPos = computeBindPoseWorldPosition(bone.parentIndex)
+      } else {
+        parentBindPoseWorldPos = new Vec3(0, 0, 0)
+      }
+
+      // Transform target world position to parent's local space
+      // In bind pose, parent's world matrix is just a translation
+      const parentSpacePos = targetWorldPos.subtract(parentBindPoseWorldPos)
+
+      // Subtract bindTranslation to get position after bind translation
+      const afterBindTranslation = parentSpacePos.subtract(
+        new Vec3(bone.bindTranslation[0], bone.bindTranslation[1], bone.bindTranslation[2])
+      )
+
+      // Apply inverse rotation to get local translation
+      const localRotation = new Quat(localRot[qi], localRot[qi + 1], localRot[qi + 2], localRot[qi + 3])
+      const invRotation = localRotation.conjugate().normalize()
+      const rotationMat = Mat4.fromQuat(invRotation.x, invRotation.y, invRotation.z, invRotation.w)
+      const rm = rotationMat.values
+      const localTranslation = new Vec3(
+        rm[0] * afterBindTranslation.x + rm[4] * afterBindTranslation.y + rm[8] * afterBindTranslation.z,
+        rm[1] * afterBindTranslation.x + rm[5] * afterBindTranslation.y + rm[9] * afterBindTranslation.z,
+        rm[2] * afterBindTranslation.x + rm[6] * afterBindTranslation.y + rm[10] * afterBindTranslation.z
+      )
+
+      const [tx, ty, tz] = [localTranslation.x, localTranslation.y, localTranslation.z]
+
+      if (dur === 0) {
+        translations[ti] = tx
+        translations[ti + 1] = ty
+        translations[ti + 2] = tz
+        state.active[idx] = 0
+        continue
+      }
+
+      let sx = translations[ti]
+      let sy = translations[ti + 1]
+      let sz = translations[ti + 2]
+
+      if (state.active[idx] === 1) {
+        const startMs = state.startTimeMs[idx]
+        const prevDur = Math.max(1, state.durationMs[idx])
+        const t = Math.max(0, Math.min(1, (now - startMs) / prevDur))
+        const e = easeInOut(t)
+        sx = state.startVec[ti] + (state.targetVec[ti] - state.startVec[ti]) * e
+        sy = state.startVec[ti + 1] + (state.targetVec[ti + 1] - state.startVec[ti + 1]) * e
+        sz = state.startVec[ti + 2] + (state.targetVec[ti + 2] - state.startVec[ti + 2]) * e
+      }
+
+      state.startVec[ti] = sx
+      state.startVec[ti + 1] = sy
+      state.startVec[ti + 2] = sz
+      state.targetVec[ti] = tx
+      state.targetVec[ti + 1] = ty
+      state.targetVec[ti + 2] = tz
+      state.startTimeMs[idx] = now
+      state.durationMs[idx] = dur
+      state.active[idx] = 1
+    }
+  }
+
   getBoneWorldMatrices(): Float32Array {
     return this.runtimeSkeleton.worldMatrices
   }
@@ -547,6 +694,7 @@ export class Model {
 
   evaluatePose(): boolean {
     this.updateRotationTweens()
+    this.updateTranslationTweens()
     const hasActiveMorphTweens = this.updateMorphWeightTweens()
     if (hasActiveMorphTweens) {
       this.applyMorphs()
@@ -622,11 +770,15 @@ export class Model {
         }
       }
 
-      // Build local matrix: identity + bind translation, then rotation, then append translation
+      // Build local matrix: identity + bind translation, then rotation, then local translation, then append translation
+      const ti = i * 3
+      const localTx = localTrans[ti] + addLocalTx
+      const localTy = localTrans[ti + 1] + addLocalTy
+      const localTz = localTrans[ti + 2] + addLocalTz
       this.cachedIdentityMat1
         .setIdentity()
         .translateInPlace(b.bindTranslation[0], b.bindTranslation[1], b.bindTranslation[2])
-      this.cachedIdentityMat2.setIdentity().translateInPlace(addLocalTx, addLocalTy, addLocalTz)
+      this.cachedIdentityMat2.setIdentity().translateInPlace(localTx, localTy, localTz)
       const localM = this.cachedIdentityMat1.multiply(rotateM).multiply(this.cachedIdentityMat2)
 
       const worldOffset = i * 16
