@@ -9,6 +9,7 @@ import {
   Morphing,
   VertexMorphOffset,
   GroupMorphReference,
+  IKLink,
 } from "./model"
 import { Mat4, Vec3 } from "./math"
 import { Rigidbody, Joint, RigidbodyShape, RigidbodyType } from "./physics"
@@ -337,6 +338,10 @@ export class PmxLoader {
         appendRatio?: number
         appendRotate?: boolean
         appendMove?: boolean
+        ikTargetIndex?: number
+        ikIteration?: number
+        ikLimitAngle?: number
+        ikLinks?: IKLink[]
       }
       const abs: AbsBone[] = new Array(count)
       // PMX 2.x bone flags (best-effort common masks)
@@ -405,54 +410,77 @@ export class PmxLoader {
         }
 
         // IK block
+        let ikTargetIndex: number | undefined = undefined
+        let ikIteration: number | undefined = undefined
+        let ikLimitAngle: number | undefined = undefined
+        let ikLinks: IKLink[] | undefined = undefined
         if ((flags & FLAG_IK) !== 0) {
-          this.getNonVertexIndex(this.boneIndexSize) // target
-          this.getInt32() // iteration
-          this.getFloat32() // rotationConstraint
+          ikTargetIndex = this.getNonVertexIndex(this.boneIndexSize) // target
+          ikIteration = this.getInt32() // iteration
+          ikLimitAngle = this.getFloat32() // rotationConstraint
           const linksCount = this.getInt32()
+          ikLinks = []
           for (let li = 0; li < linksCount; li++) {
-            this.getNonVertexIndex(this.boneIndexSize) // link target
+            const linkBoneIndex = this.getNonVertexIndex(this.boneIndexSize) // link target
             const hasLimit = this.getUint8() === 1
+            let minAngle: Vec3 | undefined = undefined
+            let maxAngle: Vec3 | undefined = undefined
             if (hasLimit) {
               // min and max angles (vec3 each)
-              this.getFloat32()
-              this.getFloat32()
-              this.getFloat32()
-              this.getFloat32()
-              this.getFloat32()
-              this.getFloat32()
+              const minX = this.getFloat32()
+              const minY = this.getFloat32()
+              const minZ = this.getFloat32()
+              const maxX = this.getFloat32()
+              const maxY = this.getFloat32()
+              const maxZ = this.getFloat32()
+              minAngle = new Vec3(minX, minY, minZ)
+              maxAngle = new Vec3(maxX, maxY, maxZ)
             }
+            ikLinks.push({
+              boneIndex: linkBoneIndex,
+              hasLimit,
+              minAngle,
+              maxAngle,
+            })
           }
         }
         // Stash minimal bone info; append data will be merged later
-        abs[i] = { name, parent: parentIndex, x, y, z, appendParent, appendRatio, appendRotate, appendMove }
+        abs[i] = {
+          name,
+          parent: parentIndex,
+          x,
+          y,
+          z,
+          appendParent,
+          appendRatio,
+          appendRotate,
+          appendMove,
+          ikTargetIndex,
+          ikIteration,
+          ikLimitAngle,
+          ikLinks,
+        }
       }
       for (let i = 0; i < count; i++) {
         const a = abs[i]
-        if (a.parent >= 0 && a.parent < count) {
-          const p = abs[a.parent]
-          bones.push({
-            name: a.name,
-            parentIndex: a.parent,
-            bindTranslation: [a.x - p.x, a.y - p.y, a.z - p.z],
-            children: [], // Will be populated later when building skeleton
-            appendParentIndex: a.appendParent,
-            appendRatio: a.appendRatio,
-            appendRotate: a.appendRotate,
-            appendMove: a.appendMove,
-          })
-        } else {
-          bones.push({
-            name: a.name,
-            parentIndex: a.parent,
-            bindTranslation: [a.x, a.y, a.z],
-            children: [], // Will be populated later when building skeleton
-            appendParentIndex: a.appendParent,
-            appendRatio: a.appendRatio,
-            appendRotate: a.appendRotate,
-            appendMove: a.appendMove,
-          })
+        const boneData: Bone = {
+          name: a.name,
+          parentIndex: a.parent,
+          bindTranslation:
+            a.parent >= 0 && a.parent < count
+              ? [a.x - abs[a.parent].x, a.y - abs[a.parent].y, a.z - abs[a.parent].z]
+              : [a.x, a.y, a.z],
+          children: [], // Will be populated later when building skeleton
+          appendParentIndex: a.appendParent,
+          appendRatio: a.appendRatio,
+          appendRotate: a.appendRotate,
+          appendMove: a.appendMove,
+          ikTargetIndex: a.ikTargetIndex,
+          ikIteration: a.ikIteration,
+          ikLimitAngle: a.ikLimitAngle,
+          ikLinks: a.ikLinks,
         }
+        bones.push(boneData)
       }
       this.bones = bones
     } catch (e) {

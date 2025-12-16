@@ -1,5 +1,6 @@
 import { Mat4, Quat, Vec3, easeInOut } from "./math"
 import { Rigidbody, Joint } from "./physics"
+import { IKSolverSystem } from "./ik-solver"
 
 const VERTEX_STRIDE = 8
 
@@ -37,6 +38,53 @@ export interface Bone {
   appendRatio?: number // 0..1
   appendRotate?: boolean
   appendMove?: boolean
+  ikTargetIndex?: number // IK target bone index (if this bone is an IK effector)
+  ikIteration?: number // IK iteration count
+  ikLimitAngle?: number // IK rotation constraint (radians)
+  ikLinks?: IKLink[] // IK chain links
+}
+
+// IK link with angle constraints
+export interface IKLink {
+  boneIndex: number
+  hasLimit: boolean
+  minAngle?: Vec3 // Minimum Euler angles (radians)
+  maxAngle?: Vec3 // Maximum Euler angles (radians)
+  rotationOrder?: EulerRotationOrder // YXZ, ZYX, or XZY
+  solveAxis?: SolveAxis // None, Fixed, X, Y, or Z
+}
+
+// Euler rotation order for angle constraints
+export enum EulerRotationOrder {
+  YXZ = 0,
+  ZYX = 1,
+  XZY = 2,
+}
+
+// Solve axis optimization
+export enum SolveAxis {
+  None = 0,
+  Fixed = 1,
+  X = 2,
+  Y = 3,
+  Z = 4,
+}
+
+// IK solver definition
+export interface IKSolver {
+  index: number
+  ikBoneIndex: number // Effector bone (the bone that should reach the target)
+  targetBoneIndex: number // Target bone
+  iterationCount: number
+  limitAngle: number // Max rotation per iteration (radians)
+  links: IKLink[] // Chain bones from effector to root
+  canSkipWhenPhysicsEnabled: boolean
+}
+
+// IK chain info per bone (runtime state)
+export interface IKChainInfo {
+  ikRotation: Quat // Accumulated IK rotation
+  localRotation: Quat // Cached local rotation before IK
 }
 
 export interface Skeleton {
@@ -81,6 +129,8 @@ export interface SkeletonRuntime {
   localTranslations: Float32Array // vec3 per bone length = boneCount*3
   worldMatrices: Float32Array // mat4 per bone length = boneCount*16
   computedBones: boolean[] // length = boneCount
+  ikChainInfo?: IKChainInfo[] // IK chain info per bone (only for IK chain bones)
+  ikSolvers?: IKSolver[] // All IK solvers in the model
 }
 
 // Runtime morph state
@@ -208,6 +258,58 @@ export class Model {
         rotations[qi + 3] = 1
       }
     }
+
+    // Initialize IK runtime state
+    this.initializeIKRuntime()
+  }
+
+  private initializeIKRuntime(): void {
+    const boneCount = this.skeleton.bones.length
+    const bones = this.skeleton.bones
+
+    // Initialize IK chain info for all bones (will be populated for IK chain bones)
+    const ikChainInfo: IKChainInfo[] = new Array(boneCount)
+    for (let i = 0; i < boneCount; i++) {
+      ikChainInfo[i] = {
+        ikRotation: new Quat(0, 0, 0, 1),
+        localRotation: new Quat(0, 0, 0, 1),
+      }
+    }
+
+    // Build IK solvers from bone data
+    const ikSolvers: IKSolver[] = []
+    let solverIndex = 0
+
+    for (let i = 0; i < boneCount; i++) {
+      const bone = bones[i]
+      if (bone.ikTargetIndex !== undefined && bone.ikLinks && bone.ikLinks.length > 0) {
+        // Check if all links are affected by physics (for optimization)
+        let canSkipWhenPhysicsEnabled = true
+        for (const link of bone.ikLinks) {
+          // For now, assume no bones are physics-controlled (can be enhanced later)
+          // If a bone has a rigidbody attached, it's physics-controlled
+          const hasPhysics = this.rigidbodies.some((rb) => rb.boneIndex === link.boneIndex)
+          if (!hasPhysics) {
+            canSkipWhenPhysicsEnabled = false
+            break
+          }
+        }
+
+        const solver: IKSolver = {
+          index: solverIndex++,
+          ikBoneIndex: i,
+          targetBoneIndex: bone.ikTargetIndex,
+          iterationCount: bone.ikIteration ?? 1,
+          limitAngle: bone.ikLimitAngle ?? Math.PI,
+          links: bone.ikLinks,
+          canSkipWhenPhysicsEnabled,
+        }
+        ikSolvers.push(solver)
+      }
+    }
+
+    this.runtimeSkeleton.ikChainInfo = ikChainInfo
+    this.runtimeSkeleton.ikSolvers = ikSolvers
   }
 
   private initializeRotTweenBuffers(): void {
@@ -699,8 +801,35 @@ export class Model {
     if (hasActiveMorphTweens) {
       this.applyMorphs()
     }
+
+    // Compute initial world matrices (needed for IK solving)
     this.computeWorldMatrices()
+
+    // Solve IK chains (modifies localRotations)
+    this.solveIKChains()
+
+    // Recompute world matrices with IK rotations applied
+    this.computeWorldMatrices()
+
     return hasActiveMorphTweens
+  }
+
+  private solveIKChains(): void {
+    const ikSolvers = this.runtimeSkeleton.ikSolvers
+    if (!ikSolvers || ikSolvers.length === 0) return
+
+    const ikChainInfo = this.runtimeSkeleton.ikChainInfo
+    if (!ikChainInfo) return
+
+    IKSolverSystem.solve(
+      ikSolvers,
+      this.skeleton.bones,
+      this.runtimeSkeleton.localRotations,
+      this.runtimeSkeleton.localTranslations,
+      this.runtimeSkeleton.worldMatrices,
+      ikChainInfo,
+      false // usePhysics - can be enhanced later
+    )
   }
 
   private computeWorldMatrices(): void {

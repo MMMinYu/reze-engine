@@ -148,6 +148,15 @@ export class Quat {
     return new Quat(axis.x * invW, axis.y * invW, axis.z * invW, w * 0.5).normalize()
   }
 
+  // Static method: create quaternion from rotation axis and angle
+  static fromAxisAngle(axis: Vec3, angle: number): Quat {
+    const normalizedAxis = axis.normalize()
+    const halfAngle = angle * 0.5
+    const sinHalf = Math.sin(halfAngle)
+    const cosHalf = Math.cos(halfAngle)
+    return new Quat(normalizedAxis.x * sinHalf, normalizedAxis.y * sinHalf, normalizedAxis.z * sinHalf, cosHalf)
+  }
+
   toArray(): [number, number, number, number] {
     return [this.x, this.y, this.z, this.w]
   }
