@@ -1,10 +1,9 @@
-import { bezierInterpolate } from "./bezier-interpolate"
 import { Camera } from "./camera"
-import { Mat4, Quat, Vec3 } from "./math"
+import { Quat, Vec3 } from "./math"
 import { Model } from "./model"
 import { PmxLoader } from "./pmx-loader"
 import { Physics } from "./physics"
-import { BoneFrame, MorphFrame, VMDKeyFrame, VMDLoader } from "./vmd-loader"
+import { AnimationPose, Player } from "./player"
 
 export type EngineOptions = {
   ambientColor?: Vec3
@@ -134,14 +133,9 @@ export class Engine {
   private animationFrameId: number | null = null
   private renderLoopCallback: (() => void) | null = null
 
-  private animationFrames: VMDKeyFrame[] = []
-  private animationTimeouts: number[] = []
+  private player: Player = new Player()
   private hasAnimation = false // Set to true when loadAnimation is called
-  private playingAnimation = false // Set to true when playAnimation is called
-  private animationStartTime: number = 0 // When animation started playing
-  private animationDuration: number = 0 // Total animation duration in seconds
-  private boneTracks: Map<string, Array<{ boneFrame: BoneFrame; time: number }>> = new Map()
-  private morphTracks: Map<string, Array<{ morphFrame: MorphFrame; time: number }>> = new Map()
+  private animationStartTime: number = 0 // Track when animation first started (for A-pose prevention)
 
   constructor(canvas: HTMLCanvasElement, options?: EngineOptions) {
     this.canvas = canvas
@@ -1273,109 +1267,21 @@ export class Engine {
     this.lightData[3] = 0.0 // Padding for vec3f alignment
   }
 
-  public async loadAnimation(url: string) {
-    const frames = await VMDLoader.load(url)
-    this.animationFrames = frames
+  public async loadAnimation(url: string, audioUrl?: string) {
+    await this.player.loadVmd(url, audioUrl)
     this.hasAnimation = true
-  }
 
-  public playAnimation() {
-    if (this.animationFrames.length === 0) return
-
-    this.stopAnimation()
-
-    this.playingAnimation = true
-
-    // Process bone frames
-    const allBoneKeyFrames: Array<{ boneFrame: BoneFrame; time: number }> = []
-    for (const keyFrame of this.animationFrames) {
-      for (const boneFrame of keyFrame.boneFrames) {
-        allBoneKeyFrames.push({
-          boneFrame,
-          time: keyFrame.time,
-        })
-      }
-    }
-
-    const boneKeyFramesByBone = new Map<string, Array<{ boneFrame: BoneFrame; time: number }>>()
-    for (const { boneFrame, time } of allBoneKeyFrames) {
-      if (!boneKeyFramesByBone.has(boneFrame.boneName)) {
-        boneKeyFramesByBone.set(boneFrame.boneName, [])
-      }
-      boneKeyFramesByBone.get(boneFrame.boneName)!.push({ boneFrame, time })
-    }
-
-    for (const keyFrames of boneKeyFramesByBone.values()) {
-      keyFrames.sort((a, b) => a.time - b.time)
-    }
-
-    // Process morph frames
-    const allMorphKeyFrames: Array<{ morphFrame: MorphFrame; time: number }> = []
-    for (const keyFrame of this.animationFrames) {
-      for (const morphFrame of keyFrame.morphFrames) {
-        allMorphKeyFrames.push({
-          morphFrame,
-          time: keyFrame.time,
-        })
-      }
-    }
-
-    const morphKeyFramesByMorph = new Map<string, Array<{ morphFrame: MorphFrame; time: number }>>()
-    for (const { morphFrame, time } of allMorphKeyFrames) {
-      if (!morphKeyFramesByMorph.has(morphFrame.morphName)) {
-        morphKeyFramesByMorph.set(morphFrame.morphName, [])
-      }
-      morphKeyFramesByMorph.get(morphFrame.morphName)!.push({ morphFrame, time })
-    }
-
-    for (const keyFrames of morphKeyFramesByMorph.values()) {
-      keyFrames.sort((a, b) => a.time - b.time)
-    }
-
-    // Store tracks for frame-based animation
-    this.boneTracks = boneKeyFramesByBone
-    this.morphTracks = morphKeyFramesByMorph
-
-    // Calculate animation duration from max frame time (already in seconds)
-    let maxFrameTime = 0
-    for (const keyFrames of this.boneTracks.values()) {
-      if (keyFrames.length > 0) {
-        const lastTime = keyFrames[keyFrames.length - 1].time
-        if (lastTime > maxFrameTime) {
-          maxFrameTime = lastTime
-        }
-      }
-    }
-    for (const keyFrames of this.morphTracks.values()) {
-      if (keyFrames.length > 0) {
-        const lastTime = keyFrames[keyFrames.length - 1].time
-        if (lastTime > maxFrameTime) {
-          maxFrameTime = lastTime
-        }
-      }
-    }
-    this.animationDuration = maxFrameTime > 0 ? maxFrameTime : 0
-    this.animationStartTime = performance.now()
-
-    // Initialize bones and morphs to time 0 pose
+    // Show first frame (time 0) immediately
     if (this.currentModel) {
-      const skeleton = this.currentModel.getSkeleton()
-      const bonesWithTime0 = new Set<string>()
-
-      // Apply time 0 bone keyframes
-      for (const [boneName, keyFrames] of this.boneTracks.entries()) {
-        if (keyFrames.length > 0 && keyFrames[0].time === 0) {
-          const boneFrame = keyFrames[0].boneFrame
-          this.rotateBones([boneName], [boneFrame.rotation], 0)
-          this.moveBones([boneName], [boneFrame.translation], 0)
-          bonesWithTime0.add(boneName)
-        }
-      }
+      const initialPose = this.player.getPoseAtTime(0)
+      this.applyPose(initialPose)
 
       // Reset bones without time 0 keyframes
+      const skeleton = this.currentModel.getSkeleton()
+      const bonesWithPose = new Set(initialPose.boneRotations.keys())
       const bonesToReset: string[] = []
       for (const bone of skeleton.bones) {
-        if (!bonesWithTime0.has(bone.name)) {
+        if (!bonesWithPose.has(bone.name)) {
           bonesToReset.push(bone.name)
         }
       }
@@ -1386,12 +1292,54 @@ export class Engine {
         this.rotateBones(bonesToReset, identityQuats, 0)
       }
 
-      // Apply time 0 morph keyframes
-      for (const [morphName, keyFrames] of this.morphTracks.entries()) {
-        if (keyFrames.length > 0 && keyFrames[0].time === 0) {
-          const morphFrame = keyFrames[0].morphFrame
-          this.setMorphWeight(morphName, morphFrame.weight, 0)
+      // Update model pose and physics
+      this.currentModel.evaluatePose()
+
+      if (this.physics) {
+        const worldMats = this.currentModel.getBoneWorldMatrices()
+        this.physics.reset(worldMats, this.currentModel.getBoneInverseBindMatrices())
+
+        // Upload matrices immediately
+        this.device.queue.writeBuffer(
+          this.worldMatrixBuffer!,
+          0,
+          worldMats.buffer,
+          worldMats.byteOffset,
+          worldMats.byteLength
+        )
+        const encoder = this.device.createCommandEncoder()
+        this.computeSkinMatrices(encoder)
+        this.device.queue.submit([encoder.finish()])
+      }
+    }
+  }
+
+  public playAnimation() {
+    if (!this.hasAnimation || !this.currentModel) return
+
+    const wasPaused = this.player.isPausedState()
+    const wasPlaying = this.player.isPlayingState()
+
+    // Only reset pose and physics if starting from beginning (not resuming)
+    if (!wasPlaying && !wasPaused) {
+      // Get initial pose at time 0
+      const initialPose = this.player.getPoseAtTime(0)
+      this.applyPose(initialPose)
+
+      // Reset bones without time 0 keyframes
+      const skeleton = this.currentModel.getSkeleton()
+      const bonesWithPose = new Set(initialPose.boneRotations.keys())
+      const bonesToReset: string[] = []
+      for (const bone of skeleton.bones) {
+        if (!bonesWithPose.has(bone.name)) {
+          bonesToReset.push(bone.name)
         }
+      }
+
+      if (bonesToReset.length > 0) {
+        const identityQuat = new Quat(0, 0, 0, 1)
+        const identityQuats = new Array(bonesToReset.length).fill(identityQuat)
+        this.rotateBones(bonesToReset, identityQuats, 0)
       }
 
       // Reset physics immediately and upload matrices to prevent A-pose flash
@@ -1414,202 +1362,79 @@ export class Engine {
         this.device.queue.submit([encoder.finish()])
       }
     }
+
+    // Start playback (or resume if paused)
+    this.player.play()
+    if (this.animationStartTime === 0) {
+      this.animationStartTime = performance.now()
+    }
   }
 
   public stopAnimation() {
-    for (const timeoutId of this.animationTimeouts) {
-      clearTimeout(timeoutId)
-    }
-    this.animationTimeouts = []
-    this.playingAnimation = false
-    this.boneTracks.clear()
-    this.morphTracks.clear()
+    this.player.stop()
   }
 
-  // Frame-based animation update (called every frame)
-  // Similar to reference: MmdRuntimeModelAnimation.animate(frameTime)
-  // frameTime is in seconds (already converted from VMD frame numbers in loader)
-  private animate(frameTime: number): void {
+  public pauseAnimation() {
+    this.player.pause()
+  }
+
+  public seekAnimation(time: number) {
+    if (!this.currentModel || !this.hasAnimation) return
+
+    this.player.seek(time)
+
+    // Immediately apply pose at seeked time
+    const pose = this.player.getPoseAtTime(time)
+    this.applyPose(pose)
+
+    // Update model pose and physics
+    this.currentModel.evaluatePose()
+
+    if (this.physics) {
+      const worldMats = this.currentModel.getBoneWorldMatrices()
+      this.physics.reset(worldMats, this.currentModel.getBoneInverseBindMatrices())
+
+      // Upload matrices immediately
+      this.device.queue.writeBuffer(
+        this.worldMatrixBuffer!,
+        0,
+        worldMats.buffer,
+        worldMats.byteOffset,
+        worldMats.byteLength
+      )
+      const encoder = this.device.createCommandEncoder()
+      this.computeSkinMatrices(encoder)
+      this.device.queue.submit([encoder.finish()])
+    }
+  }
+
+  public getAnimationProgress() {
+    return this.player.getProgress()
+  }
+
+  /**
+   * Apply animation pose to model
+   */
+  private applyPose(pose: AnimationPose): void {
     if (!this.currentModel) return
 
-    // Helper to find upper bound index (binary search)
-    const upperBoundFrameIndex = (time: number, keyFrames: Array<{ boneFrame: BoneFrame; time: number }>): number => {
-      let left = 0
-      let right = keyFrames.length
-      while (left < right) {
-        const mid = Math.floor((left + right) / 2)
-        if (keyFrames[mid].time <= time) {
-          left = mid + 1
-        } else {
-          right = mid
-        }
-      }
-      return left
+    // Apply bone rotations
+    if (pose.boneRotations.size > 0) {
+      const boneNames = Array.from(pose.boneRotations.keys())
+      const rotations = Array.from(pose.boneRotations.values())
+      this.rotateBones(boneNames, rotations, 0)
     }
 
-    const boneNamesToRotate: string[] = []
-    const rotationsToApply: Quat[] = []
-    const boneNamesToMove: string[] = []
-    const translationsToApply: Vec3[] = []
-    const morphNamesToSet: string[] = []
-    const morphWeightsToSet: number[] = []
-
-    // Process each bone track
-    for (const [boneName, keyFrames] of this.boneTracks.entries()) {
-      if (keyFrames.length === 0) continue
-
-      // Clamp frame time to track range (all times are in seconds)
-      const startTime = keyFrames[0].time
-      const endTime = keyFrames[keyFrames.length - 1].time
-      const clampedFrameTime = Math.max(startTime, Math.min(endTime, frameTime))
-
-      const upperBoundIndex = upperBoundFrameIndex(clampedFrameTime, keyFrames)
-      const upperBoundIndexMinusOne = upperBoundIndex - 1
-
-      if (upperBoundIndexMinusOne < 0) continue
-
-      const timeB = keyFrames[upperBoundIndex]?.time
-      const boneFrameA = keyFrames[upperBoundIndexMinusOne].boneFrame
-
-      if (timeB === undefined) {
-        // Last keyframe or beyond - use the last keyframe value
-        boneNamesToRotate.push(boneName)
-        rotationsToApply.push(boneFrameA.rotation)
-        boneNamesToMove.push(boneName)
-        translationsToApply.push(boneFrameA.translation)
-      } else {
-        // Interpolate between two keyframes
-        const timeA = keyFrames[upperBoundIndexMinusOne].time
-        const boneFrameB = keyFrames[upperBoundIndex].boneFrame
-        const gradient = (clampedFrameTime - timeA) / (timeB - timeA)
-
-        // Interpolate rotation using Bezier
-        const interp = boneFrameB.interpolation
-        const rotWeight = bezierInterpolate(
-          interp[0] / 127, // x1
-          interp[1] / 127, // x2
-          interp[2] / 127, // y1
-          interp[3] / 127, // y2
-          gradient
-        )
-        const interpolatedRotation = Quat.slerp(boneFrameA.rotation, boneFrameB.rotation, rotWeight)
-
-        // Interpolate translation using Bezier (separate curves for X, Y, Z)
-        // VMD interpolation layout (from reference, 4x4 grid, row-major):
-        // Row 0: X_x1, Y_x1, phy1, phy2,
-        // Row 1: X_y1, Y_y1, Z_y1, R_y1,
-        // Row 2: X_x2, Y_x2, Z_x2, R_x2,
-        // Row 3: X_y2, Y_y2, Z_y2, R_y2,
-        // Row 4: Y_x1, Z_x1, R_x1, X_y1,
-        // Row 5: Y_y1, Z_y1, R_y1, X_x2,
-        // Row 6: Y_x2, Z_x2, R_x2, X_y2,
-        // Row 7: Y_y2, Z_y2, R_y2, 00,
-        // Row 8: Z_x1, R_x1, X_y1, Y_y1,
-        // Row 9: Z_y1, R_y1, X_x2, Y_x2,
-        // Row 10: Z_x2, R_x2, X_y2, Y_y2,
-        // Row 11: Z_y2, R_y2, 00, 00,
-        // Row 12: R_x1, X_y1, Y_y1, Z_y1,
-        // Row 13: R_y1, X_x2, Y_x2, Z_x2,
-        // Row 14: R_x2, X_y2, Y_y2, Z_y2,
-        // Row 15: R_y2, 00, 00, 00
-        // For rotation: R_x1=16, R_y1=20, R_x2=24, R_y2=28
-        // For position X: X_x1=0, X_y1=4, X_x2=8, X_y2=12
-        // For position Y: Y_x1=16, Y_y1=20, Y_x2=24, Y_y2=28
-        // For position Z: Z_x1=32, Z_y1=36, Z_x2=40, Z_y2=44
-        const xWeight = bezierInterpolate(
-          interp[0] / 127, // X_x1
-          interp[8] / 127, // X_x2
-          interp[4] / 127, // X_y1
-          interp[12] / 127, // X_y2
-          gradient
-        )
-        const yWeight = bezierInterpolate(
-          interp[16] / 127, // Y_x1
-          interp[24] / 127, // Y_x2
-          interp[20] / 127, // Y_y1
-          interp[28] / 127, // Y_y2
-          gradient
-        )
-        const zWeight = bezierInterpolate(
-          interp[32] / 127, // Z_x1
-          interp[40] / 127, // Z_x2
-          interp[36] / 127, // Z_y1
-          interp[44] / 127, // Z_y2
-          gradient
-        )
-
-        const interpolatedTranslation = new Vec3(
-          boneFrameA.translation.x + (boneFrameB.translation.x - boneFrameA.translation.x) * xWeight,
-          boneFrameA.translation.y + (boneFrameB.translation.y - boneFrameA.translation.y) * yWeight,
-          boneFrameA.translation.z + (boneFrameB.translation.z - boneFrameA.translation.z) * zWeight
-        )
-
-        boneNamesToRotate.push(boneName)
-        rotationsToApply.push(interpolatedRotation)
-        boneNamesToMove.push(boneName)
-        translationsToApply.push(interpolatedTranslation)
-      }
+    // Apply bone translations
+    if (pose.boneTranslations.size > 0) {
+      const boneNames = Array.from(pose.boneTranslations.keys())
+      const translations = Array.from(pose.boneTranslations.values())
+      this.moveBones(boneNames, translations, 0)
     }
 
-    // Helper to find upper bound index for morph frames
-    const upperBoundMorphIndex = (time: number, keyFrames: Array<{ morphFrame: MorphFrame; time: number }>): number => {
-      let left = 0
-      let right = keyFrames.length
-      while (left < right) {
-        const mid = Math.floor((left + right) / 2)
-        if (keyFrames[mid].time <= time) {
-          left = mid + 1
-        } else {
-          right = mid
-        }
-      }
-      return left
-    }
-
-    // Process each morph track
-    for (const [morphName, keyFrames] of this.morphTracks.entries()) {
-      if (keyFrames.length === 0) continue
-
-      // Clamp frame time to track range
-      const startTime = keyFrames[0].time
-      const endTime = keyFrames[keyFrames.length - 1].time
-      const clampedFrameTime = Math.max(startTime, Math.min(endTime, frameTime))
-
-      const upperBoundIndex = upperBoundMorphIndex(clampedFrameTime, keyFrames)
-      const upperBoundIndexMinusOne = upperBoundIndex - 1
-
-      if (upperBoundIndexMinusOne < 0) continue
-
-      const timeB = keyFrames[upperBoundIndex]?.time
-      const morphFrameA = keyFrames[upperBoundIndexMinusOne].morphFrame
-
-      if (timeB === undefined) {
-        // Last keyframe or beyond - use the last keyframe value
-        morphNamesToSet.push(morphName)
-        morphWeightsToSet.push(morphFrameA.weight)
-      } else {
-        // Linear interpolation between two keyframes
-        const timeA = keyFrames[upperBoundIndexMinusOne].time
-        const morphFrameB = keyFrames[upperBoundIndex].morphFrame
-        const gradient = (clampedFrameTime - timeA) / (timeB - timeA)
-        const interpolatedWeight = morphFrameA.weight + (morphFrameB.weight - morphFrameA.weight) * gradient
-
-        morphNamesToSet.push(morphName)
-        morphWeightsToSet.push(interpolatedWeight)
-      }
-    }
-
-    // Apply all rotations, translations, and morphs at once (no tweening - direct application)
-    if (boneNamesToRotate.length > 0) {
-      this.rotateBones(boneNamesToRotate, rotationsToApply, 0)
-    }
-    if (boneNamesToMove.length > 0) {
-      this.moveBones(boneNamesToMove, translationsToApply, 0)
-    }
-    if (morphNamesToSet.length > 0) {
-      for (let i = 0; i < morphNamesToSet.length; i++) {
-        this.setMorphWeight(morphNamesToSet[i], morphWeightsToSet[i], 0)
-      }
+    // Apply morph weights
+    for (const [morphName, weight] of pose.morphWeights.entries()) {
+      this.setMorphWeight(morphName, weight, 0)
     }
   }
 
@@ -2104,18 +1929,11 @@ export class Engine {
       this.updateRenderTarget()
 
       // Animate VMD animation if playing
-      if (this.playingAnimation && this.currentModel && this.animationDuration > 0) {
-        const elapsedSeconds = (currentTime - this.animationStartTime) / 1000
-        if (elapsedSeconds >= this.animationDuration) {
-          // Animation has ended, stop it
-          this.stopAnimation()
-        } else {
-          const frameTime = elapsedSeconds
-          this.animate(frameTime)
+      if (this.hasAnimation && this.currentModel) {
+        const pose = this.player.update(currentTime)
+        if (pose) {
+          this.applyPose(pose)
         }
-      } else if (this.playingAnimation && this.animationDuration <= 0) {
-        // Animation has no duration or invalid, stop it immediately
-        this.stopAnimation()
       }
 
       // Update model pose first (this may update morph weights via tweens)
@@ -2141,7 +1959,7 @@ export class Engine {
       // Hide model if animation is loaded but hasn't started playing yet (prevents A-pose flash)
       // Once animation has played (even if it stopped), continue rendering normally
       // Still update physics and poses, just don't render visually before first play
-      if (this.hasAnimation && !this.playingAnimation && this.animationStartTime === 0) {
+      if (this.hasAnimation && !this.player.isPlayingState() && this.animationStartTime === 0) {
         // Submit encoder to ensure matrices are uploaded and physics initializes
         this.device.queue.submit([encoder.finish()])
         return
