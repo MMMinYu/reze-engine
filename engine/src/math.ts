@@ -26,6 +26,10 @@ export class Vec3 {
     return Math.sqrt(this.x * this.x + this.y * this.y + this.z * this.z)
   }
 
+  lengthSquared(): number {
+    return this.x * this.x + this.y * this.y + this.z * this.z
+  }
+
   normalize(): Vec3 {
     const len = this.length()
     if (len === 0) return new Vec3(0, 0, 0)

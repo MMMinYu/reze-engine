@@ -28,6 +28,7 @@ function formatRemainingTime(current: number, duration: number): string {
 export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const engineRef = useRef<Engine | null>(null)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
   const [engineError, setEngineError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [stats, setStats] = useState<EngineStats | null>(null)
@@ -65,21 +66,71 @@ export default function Home() {
     }
   }, [isPlaying, isPaused])
 
+  // Create and preload audio element on mount
+  useEffect(() => {
+    const audio = new Audio("/IRIS OUT.wav")
+    audio.preload = "auto"
+    audio.setAttribute("playsinline", "true")
+    audio.setAttribute("webkit-playsinline", "true")
+    audio.volume = 1.0
+    audio.muted = false
+
+    // Add to DOM (iOS requirement)
+    Object.assign(audio.style, {
+      display: "none",
+      position: "absolute",
+      visibility: "hidden",
+      width: "0",
+      height: "0",
+    })
+    document.body.appendChild(audio)
+
+    audio.load()
+
+    audio.addEventListener("loadeddata", () => {
+      audioRef.current = audio
+    })
+
+    audio.addEventListener("error", () => {
+      console.warn("Audio failed to load")
+    })
+
+    return () => {
+      audio.pause()
+      audio.parentNode?.removeChild(audio)
+    }
+  }, [])
+
   // Load animation
   const handleLoadAnimation = useCallback(async () => {
     if (engineRef.current) {
-      await engineRef.current.loadAnimation("/animations/IRIS OUT.vmd", "/IRIS OUT.wav")
+      await engineRef.current.loadAnimation("/animations/IRIS OUT.vmd")
       const prog = engineRef.current.getAnimationProgress()
       setProgress(prog)
     }
   }, [])
 
   // Play animation
-  const handlePlay = useCallback(async () => {
+  const handlePlay = useCallback(() => {
     if (engineRef.current) {
+      // iOS CRITICAL: Call audio.play() DIRECTLY from click handler
+      // This must be synchronous - no async/await, no callbacks
+      if (audioRef.current) {
+        audioRef.current.muted = false
+        audioRef.current.volume = 1.0
+        audioRef.current.currentTime = progress.current
+        // Call play() directly - synchronous from user interaction
+        audioRef.current.play().catch(() => {
+          // Silent fail
+        })
+      }
+
       // If animation has ended (at 100%), restart from beginning
       if (progress.percentage >= 100) {
         engineRef.current.seekAnimation(0)
+        if (audioRef.current) {
+          audioRef.current.currentTime = 0
+        }
         setProgress({ ...progress, current: 0, percentage: 0 })
       }
       engineRef.current.playAnimation()
@@ -92,6 +143,9 @@ export default function Home() {
   const handlePause = useCallback(() => {
     if (engineRef.current) {
       engineRef.current.pauseAnimation()
+      if (audioRef.current) {
+        audioRef.current.pause()
+      }
       setIsPaused(true)
     }
   }, [])
@@ -99,6 +153,12 @@ export default function Home() {
   // Resume animation
   const handleResume = useCallback(() => {
     if (engineRef.current) {
+      // iOS CRITICAL: Call audio.play() DIRECTLY from click handler
+      if (audioRef.current) {
+        audioRef.current.play().catch(() => {
+          // Silent fail
+        })
+      }
       engineRef.current.playAnimation()
       setIsPaused(false)
     }
@@ -110,6 +170,9 @@ export default function Home() {
       if (engineRef.current && progress.duration > 0) {
         const seekTime = (value[0] / 100) * progress.duration
         engineRef.current.seekAnimation(seekTime)
+        if (audioRef.current) {
+          audioRef.current.currentTime = seekTime
+        }
         setProgress({ ...progress, current: seekTime, percentage: value[0] })
       }
     },
@@ -156,8 +219,16 @@ export default function Home() {
       if (engineRef.current) {
         engineRef.current.dispose()
       }
+      if (audioRef.current) {
+        audioRef.current.pause()
+        if (audioRef.current.parentNode) {
+          audioRef.current.parentNode.removeChild(audioRef.current)
+        }
+      }
     }
   }, [initEngine])
+
+  // iOS audio unlock: removed - unlock happens in play() method itself
 
   // Space key shortcut for play/pause
   useEffect(() => {
@@ -208,7 +279,7 @@ export default function Home() {
 
       {/* Player Controls */}
       {!loading && !engineError && (
-        <div className="absolute bottom-4 left-4 right-4 z-50 px-2 py-1 bg-black/30 backdrop-blur-xs rounded-full outline-none">
+        <div className="absolute bottom-4 left-4 right-4 z-50 px-2 bg-black/30 backdrop-blur-xs rounded-full outline-none">
           <div className="max-w-4xl mx-auto pr-2">
             {/* Single Row: Play/Pause - Time - Slider - Remaining Time */}
             <div className="flex items-center gap-3">

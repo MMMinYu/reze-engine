@@ -31,72 +31,13 @@ export class Player {
   private pausedTime: number = 0 // Accumulated paused duration
   private pauseStartTime: number = 0
 
-  // Audio
-  private audioElement?: HTMLAudioElement
-  private audioUrl?: string
-  private audioLoaded: boolean = false
-
   /**
-   * Load VMD animation file and optionally audio
+   * Load VMD animation file
    */
-  async loadVmd(vmdUrl: string, audioUrl?: string): Promise<void> {
+  async loadVmd(vmdUrl: string): Promise<void> {
     // Load animation
     this.frames = await VMDLoader.load(vmdUrl)
     this.processFrames()
-
-    // Load audio if provided
-    if (audioUrl) {
-      await this.loadAudio(audioUrl)
-    }
-  }
-
-  /**
-   * Load audio file
-   */
-  async loadAudio(url: string): Promise<void> {
-    this.audioUrl = url
-    this.audioLoaded = false
-
-    return new Promise((resolve, reject) => {
-      const audio = new Audio(url)
-      audio.preload = "auto"
-
-      // iOS Safari requires playsinline attribute for inline playback
-      // This must be set before loading
-      audio.setAttribute("playsinline", "true")
-      audio.setAttribute("webkit-playsinline", "true")
-
-      // Set volume to ensure audio is ready
-      audio.volume = 1.0
-
-      // iOS sometimes requires audio element to be in DOM
-      // Add it hidden to the document body
-      audio.style.display = "none"
-      audio.style.position = "absolute"
-      audio.style.visibility = "hidden"
-      audio.style.width = "0"
-      audio.style.height = "0"
-      document.body.appendChild(audio)
-
-      audio.addEventListener("loadeddata", () => {
-        this.audioElement = audio
-        this.audioLoaded = true
-        resolve()
-      })
-
-      audio.addEventListener("error", (e) => {
-        console.warn("Failed to load audio:", url, e)
-        this.audioLoaded = false
-        // Remove from DOM on error
-        if (audio.parentNode) {
-          audio.parentNode.removeChild(audio)
-        }
-        // Don't reject - animation should still work without audio
-        resolve()
-      })
-
-      audio.load()
-    })
   }
 
   /**
@@ -176,6 +117,7 @@ export class Player {
 
   /**
    * Start or resume playback
+   * Note: For iOS, this should be called synchronously from a user interaction event
    */
   play(): void {
     if (this.frames.length === 0) return
@@ -192,25 +134,6 @@ export class Player {
     }
 
     this.isPlaying = true
-
-    // Play audio if available
-    if (this.audioElement && this.audioLoaded) {
-      // Ensure audio is ready for iOS
-      this.audioElement.currentTime = this.currentTime
-      this.audioElement.muted = false
-      this.audioElement.volume = 1.0
-
-      // iOS requires play() to be called synchronously during user interaction
-      // This must happen directly from the user's click/touch event
-      const playPromise = this.audioElement.play()
-
-      if (playPromise !== undefined) {
-        playPromise.catch((error) => {
-          // Log error but don't block animation playback
-          console.warn("Audio play failed:", error, error.name)
-        })
-      }
-    }
   }
 
   /**
@@ -221,11 +144,6 @@ export class Player {
 
     this.isPaused = true
     this.pauseStartTime = performance.now()
-
-    // Pause audio if available
-    if (this.audioElement) {
-      this.audioElement.pause()
-    }
   }
 
   /**
@@ -237,12 +155,6 @@ export class Player {
     this.currentTime = 0
     this.startTime = 0
     this.pausedTime = 0
-
-    // Stop audio if available
-    if (this.audioElement) {
-      this.audioElement.pause()
-      this.audioElement.currentTime = 0
-    }
   }
 
   /**
@@ -256,11 +168,6 @@ export class Player {
     if (this.isPlaying && !this.isPaused) {
       this.startTime = performance.now() - clampedTime * 1000
       this.pausedTime = 0
-    }
-
-    // Seek audio if available
-    if (this.audioElement && this.audioLoaded) {
-      this.audioElement.currentTime = clampedTime
     }
   }
 
@@ -287,15 +194,6 @@ export class Player {
       this.currentTime = this.duration
       this.pause() // Auto-pause at end
       return this.getPoseAtTime(this.currentTime)
-    }
-
-    // Sync audio if present (with tolerance)
-    if (this.audioElement && this.audioLoaded) {
-      const audioTime = this.audioElement.currentTime
-      const syncTolerance = 0.1 // 100ms tolerance
-      if (Math.abs(audioTime - this.currentTime) > syncTolerance) {
-        this.audioElement.currentTime = this.currentTime
-      }
     }
 
     return this.getPoseAtTime(this.currentTime)
@@ -484,39 +382,5 @@ export class Player {
    */
   isPausedState(): boolean {
     return this.isPaused
-  }
-
-  /**
-   * Check if has audio
-   */
-  hasAudio(): boolean {
-    return this.audioElement !== undefined && this.audioLoaded
-  }
-
-  /**
-   * Set audio volume (0.0 to 1.0)
-   */
-  setVolume(volume: number): void {
-    if (this.audioElement) {
-      this.audioElement.volume = Math.max(0, Math.min(1, volume))
-    }
-  }
-
-  /**
-   * Mute audio
-   */
-  mute(): void {
-    if (this.audioElement) {
-      this.audioElement.muted = true
-    }
-  }
-
-  /**
-   * Unmute audio
-   */
-  unmute(): void {
-    if (this.audioElement) {
-      this.audioElement.muted = false
-    }
   }
 }

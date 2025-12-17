@@ -1267,8 +1267,8 @@ export class Engine {
     this.lightData[3] = 0.0 // Padding for vec3f alignment
   }
 
-  public async loadAnimation(url: string, audioUrl?: string) {
-    await this.player.loadVmd(url, audioUrl)
+  public async loadAnimation(url: string) {
+    await this.player.loadVmd(url)
     this.hasAnimation = true
 
     // Show first frame (time 0) immediately
