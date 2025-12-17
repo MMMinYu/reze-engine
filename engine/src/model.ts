@@ -50,24 +50,6 @@ export interface IKLink {
   hasLimit: boolean
   minAngle?: Vec3 // Minimum Euler angles (radians)
   maxAngle?: Vec3 // Maximum Euler angles (radians)
-  rotationOrder?: EulerRotationOrder // YXZ, ZYX, or XZY
-  solveAxis?: SolveAxis // None, Fixed, X, Y, or Z
-}
-
-// Euler rotation order for angle constraints
-export enum EulerRotationOrder {
-  YXZ = 0,
-  ZYX = 1,
-  XZY = 2,
-}
-
-// Solve axis optimization
-export enum SolveAxis {
-  None = 0,
-  Fixed = 1,
-  X = 2,
-  Y = 3,
-  Z = 4,
 }
 
 // IK solver definition
@@ -78,7 +60,6 @@ export interface IKSolver {
   iterationCount: number
   limitAngle: number // Max rotation per iteration (radians)
   links: IKLink[] // Chain bones from effector to root
-  canSkipWhenPhysicsEnabled: boolean
 }
 
 // IK chain info per bone (runtime state)
@@ -128,7 +109,6 @@ export interface SkeletonRuntime {
   localRotations: Float32Array // quat per bone (x,y,z,w) length = boneCount*4
   localTranslations: Float32Array // vec3 per bone length = boneCount*3
   worldMatrices: Float32Array // mat4 per bone length = boneCount*16
-  computedBones: boolean[] // length = boneCount
   ikChainInfo?: IKChainInfo[] // IK chain info per bone (only for IK chain bones)
   ikSolvers?: IKSolver[] // All IK solvers in the model
 }
@@ -245,7 +225,6 @@ export class Model {
         acc[bone.name] = index
         return acc
       }, {} as Record<string, number>),
-      computedBones: new Array(boneCount).fill(false),
     }
 
     const rotations = this.runtimeSkeleton.localRotations
@@ -283,18 +262,6 @@ export class Model {
     for (let i = 0; i < boneCount; i++) {
       const bone = bones[i]
       if (bone.ikTargetIndex !== undefined && bone.ikLinks && bone.ikLinks.length > 0) {
-        // Check if all links are affected by physics (for optimization)
-        let canSkipWhenPhysicsEnabled = true
-        for (const link of bone.ikLinks) {
-          // For now, assume no bones are physics-controlled (can be enhanced later)
-          // If a bone has a rigidbody attached, it's physics-controlled
-          const hasPhysics = this.rigidbodies.some((rb) => rb.boneIndex === link.boneIndex)
-          if (!hasPhysics) {
-            canSkipWhenPhysicsEnabled = false
-            break
-          }
-        }
-
         const solver: IKSolver = {
           index: solverIndex++,
           ikBoneIndex: i,
@@ -302,7 +269,6 @@ export class Model {
           iterationCount: bone.ikIteration ?? 1,
           limitAngle: bone.ikLimitAngle ?? Math.PI,
           links: bone.ikLinks,
-          canSkipWhenPhysicsEnabled,
         }
         ikSolvers.push(solver)
       }
@@ -550,14 +516,10 @@ export class Model {
           state.targetQuat[qi + 3]
         )
         const result = Quat.slerp(startQuat, targetQuat, e)
-        const cx = result.x
-        const cy = result.y
-        const cz = result.z
-        const cw = result.w
-        sx = cx
-        sy = cy
-        sz = cz
-        sw = cw
+        sx = result.x
+        sy = result.y
+        sz = result.z
+        sw = result.w
       }
 
       state.startQuat[qi] = sx
@@ -706,10 +668,9 @@ export class Model {
     // Animated change
     const state = this.morphTweenState
     const now = performance.now()
-    const currentWeight = this.runtimeMorph.weights[idx]
 
     // If already tweening, start from current interpolated value
-    let startWeight = currentWeight
+    let startWeight = this.runtimeMorph.weights[idx]
     if (state.active[idx] === 1) {
       const startMs = state.startTimeMs[idx]
       const prevDur = Math.max(1, state.durationMs[idx])
@@ -802,13 +763,13 @@ export class Model {
       this.applyMorphs()
     }
 
-    // Compute initial world matrices (needed for IK solving)
+    // Compute initial world matrices (needed for IK solving to read bone positions)
     this.computeWorldMatrices()
 
-    // Solve IK chains (modifies localRotations)
+    // Solve IK chains (modifies localRotations with final IK rotations)
     this.solveIKChains()
 
-    // Recompute world matrices with IK rotations applied
+    // Recompute world matrices with final IK rotations applied to localRotations
     this.computeWorldMatrices()
 
     return hasActiveMorphTweens
@@ -827,8 +788,7 @@ export class Model {
       this.runtimeSkeleton.localRotations,
       this.runtimeSkeleton.localTranslations,
       this.runtimeSkeleton.worldMatrices,
-      ikChainInfo,
-      false // usePhysics - can be enhanced later
+      ikChainInfo
     )
   }
 
@@ -837,10 +797,12 @@ export class Model {
     const localRot = this.runtimeSkeleton.localRotations
     const localTrans = this.runtimeSkeleton.localTranslations
     const worldBuf = this.runtimeSkeleton.worldMatrices
-    const computed = this.runtimeSkeleton.computedBones.fill(false)
     const boneCount = bones.length
 
     if (boneCount === 0) return
+
+    // Local computed array (avoids instance field overhead)
+    const computed = new Array<boolean>(boneCount).fill(false)
 
     const computeWorld = (i: number): void => {
       if (computed[i]) return
@@ -880,14 +842,9 @@ export class Model {
               ay = -ay
               az = -az
             }
-            const identityQuat = new Quat(0, 0, 0, 1)
             const appendQuat = new Quat(ax, ay, az, aw)
-            const result = Quat.slerp(identityQuat, appendQuat, absRatio)
-            const rx = result.x
-            const ry = result.y
-            const rz = result.z
-            const rw = result.w
-            rotateM = Mat4.fromQuat(rx, ry, rz, rw).multiply(rotateM)
+            const result = Quat.slerp(new Quat(0, 0, 0, 1), appendQuat, absRatio)
+            rotateM = Mat4.fromQuat(result.x, result.y, result.z, result.w).multiply(rotateM)
           }
 
           if (b.appendMove) {

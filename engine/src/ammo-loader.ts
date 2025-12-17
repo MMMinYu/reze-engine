@@ -29,7 +29,3 @@ export async function loadAmmo(): Promise<AmmoInstance> {
 
   return ammoPromise
 }
-
-export function getAmmoInstance(): AmmoInstance | null {
-  return ammoInstance
-}

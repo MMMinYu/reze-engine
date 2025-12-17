@@ -1,5 +1,4 @@
-import { bezierInterpolate } from "./bezier-interpolate"
-import { Quat, Vec3 } from "./math"
+import { Quat, Vec3, bezierInterpolate } from "./math"
 import { BoneFrame, MorphFrame, VMDKeyFrame, VMDLoader } from "./vmd-loader"
 
 export interface AnimationPose {

@@ -5,7 +5,7 @@
  */
 
 import { Mat4, Quat, Vec3 } from "./math"
-import { Bone, IKLink, IKSolver, IKChainInfo, EulerRotationOrder, SolveAxis } from "./model"
+import { Bone, IKLink, IKSolver, IKChainInfo } from "./model"
 
 const enum InternalEulerRotationOrder {
   YXZ = 0,
@@ -89,13 +89,9 @@ export class IKSolverSystem {
     localRotations: Float32Array,
     localTranslations: Float32Array,
     worldMatrices: Float32Array,
-    ikChainInfo: IKChainInfo[],
-    usePhysics: boolean = false
+    ikChainInfo: IKChainInfo[]
   ): void {
     for (const solver of ikSolvers) {
-      if (usePhysics && solver.canSkipWhenPhysicsEnabled) {
-        continue
-      }
       this.solveIK(solver, bones, localRotations, localTranslations, worldMatrices, ikChainInfo)
     }
   }
@@ -135,9 +131,9 @@ export class IKSolverSystem {
 
     // Update chain bones and target bone world matrices (initial state, no IK yet)
     for (let i = chains.length - 1; i >= 0; i--) {
-      this.updateWorldMatrix(chains[i].boneIndex, bones, localRotations, localTranslations, worldMatrices)
+      this.updateWorldMatrix(chains[i].boneIndex, bones, localRotations, localTranslations, worldMatrices, undefined)
     }
-    this.updateWorldMatrix(targetBoneIndex, bones, localRotations, localTranslations, worldMatrices)
+    this.updateWorldMatrix(targetBoneIndex, bones, localRotations, localTranslations, worldMatrices, undefined)
 
     // Re-read positions after initial update
     const updatedIkPosition = this.getWorldTranslation(ikBoneIndex, worldMatrices)
@@ -355,9 +351,9 @@ export class IKSolverSystem {
     // Update world matrices for affected bones (using IK-modified rotations)
     for (let i = chainIndex; i >= 0; i--) {
       const link = solver.links[i]
-      this.updateWorldMatrixWithIK(link.boneIndex, bones, localRotations, localTranslations, worldMatrices, ikChainInfo)
+      this.updateWorldMatrix(link.boneIndex, bones, localRotations, localTranslations, worldMatrices, ikChainInfo)
     }
-    this.updateWorldMatrix(targetBoneIndex, bones, localRotations, localTranslations, worldMatrices)
+    this.updateWorldMatrix(targetBoneIndex, bones, localRotations, localTranslations, worldMatrices, undefined)
   }
 
   private static limitAngle(angle: number, min: number, max: number, useAxis: boolean): number {
@@ -401,70 +397,35 @@ export class IKSolverSystem {
     )
   }
 
-  private static updateWorldMatrixWithIK(
-    boneIndex: number,
-    bones: Bone[],
-    localRotations: Float32Array,
-    localTranslations: Float32Array,
-    worldMatrices: Float32Array,
-    ikChainInfo: IKChainInfo[]
-  ): void {
-    const bone = bones[boneIndex]
-    const qi = boneIndex * 4
-    const ti = boneIndex * 3
-
-    // Use IK-modified rotation if available
-    const localRot = new Quat(
-      localRotations[qi],
-      localRotations[qi + 1],
-      localRotations[qi + 2],
-      localRotations[qi + 3]
-    )
-    const chainInfo = ikChainInfo[boneIndex]
-    let finalRot = localRot
-    if (chainInfo && chainInfo.ikRotation) {
-      finalRot = chainInfo.ikRotation.multiply(localRot).normalize()
-    }
-    const rotateM = Mat4.fromQuat(finalRot.x, finalRot.y, finalRot.z, finalRot.w)
-
-    const localTx = localTranslations[ti]
-    const localTy = localTranslations[ti + 1]
-    const localTz = localTranslations[ti + 2]
-
-    const localM = Mat4.identity()
-      .translateInPlace(bone.bindTranslation[0], bone.bindTranslation[1], bone.bindTranslation[2])
-      .multiply(rotateM)
-      .translateInPlace(localTx, localTy, localTz)
-
-    const worldOffset = boneIndex * 16
-    if (bone.parentIndex >= 0) {
-      const parentOffset = bone.parentIndex * 16
-      const parentMat = new Mat4(worldMatrices.subarray(parentOffset, parentOffset + 16))
-      const worldMat = parentMat.multiply(localM)
-      worldMatrices.subarray(worldOffset, worldOffset + 16).set(worldMat.values)
-    } else {
-      worldMatrices.subarray(worldOffset, worldOffset + 16).set(localM.values)
-    }
-  }
-
   private static updateWorldMatrix(
     boneIndex: number,
     bones: Bone[],
     localRotations: Float32Array,
     localTranslations: Float32Array,
-    worldMatrices: Float32Array
+    worldMatrices: Float32Array,
+    ikChainInfo?: IKChainInfo[]
   ): void {
     const bone = bones[boneIndex]
     const qi = boneIndex * 4
     const ti = boneIndex * 3
 
+    // Get local rotation
     const localRot = new Quat(
       localRotations[qi],
       localRotations[qi + 1],
       localRotations[qi + 2],
       localRotations[qi + 3]
     )
-    const rotateM = Mat4.fromQuat(localRot.x, localRot.y, localRot.z, localRot.w)
+
+    // Apply IK rotation if available
+    let finalRot = localRot
+    if (ikChainInfo) {
+      const chainInfo = ikChainInfo[boneIndex]
+      if (chainInfo && chainInfo.ikRotation) {
+        finalRot = chainInfo.ikRotation.multiply(localRot).normalize()
+      }
+    }
+    const rotateM = Mat4.fromQuat(finalRot.x, finalRot.y, finalRot.z, finalRot.w)
 
     const localTx = localTranslations[ti]
     const localTy = localTranslations[ti + 1]
