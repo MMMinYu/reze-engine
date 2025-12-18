@@ -1,5 +1,5 @@
 import { Camera } from "./camera"
-import { Quat, Vec3 } from "./math"
+import { Mat4, Quat, Vec3 } from "./math"
 import { Model } from "./model"
 import { PmxLoader } from "./pmx-loader"
 import { Physics } from "./physics"
@@ -18,7 +18,19 @@ export interface EngineStats {
   frameTime: number // ms
 }
 
+type DrawCallType =
+  | "opaque"
+  | "eye"
+  | "hair-over-eyes"
+  | "hair-over-non-eyes"
+  | "transparent"
+  | "opaque-outline"
+  | "eye-outline"
+  | "hair-outline"
+  | "transparent-outline"
+
 interface DrawCall {
+  type: DrawCallType
   count: number
   firstIndex: number
   bindGroup: GPUBindGroup
@@ -54,17 +66,12 @@ export class Engine {
   private jointsBuffer!: GPUBuffer
   private weightsBuffer!: GPUBuffer
   private skinMatrixBuffer?: GPUBuffer
-  private worldMatrixBuffer?: GPUBuffer
   private inverseBindMatrixBuffer?: GPUBuffer
-  private skinMatrixComputePipeline?: GPUComputePipeline
-  private skinMatrixComputeBindGroup?: GPUBindGroup
-  private boneCountBuffer?: GPUBuffer
   private multisampleTexture!: GPUTexture
   private readonly sampleCount = 4
   private renderPassDescriptor!: GPURenderPassDescriptor
   // Constants
   private readonly STENCIL_EYE_VALUE = 1
-  private readonly COMPUTE_WORKGROUP_SIZE = 64
   private readonly BLOOM_DOWNSCALE_FACTOR = 2
 
   // Default values
@@ -110,16 +117,8 @@ export class Engine {
   private materialSampler!: GPUSampler
   private textureCache = new Map<string, GPUTexture>()
   private vertexBufferNeedsUpdate = false
-  // Draw lists
-  private opaqueDraws: DrawCall[] = []
-  private eyeDraws: DrawCall[] = []
-  private hairDrawsOverEyes: DrawCall[] = []
-  private hairDrawsOverNonEyes: DrawCall[] = []
-  private transparentDraws: DrawCall[] = []
-  private opaqueOutlineDraws: DrawCall[] = []
-  private eyeOutlineDraws: DrawCall[] = []
-  private hairOutlineDraws: DrawCall[] = []
-  private transparentOutlineDraws: DrawCall[] = []
+  // Unified draw call list
+  private drawCalls: DrawCall[] = []
 
   private lastFpsUpdate = performance.now()
   private framesSinceLastUpdate = 0
@@ -177,6 +176,37 @@ export class Engine {
     this.setupResize()
   }
 
+  private createRenderPipeline(config: {
+    label: string
+    layout: GPUPipelineLayout
+    shaderModule: GPUShaderModule
+    vertexBuffers: GPUVertexBufferLayout[]
+    fragmentTarget?: GPUColorTargetState
+    fragmentEntryPoint?: string
+    cullMode?: GPUCullMode
+    depthStencil?: GPUDepthStencilState
+    multisample?: GPUMultisampleState
+  }): GPURenderPipeline {
+    return this.device.createRenderPipeline({
+      label: config.label,
+      layout: config.layout,
+      vertex: {
+        module: config.shaderModule,
+        buffers: config.vertexBuffers,
+      },
+      fragment: config.fragmentTarget
+        ? {
+            module: config.shaderModule,
+            entryPoint: config.fragmentEntryPoint,
+            targets: [config.fragmentTarget],
+          }
+        : undefined,
+      primitive: { cullMode: config.cullMode ?? "none" },
+      depthStencil: config.depthStencil,
+      multisample: config.multisample ?? { count: this.sampleCount },
+    })
+  }
+
   private createPipelines() {
     this.materialSampler = this.device.createSampler({
       magFilter: "linear",
@@ -184,6 +214,78 @@ export class Engine {
       addressModeU: "repeat",
       addressModeV: "repeat",
     })
+
+    // Shared vertex buffer layouts
+    const fullVertexBuffers: GPUVertexBufferLayout[] = [
+      {
+        arrayStride: 8 * 4,
+        attributes: [
+          { shaderLocation: 0, offset: 0, format: "float32x3" as GPUVertexFormat },
+          { shaderLocation: 1, offset: 3 * 4, format: "float32x3" as GPUVertexFormat },
+          { shaderLocation: 2, offset: 6 * 4, format: "float32x2" as GPUVertexFormat },
+        ],
+      },
+      {
+        arrayStride: 4 * 2,
+        attributes: [{ shaderLocation: 3, offset: 0, format: "uint16x4" as GPUVertexFormat }],
+      },
+      {
+        arrayStride: 4,
+        attributes: [{ shaderLocation: 4, offset: 0, format: "unorm8x4" as GPUVertexFormat }],
+      },
+    ]
+
+    const outlineVertexBuffers: GPUVertexBufferLayout[] = [
+      {
+        arrayStride: 8 * 4,
+        attributes: [
+          { shaderLocation: 0, offset: 0, format: "float32x3" as GPUVertexFormat },
+          { shaderLocation: 1, offset: 3 * 4, format: "float32x3" as GPUVertexFormat },
+        ],
+      },
+      {
+        arrayStride: 4 * 2,
+        attributes: [{ shaderLocation: 3, offset: 0, format: "uint16x4" as GPUVertexFormat }],
+      },
+      {
+        arrayStride: 4,
+        attributes: [{ shaderLocation: 4, offset: 0, format: "unorm8x4" as GPUVertexFormat }],
+      },
+    ]
+
+    const depthOnlyVertexBuffers: GPUVertexBufferLayout[] = [
+      {
+        arrayStride: 8 * 4,
+        attributes: [
+          { shaderLocation: 0, offset: 0, format: "float32x3" as GPUVertexFormat },
+          { shaderLocation: 1, offset: 3 * 4, format: "float32x3" as GPUVertexFormat },
+        ],
+      },
+      {
+        arrayStride: 4 * 2,
+        attributes: [{ shaderLocation: 3, offset: 0, format: "uint16x4" as GPUVertexFormat }],
+      },
+      {
+        arrayStride: 4,
+        attributes: [{ shaderLocation: 4, offset: 0, format: "unorm8x4" as GPUVertexFormat }],
+      },
+    ]
+
+    const standardBlend: GPUColorTargetState = {
+      format: this.presentationFormat,
+      blend: {
+        color: {
+          srcFactor: "src-alpha",
+          dstFactor: "one-minus-src-alpha",
+          operation: "add",
+        },
+        alpha: {
+          srcFactor: "one",
+          dstFactor: "one-minus-src-alpha",
+          operation: "add",
+        },
+      },
+    }
 
     const shaderModule = this.device.createShaderModule({
       label: "model shaders",
@@ -301,58 +403,17 @@ export class Engine {
       bindGroupLayouts: [this.mainBindGroupLayout],
     })
 
-    this.modelPipeline = this.device.createRenderPipeline({
+    this.modelPipeline = this.createRenderPipeline({
       label: "model pipeline",
       layout: mainPipelineLayout,
-      vertex: {
-        module: shaderModule,
-        buffers: [
-          {
-            arrayStride: 8 * 4,
-            attributes: [
-              { shaderLocation: 0, offset: 0, format: "float32x3" as GPUVertexFormat },
-              { shaderLocation: 1, offset: 3 * 4, format: "float32x3" as GPUVertexFormat },
-              { shaderLocation: 2, offset: 6 * 4, format: "float32x2" as GPUVertexFormat },
-            ],
-          },
-          {
-            arrayStride: 4 * 2,
-            attributes: [{ shaderLocation: 3, offset: 0, format: "uint16x4" as GPUVertexFormat }],
-          },
-          {
-            arrayStride: 4,
-            attributes: [{ shaderLocation: 4, offset: 0, format: "unorm8x4" as GPUVertexFormat }],
-          },
-        ],
-      },
-      fragment: {
-        module: shaderModule,
-        targets: [
-          {
-            format: this.presentationFormat,
-            blend: {
-              color: {
-                srcFactor: "src-alpha",
-                dstFactor: "one-minus-src-alpha",
-                operation: "add",
-              },
-              alpha: {
-                srcFactor: "one",
-                dstFactor: "one-minus-src-alpha",
-                operation: "add",
-              },
-            },
-          },
-        ],
-      },
-      primitive: { cullMode: "none" },
+      shaderModule,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTarget: standardBlend,
+      cullMode: "none",
       depthStencil: {
         format: "depth24plus-stencil8",
         depthWriteEnabled: true,
         depthCompare: "less-equal",
-      },
-      multisample: {
-        count: this.sampleCount,
       },
     })
 
@@ -443,196 +504,58 @@ export class Engine {
       `,
     })
 
-    this.outlinePipeline = this.device.createRenderPipeline({
+    this.outlinePipeline = this.createRenderPipeline({
       label: "outline pipeline",
       layout: outlinePipelineLayout,
-      vertex: {
-        module: outlineShaderModule,
-        buffers: [
-          {
-            arrayStride: 8 * 4,
-            attributes: [
-              {
-                shaderLocation: 0,
-                offset: 0,
-                format: "float32x3" as GPUVertexFormat,
-              },
-              {
-                shaderLocation: 1,
-                offset: 3 * 4,
-                format: "float32x3" as GPUVertexFormat,
-              },
-            ],
-          },
-          {
-            arrayStride: 4 * 2,
-            attributes: [{ shaderLocation: 3, offset: 0, format: "uint16x4" as GPUVertexFormat }],
-          },
-          {
-            arrayStride: 4,
-            attributes: [{ shaderLocation: 4, offset: 0, format: "unorm8x4" as GPUVertexFormat }],
-          },
-        ],
-      },
-      fragment: {
-        module: outlineShaderModule,
-        targets: [
-          {
-            format: this.presentationFormat,
-            blend: {
-              color: {
-                srcFactor: "src-alpha",
-                dstFactor: "one-minus-src-alpha",
-                operation: "add",
-              },
-              alpha: {
-                srcFactor: "one",
-                dstFactor: "one-minus-src-alpha",
-                operation: "add",
-              },
-            },
-          },
-        ],
-      },
-      primitive: {
-        cullMode: "back",
-      },
+      shaderModule: outlineShaderModule,
+      vertexBuffers: outlineVertexBuffers,
+      fragmentTarget: standardBlend,
+      cullMode: "back",
       depthStencil: {
         format: "depth24plus-stencil8",
         depthWriteEnabled: true,
         depthCompare: "less-equal",
       },
-      multisample: {
-        count: this.sampleCount,
-      },
     })
 
     // Hair outline pipeline
-    this.hairOutlinePipeline = this.device.createRenderPipeline({
+    this.hairOutlinePipeline = this.createRenderPipeline({
       label: "hair outline pipeline",
       layout: outlinePipelineLayout,
-      vertex: {
-        module: outlineShaderModule,
-        buffers: [
-          {
-            arrayStride: 8 * 4,
-            attributes: [
-              {
-                shaderLocation: 0,
-                offset: 0,
-                format: "float32x3" as GPUVertexFormat,
-              },
-              {
-                shaderLocation: 1,
-                offset: 3 * 4,
-                format: "float32x3" as GPUVertexFormat,
-              },
-            ],
-          },
-          {
-            arrayStride: 4 * 2,
-            attributes: [{ shaderLocation: 3, offset: 0, format: "uint16x4" as GPUVertexFormat }],
-          },
-          {
-            arrayStride: 4,
-            attributes: [{ shaderLocation: 4, offset: 0, format: "unorm8x4" as GPUVertexFormat }],
-          },
-        ],
-      },
-      fragment: {
-        module: outlineShaderModule,
-        targets: [
-          {
-            format: this.presentationFormat,
-            blend: {
-              color: {
-                srcFactor: "src-alpha",
-                dstFactor: "one-minus-src-alpha",
-                operation: "add",
-              },
-              alpha: {
-                srcFactor: "one",
-                dstFactor: "one-minus-src-alpha",
-                operation: "add",
-              },
-            },
-          },
-        ],
-      },
-      primitive: {
-        cullMode: "back",
-      },
+      shaderModule: outlineShaderModule,
+      vertexBuffers: outlineVertexBuffers,
+      fragmentTarget: standardBlend,
+      cullMode: "back",
       depthStencil: {
         format: "depth24plus-stencil8",
-        depthWriteEnabled: false, // Don't write depth - let hair geometry control depth
-        depthCompare: "less-equal", // Only draw where hair depth exists (no stencil test needed)
-        depthBias: -0.0001, // Small negative bias to bring outline slightly closer for depth test
+        depthWriteEnabled: false,
+        depthCompare: "less-equal",
+        depthBias: -0.0001,
         depthBiasSlopeScale: 0.0,
         depthBiasClamp: 0.0,
-      },
-      multisample: {
-        count: this.sampleCount,
       },
     })
 
     // Eye overlay pipeline (renders after opaque, writes stencil)
-    this.eyePipeline = this.device.createRenderPipeline({
+    this.eyePipeline = this.createRenderPipeline({
       label: "eye overlay pipeline",
       layout: mainPipelineLayout,
-      vertex: {
-        module: shaderModule,
-        buffers: [
-          {
-            arrayStride: 8 * 4,
-            attributes: [
-              { shaderLocation: 0, offset: 0, format: "float32x3" as GPUVertexFormat },
-              { shaderLocation: 1, offset: 3 * 4, format: "float32x3" as GPUVertexFormat },
-              { shaderLocation: 2, offset: 6 * 4, format: "float32x2" as GPUVertexFormat },
-            ],
-          },
-          {
-            arrayStride: 4 * 2,
-            attributes: [{ shaderLocation: 3, offset: 0, format: "uint16x4" as GPUVertexFormat }],
-          },
-          {
-            arrayStride: 4,
-            attributes: [{ shaderLocation: 4, offset: 0, format: "unorm8x4" as GPUVertexFormat }],
-          },
-        ],
-      },
-      fragment: {
-        module: shaderModule,
-        targets: [
-          {
-            format: this.presentationFormat,
-            blend: {
-              color: {
-                srcFactor: "src-alpha",
-                dstFactor: "one-minus-src-alpha",
-                operation: "add",
-              },
-              alpha: {
-                srcFactor: "one",
-                dstFactor: "one-minus-src-alpha",
-                operation: "add",
-              },
-            },
-          },
-        ],
-      },
-      primitive: { cullMode: "front" },
+      shaderModule,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTarget: standardBlend,
+      cullMode: "front",
       depthStencil: {
         format: "depth24plus-stencil8",
-        depthWriteEnabled: true, // Write depth to occlude back of head
-        depthCompare: "less-equal", // More lenient to reduce precision conflicts
-        depthBias: -0.00005, // Reduced bias to minimize conflicts while still occluding back face
+        depthWriteEnabled: true,
+        depthCompare: "less-equal",
+        depthBias: -0.00005,
         depthBiasSlopeScale: 0.0,
         depthBiasClamp: 0.0,
         stencilFront: {
           compare: "always",
           failOp: "keep",
           depthFailOp: "keep",
-          passOp: "replace", // Write stencil value 1
+          passOp: "replace",
         },
         stencilBack: {
           compare: "always",
@@ -641,7 +564,6 @@ export class Engine {
           passOp: "replace",
         },
       },
-      multisample: { count: this.sampleCount },
     })
 
     // Depth-only shader for hair pre-pass (reduces overdraw by early depth rejection)
@@ -690,104 +612,42 @@ export class Engine {
     })
 
     // Hair depth pre-pass pipeline: depth-only with color writes disabled to eliminate overdraw
-    this.hairDepthPipeline = this.device.createRenderPipeline({
+    this.hairDepthPipeline = this.createRenderPipeline({
       label: "hair depth pre-pass",
       layout: mainPipelineLayout,
-      vertex: {
-        module: depthOnlyShaderModule,
-        buffers: [
-          {
-            arrayStride: 8 * 4,
-            attributes: [
-              { shaderLocation: 0, offset: 0, format: "float32x3" as GPUVertexFormat },
-              { shaderLocation: 1, offset: 3 * 4, format: "float32x3" as GPUVertexFormat },
-            ],
-          },
-          {
-            arrayStride: 4 * 2,
-            attributes: [{ shaderLocation: 3, offset: 0, format: "uint16x4" as GPUVertexFormat }],
-          },
-          {
-            arrayStride: 4,
-            attributes: [{ shaderLocation: 4, offset: 0, format: "unorm8x4" as GPUVertexFormat }],
-          },
-        ],
+      shaderModule: depthOnlyShaderModule,
+      vertexBuffers: depthOnlyVertexBuffers,
+      fragmentTarget: {
+        format: this.presentationFormat,
+        writeMask: 0,
       },
-      fragment: {
-        module: depthOnlyShaderModule,
-        entryPoint: "fs",
-        targets: [
-          {
-            format: this.presentationFormat,
-            writeMask: 0, // Disable all color writes - we only care about depth
-          },
-        ],
-      },
-      primitive: { cullMode: "front" },
+      fragmentEntryPoint: "fs",
+      cullMode: "front",
       depthStencil: {
         format: "depth24plus-stencil8",
         depthWriteEnabled: true,
-        depthCompare: "less-equal", // Match the color pass compare mode for consistency
+        depthCompare: "less-equal",
         depthBias: 0.0,
         depthBiasSlopeScale: 0.0,
         depthBiasClamp: 0.0,
       },
-      multisample: { count: this.sampleCount },
     })
 
     // Hair pipelines for rendering over eyes vs non-eyes (only differ in stencil compare mode)
     const createHairPipeline = (isOverEyes: boolean): GPURenderPipeline => {
-      return this.device.createRenderPipeline({
+      return this.createRenderPipeline({
         label: `hair pipeline (${isOverEyes ? "over eyes" : "over non-eyes"})`,
         layout: mainPipelineLayout,
-        vertex: {
-          module: shaderModule,
-          buffers: [
-            {
-              arrayStride: 8 * 4,
-              attributes: [
-                { shaderLocation: 0, offset: 0, format: "float32x3" as GPUVertexFormat },
-                { shaderLocation: 1, offset: 3 * 4, format: "float32x3" as GPUVertexFormat },
-                { shaderLocation: 2, offset: 6 * 4, format: "float32x2" as GPUVertexFormat },
-              ],
-            },
-            {
-              arrayStride: 4 * 2,
-              attributes: [{ shaderLocation: 3, offset: 0, format: "uint16x4" as GPUVertexFormat }],
-            },
-            {
-              arrayStride: 4,
-              attributes: [{ shaderLocation: 4, offset: 0, format: "unorm8x4" as GPUVertexFormat }],
-            },
-          ],
-        },
-        fragment: {
-          module: shaderModule,
-          targets: [
-            {
-              format: this.presentationFormat,
-              blend: {
-                color: {
-                  srcFactor: "src-alpha",
-                  dstFactor: "one-minus-src-alpha",
-                  operation: "add",
-                },
-                alpha: {
-                  srcFactor: "one",
-                  dstFactor: "one-minus-src-alpha",
-                  operation: "add",
-                },
-              },
-            },
-          ],
-        },
-        primitive: { cullMode: "front" },
+        shaderModule,
+        vertexBuffers: fullVertexBuffers,
+        fragmentTarget: standardBlend,
+        cullMode: "front",
         depthStencil: {
           format: "depth24plus-stencil8",
-          depthWriteEnabled: false, // Don't write depth (already written in pre-pass)
-          depthCompare: "less-equal", // More lenient than "equal" to avoid precision issues with MSAA
+          depthWriteEnabled: false,
+          depthCompare: "less-equal",
           stencilFront: {
-            compare: isOverEyes ? "equal" : "not-equal", // Over eyes: stencil == 1, over non-eyes: stencil != 1
+            compare: isOverEyes ? "equal" : "not-equal",
             failOp: "keep",
             depthFailOp: "keep",
             passOp: "keep",
@@ -799,52 +659,11 @@ export class Engine {
             passOp: "keep",
           },
         },
-        multisample: { count: this.sampleCount },
       })
     }
 
     this.hairPipelineOverEyes = createHairPipeline(true)
     this.hairPipelineOverNonEyes = createHairPipeline(false)
-  }
-
-  // Create compute shader for skin matrix computation
-  private createSkinMatrixComputePipeline() {
-    const computeShader = this.device.createShaderModule({
-      label: "skin matrix compute",
-      code: /* wgsl */ `
-        struct BoneCountUniform {
-          count: u32,
-          _padding1: u32,
-          _padding2: u32,
-          _padding3: u32,
-          _padding4: vec4<u32>,
-        };
-        
-        @group(0) @binding(0) var<uniform> boneCount: BoneCountUniform;
-        @group(0) @binding(1) var<storage, read> worldMatrices: array<mat4x4f>;
-        @group(0) @binding(2) var<storage, read> inverseBindMatrices: array<mat4x4f>;
-        @group(0) @binding(3) var<storage, read_write> skinMatrices: array<mat4x4f>;
-        
-        @compute @workgroup_size(64) // Must match COMPUTE_WORKGROUP_SIZE
-        fn main(@builtin(global_invocation_id) globalId: vec3<u32>) {
-          let boneIndex = globalId.x;
-          if (boneIndex >= boneCount.count) {
-            return;
-          }
-          let worldMat = worldMatrices[boneIndex];
-          let invBindMat = inverseBindMatrices[boneIndex];
-          skinMatrices[boneIndex] = worldMat * invBindMat;
-        }
-      `,
-    })
-
-    this.skinMatrixComputePipeline = this.device.createComputePipeline({
-      label: "skin matrix compute pipeline",
-      layout: "auto",
-      compute: {
-        module: computeShader,
-      },
-    })
   }
 
   // Create bloom post-processing pipelines
@@ -1273,43 +1092,7 @@ export class Engine {
     // Show first frame (time 0) immediately
     if (this.currentModel) {
       const initialPose = this.player.getPoseAtTime(0)
-      this.applyPose(initialPose)
-
-      // Reset bones without time 0 keyframes
-      const skeleton = this.currentModel.getSkeleton()
-      const bonesWithPose = new Set(initialPose.boneRotations.keys())
-      const bonesToReset: string[] = []
-      for (const bone of skeleton.bones) {
-        if (!bonesWithPose.has(bone.name)) {
-          bonesToReset.push(bone.name)
-        }
-      }
-
-      if (bonesToReset.length > 0) {
-        const identityQuat = new Quat(0, 0, 0, 1)
-        const identityQuats = new Array(bonesToReset.length).fill(identityQuat)
-        this.rotateBones(bonesToReset, identityQuats, 0)
-      }
-
-      // Update model pose and physics
-      this.currentModel.evaluatePose()
-
-      if (this.physics) {
-        const worldMats = this.currentModel.getBoneWorldMatrices()
-        this.physics.reset(worldMats, this.currentModel.getBoneInverseBindMatrices())
-
-        // Upload matrices immediately
-        this.device.queue.writeBuffer(
-          this.worldMatrixBuffer!,
-          0,
-          worldMats.buffer,
-          worldMats.byteOffset,
-          worldMats.byteLength
-        )
-        const encoder = this.device.createCommandEncoder()
-        this.computeSkinMatrices(encoder)
-        this.device.queue.submit([encoder.finish()])
-      }
+      this.resetBonesAndPhysics(initialPose, true)
     }
   }
 
@@ -1321,45 +1104,8 @@ export class Engine {
 
     // Only reset pose and physics if starting from beginning (not resuming)
     if (!wasPlaying && !wasPaused) {
-      // Get initial pose at time 0
       const initialPose = this.player.getPoseAtTime(0)
-      this.applyPose(initialPose)
-
-      // Reset bones without time 0 keyframes
-      const skeleton = this.currentModel.getSkeleton()
-      const bonesWithPose = new Set(initialPose.boneRotations.keys())
-      const bonesToReset: string[] = []
-      for (const bone of skeleton.bones) {
-        if (!bonesWithPose.has(bone.name)) {
-          bonesToReset.push(bone.name)
-        }
-      }
-
-      if (bonesToReset.length > 0) {
-        const identityQuat = new Quat(0, 0, 0, 1)
-        const identityQuats = new Array(bonesToReset.length).fill(identityQuat)
-        this.rotateBones(bonesToReset, identityQuats, 0)
-      }
-
-      // Reset physics immediately and upload matrices to prevent A-pose flash
-      if (this.physics) {
-        this.currentModel.evaluatePose()
-
-        const worldMats = this.currentModel.getBoneWorldMatrices()
-        this.physics.reset(worldMats, this.currentModel.getBoneInverseBindMatrices())
-
-        // Upload matrices immediately so next frame shows correct pose
-        this.device.queue.writeBuffer(
-          this.worldMatrixBuffer!,
-          0,
-          worldMats.buffer,
-          worldMats.byteOffset,
-          worldMats.byteLength
-        )
-        const encoder = this.device.createCommandEncoder()
-        this.computeSkinMatrices(encoder)
-        this.device.queue.submit([encoder.finish()])
-      }
+      this.resetBonesAndPhysics(initialPose, true)
     }
 
     // Start playback (or resume if paused)
@@ -1379,29 +1125,9 @@ export class Engine {
 
     this.player.seek(time)
 
-    // Immediately apply pose at seeked time
+    // Immediately apply pose at seeked time (don't reset bones without keyframes)
     const pose = this.player.getPoseAtTime(time)
-    this.applyPose(pose)
-
-    // Update model pose and physics
-    this.currentModel.evaluatePose()
-
-    if (this.physics) {
-      const worldMats = this.currentModel.getBoneWorldMatrices()
-      this.physics.reset(worldMats, this.currentModel.getBoneInverseBindMatrices())
-
-      // Upload matrices immediately
-      this.device.queue.writeBuffer(
-        this.worldMatrixBuffer!,
-        0,
-        worldMats.buffer,
-        worldMats.byteOffset,
-        worldMats.byteLength
-      )
-      const encoder = this.device.createCommandEncoder()
-      this.computeSkinMatrices(encoder)
-      this.device.queue.submit([encoder.finish()])
-    }
+    this.resetBonesAndPhysics(pose, false)
   }
 
   public getAnimationProgress() {
@@ -1431,6 +1157,46 @@ export class Engine {
     // Apply morph weights
     for (const [morphName, weight] of pose.morphWeights.entries()) {
       this.setMorphWeight(morphName, weight, 0)
+    }
+  }
+
+  /**
+   * Reset bones and physics to match a given pose
+   * @param pose The pose to apply
+   * @param resetBonesWithoutKeyframes If true, reset bones that don't have keyframes in the pose to identity
+   */
+  private resetBonesAndPhysics(pose: AnimationPose, resetBonesWithoutKeyframes: boolean = false): void {
+    if (!this.currentModel) return
+
+    this.applyPose(pose)
+
+    // Reset bones without keyframes if requested (for initial animation setup)
+    if (resetBonesWithoutKeyframes) {
+      const skeleton = this.currentModel.getSkeleton()
+      const bonesWithPose = new Set(pose.boneRotations.keys())
+      const bonesToReset: string[] = []
+      for (const bone of skeleton.bones) {
+        if (!bonesWithPose.has(bone.name)) {
+          bonesToReset.push(bone.name)
+        }
+      }
+
+      if (bonesToReset.length > 0) {
+        const identityQuat = new Quat(0, 0, 0, 1)
+        const identityQuats = new Array(bonesToReset.length).fill(identityQuat)
+        this.rotateBones(bonesToReset, identityQuats, 0)
+      }
+    }
+
+    // Update model pose and physics
+    this.currentModel.evaluatePose()
+
+    if (this.physics) {
+      const worldMats = this.currentModel.getBoneWorldMatrices()
+      this.physics.reset(worldMats, this.currentModel.getBoneInverseBindMatrices())
+
+      // Compute and upload skin matrices immediately
+      this.computeSkinMatrices()
     }
   }
 
@@ -1555,13 +1321,7 @@ export class Engine {
     this.skinMatrixBuffer = this.device.createBuffer({
       label: "skin matrices",
       size: Math.max(256, matrixSize),
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX,
-    })
-
-    this.worldMatrixBuffer = this.device.createBuffer({
-      label: "world matrices",
-      size: Math.max(256, matrixSize),
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     })
 
     this.inverseBindMatrixBuffer = this.device.createBuffer({
@@ -1578,28 +1338,6 @@ export class Engine {
       invBindMatrices.byteOffset,
       invBindMatrices.byteLength
     )
-
-    this.boneCountBuffer = this.device.createBuffer({
-      label: "bone count uniform",
-      size: 32, // Minimum uniform buffer size is 32 bytes
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    })
-    const boneCountData = new Uint32Array(8) // 32 bytes total
-    boneCountData[0] = boneCount
-    this.device.queue.writeBuffer(this.boneCountBuffer, 0, boneCountData)
-
-    this.createSkinMatrixComputePipeline()
-
-    // Create compute bind group once (reused every frame)
-    this.skinMatrixComputeBindGroup = this.device.createBindGroup({
-      layout: this.skinMatrixComputePipeline!.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: this.boneCountBuffer } },
-        { binding: 1, resource: { buffer: this.worldMatrixBuffer } },
-        { binding: 2, resource: { buffer: this.inverseBindMatrixBuffer } },
-        { binding: 3, resource: { buffer: this.skinMatrixBuffer } },
-      ],
-    })
 
     const indices = model.getIndices()
     if (indices) {
@@ -1634,15 +1372,7 @@ export class Engine {
       return texture
     }
 
-    this.opaqueDraws = []
-    this.eyeDraws = []
-    this.hairDrawsOverEyes = []
-    this.hairDrawsOverNonEyes = []
-    this.transparentDraws = []
-    this.opaqueOutlineDraws = []
-    this.eyeOutlineDraws = []
-    this.hairOutlineDraws = []
-    this.transparentOutlineDraws = []
+    this.drawCalls = []
     let currentIndexOffset = 0
 
     for (const mat of materials) {
@@ -1671,56 +1401,52 @@ export class Engine {
         ],
       })
 
-      const addDrawCall = (draws: DrawCall[]) => {
-        if (indexCount > 0) {
-          draws.push({ count: indexCount, firstIndex: currentIndexOffset, bindGroup })
-        }
-      }
+      if (indexCount > 0) {
+        if (mat.isEye) {
+          this.drawCalls.push({ type: "eye", count: indexCount, firstIndex: currentIndexOffset, bindGroup })
+        } else if (mat.isHair) {
+          // Hair materials: create separate bind groups for over-eyes vs over-non-eyes
+          const createHairBindGroup = (isOverEyes: boolean) => {
+            const buffer = this.createMaterialUniformBuffer(
+              `${mat.name} (${isOverEyes ? "over eyes" : "over non-eyes"})`,
+              materialAlpha,
+              isOverEyes ? 1.0 : 0.0
+            )
 
-      if (mat.isEye) {
-        addDrawCall(this.eyeDraws)
-      } else if (mat.isHair) {
-        // Hair materials: create separate bind groups for over-eyes vs over-non-eyes
-        const createHairBindGroup = (isOverEyes: boolean) => {
-          const buffer = this.createMaterialUniformBuffer(
-            `${mat.name} (${isOverEyes ? "over eyes" : "over non-eyes"})`,
-            materialAlpha,
-            isOverEyes ? 1.0 : 0.0
-          )
+            return this.device.createBindGroup({
+              label: `material bind group (${isOverEyes ? "over eyes" : "over non-eyes"}): ${mat.name}`,
+              layout: this.mainBindGroupLayout,
+              entries: [
+                { binding: 0, resource: { buffer: this.cameraUniformBuffer } },
+                { binding: 1, resource: { buffer: this.lightUniformBuffer } },
+                { binding: 2, resource: diffuseTexture.createView() },
+                { binding: 3, resource: this.materialSampler },
+                { binding: 4, resource: { buffer: this.skinMatrixBuffer! } },
+                { binding: 5, resource: { buffer: buffer } },
+              ],
+            })
+          }
 
-          return this.device.createBindGroup({
-            label: `material bind group (${isOverEyes ? "over eyes" : "over non-eyes"}): ${mat.name}`,
-            layout: this.mainBindGroupLayout,
-            entries: [
-              { binding: 0, resource: { buffer: this.cameraUniformBuffer } },
-              { binding: 1, resource: { buffer: this.lightUniformBuffer } },
-              { binding: 2, resource: diffuseTexture.createView() },
-              { binding: 3, resource: this.materialSampler },
-              { binding: 4, resource: { buffer: this.skinMatrixBuffer! } },
-              { binding: 5, resource: { buffer: buffer } },
-            ],
-          })
-        }
+          const bindGroupOverEyes = createHairBindGroup(true)
+          const bindGroupOverNonEyes = createHairBindGroup(false)
 
-        const bindGroupOverEyes = createHairBindGroup(true)
-        const bindGroupOverNonEyes = createHairBindGroup(false)
-
-        if (indexCount > 0) {
-          this.hairDrawsOverEyes.push({
+          this.drawCalls.push({
+            type: "hair-over-eyes",
             count: indexCount,
             firstIndex: currentIndexOffset,
             bindGroup: bindGroupOverEyes,
           })
-          this.hairDrawsOverNonEyes.push({
+          this.drawCalls.push({
+            type: "hair-over-non-eyes",
             count: indexCount,
             firstIndex: currentIndexOffset,
             bindGroup: bindGroupOverNonEyes,
           })
+        } else if (isTransparent) {
+          this.drawCalls.push({ type: "transparent", count: indexCount, firstIndex: currentIndexOffset, bindGroup })
+        } else {
+          this.drawCalls.push({ type: "opaque", count: indexCount, firstIndex: currentIndexOffset, bindGroup })
         }
-      } else if (isTransparent) {
-        addDrawCall(this.transparentDraws)
-      } else {
-        addDrawCall(this.opaqueDraws)
       }
 
       // Edge flag is at bit 4 (0x10) in PMX format
@@ -1751,14 +1477,19 @@ export class Engine {
         })
 
         if (indexCount > 0) {
-          const outlineDraws = mat.isEye
-            ? this.eyeOutlineDraws
+          const outlineType: DrawCallType = mat.isEye
+            ? "eye-outline"
             : mat.isHair
-            ? this.hairOutlineDraws
+            ? "hair-outline"
             : isTransparent
-            ? this.transparentOutlineDraws
-            : this.opaqueOutlineDraws
-          outlineDraws.push({ count: indexCount, firstIndex: currentIndexOffset, bindGroup: outlineBindGroup })
+            ? "transparent-outline"
+            : "opaque-outline"
+          this.drawCalls.push({
+            type: outlineType,
+            count: indexCount,
+            firstIndex: currentIndexOffset,
+            bindGroup: outlineBindGroup,
+          })
         }
       }
 
@@ -1820,51 +1551,54 @@ export class Engine {
   private renderEyes(pass: GPURenderPassEncoder) {
     pass.setPipeline(this.eyePipeline)
     pass.setStencilReference(this.STENCIL_EYE_VALUE)
-    for (const draw of this.eyeDraws) {
-      pass.setBindGroup(0, draw.bindGroup)
-      pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
+    for (const draw of this.drawCalls) {
+      if (draw.type === "eye") {
+        pass.setBindGroup(0, draw.bindGroup)
+        pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
+      }
     }
   }
 
   // Helper: Render hair with post-alpha-eye effect (depth pre-pass + stencil-based shading + outlines)
   private renderHair(pass: GPURenderPassEncoder) {
     // Hair depth pre-pass (reduces overdraw via early depth rejection)
-    const hasHair = this.hairDrawsOverEyes.length > 0 || this.hairDrawsOverNonEyes.length > 0
+    const hasHair = this.drawCalls.some((d) => d.type === "hair-over-eyes" || d.type === "hair-over-non-eyes")
     if (hasHair) {
       pass.setPipeline(this.hairDepthPipeline)
-      for (const draw of this.hairDrawsOverEyes) {
-        pass.setBindGroup(0, draw.bindGroup)
-        pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
-      }
-      for (const draw of this.hairDrawsOverNonEyes) {
-        pass.setBindGroup(0, draw.bindGroup)
-        pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
+      for (const draw of this.drawCalls) {
+        if (draw.type === "hair-over-eyes" || draw.type === "hair-over-non-eyes") {
+          pass.setBindGroup(0, draw.bindGroup)
+          pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
+        }
       }
     }
 
     // Hair shading (split by stencil for transparency over eyes)
-    if (this.hairDrawsOverEyes.length > 0) {
+    const hairOverEyes = this.drawCalls.filter((d) => d.type === "hair-over-eyes")
+    if (hairOverEyes.length > 0) {
       pass.setPipeline(this.hairPipelineOverEyes)
       pass.setStencilReference(this.STENCIL_EYE_VALUE)
-      for (const draw of this.hairDrawsOverEyes) {
+      for (const draw of hairOverEyes) {
         pass.setBindGroup(0, draw.bindGroup)
         pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
       }
     }
 
-    if (this.hairDrawsOverNonEyes.length > 0) {
+    const hairOverNonEyes = this.drawCalls.filter((d) => d.type === "hair-over-non-eyes")
+    if (hairOverNonEyes.length > 0) {
       pass.setPipeline(this.hairPipelineOverNonEyes)
       pass.setStencilReference(this.STENCIL_EYE_VALUE)
-      for (const draw of this.hairDrawsOverNonEyes) {
+      for (const draw of hairOverNonEyes) {
         pass.setBindGroup(0, draw.bindGroup)
         pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
       }
     }
 
     // Hair outlines
-    if (this.hairOutlineDraws.length > 0) {
+    const hairOutlines = this.drawCalls.filter((d) => d.type === "hair-outline")
+    if (hairOutlines.length > 0) {
       pass.setPipeline(this.hairOutlinePipeline)
-      for (const draw of this.hairOutlineDraws) {
+      for (const draw of hairOutlines) {
         pass.setBindGroup(0, draw.bindGroup)
         pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
       }
@@ -1904,10 +1638,11 @@ export class Engine {
         this.vertexBufferNeedsUpdate = false
       }
 
-      // Use single encoder for both compute and render (reduces sync points)
-      const encoder = this.device.createCommandEncoder()
+      // Update model pose (computes skin matrices on CPU)
+      this.updateModelPose(deltaTime)
 
-      this.updateModelPose(deltaTime, encoder)
+      // Use single encoder for render
+      const encoder = this.device.createCommandEncoder()
 
       const pass = encoder.beginRenderPass(this.renderPassDescriptor)
 
@@ -1919,9 +1654,11 @@ export class Engine {
 
         // Pass 1: Opaque
         pass.setPipeline(this.modelPipeline)
-        for (const draw of this.opaqueDraws) {
-          pass.setBindGroup(0, draw.bindGroup)
-          pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
+        for (const draw of this.drawCalls) {
+          if (draw.type === "opaque") {
+            pass.setBindGroup(0, draw.bindGroup)
+            pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
+          }
         }
 
         // Pass 2: Eyes (writes stencil value for hair to test against)
@@ -1934,9 +1671,11 @@ export class Engine {
 
         // Pass 4: Transparent
         pass.setPipeline(this.modelPipeline)
-        for (const draw of this.transparentDraws) {
-          pass.setBindGroup(0, draw.bindGroup)
-          pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
+        for (const draw of this.drawCalls) {
+          if (draw.type === "transparent") {
+            pass.setBindGroup(0, draw.bindGroup)
+            pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
+          }
         }
 
         this.drawOutlines(pass, true)
@@ -2072,7 +1811,7 @@ export class Engine {
     }
   }
 
-  private updateModelPose(deltaTime: number, encoder: GPUCommandEncoder) {
+  private updateModelPose(deltaTime: number) {
     // Note: evaluatePose is called earlier in render() to update vertex buffer before encoder creation
     // Here we just get the matrices and update physics/compute
     const worldMats = this.currentModel!.getBoneWorldMatrices()
@@ -2081,33 +1820,28 @@ export class Engine {
       this.physics.step(deltaTime, worldMats, this.currentModel!.getBoneInverseBindMatrices())
     }
 
-    this.device.queue.writeBuffer(
-      this.worldMatrixBuffer!,
-      0,
-      worldMats.buffer,
-      worldMats.byteOffset,
-      worldMats.byteLength
-    )
-    this.computeSkinMatrices(encoder)
+    this.computeSkinMatrices()
   }
 
-  private computeSkinMatrices(encoder: GPUCommandEncoder) {
-    const boneCount = this.currentModel!.getSkeleton().bones.length
-    const workgroupCount = Math.ceil(boneCount / this.COMPUTE_WORKGROUP_SIZE)
-
-    const pass = encoder.beginComputePass()
-    pass.setPipeline(this.skinMatrixComputePipeline!)
-    pass.setBindGroup(0, this.skinMatrixComputeBindGroup!)
-    pass.dispatchWorkgroups(workgroupCount)
-    pass.end()
+  private computeSkinMatrices() {
+    const skinMatrices = this.currentModel!.getSkinMatrices()
+    this.device.queue.writeBuffer(
+      this.skinMatrixBuffer!,
+      0,
+      skinMatrices.buffer,
+      skinMatrices.byteOffset,
+      skinMatrices.byteLength
+    )
   }
 
   private drawOutlines(pass: GPURenderPassEncoder, transparent: boolean) {
     pass.setPipeline(this.outlinePipeline)
-    const draws = transparent ? this.transparentOutlineDraws : this.opaqueOutlineDraws
-    for (const draw of draws) {
-      pass.setBindGroup(0, draw.bindGroup)
-      pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
+    const outlineType: DrawCallType = transparent ? "transparent-outline" : "opaque-outline"
+    for (const draw of this.drawCalls) {
+      if (draw.type === outlineType) {
+        pass.setBindGroup(0, draw.bindGroup)
+        pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
+      }
     }
   }
 

@@ -13,7 +13,6 @@ A lightweight engine built with WebGPU and TypeScript for real-time 3D anime cha
 - Bloom
 - Outlines
 - MSAA 4x anti-aliasing
-- GPU-accelerated skinning
 - Bone and morph api
 - VMD animation
 - Ik solver

@@ -618,6 +618,23 @@ export class Model {
     return this.skeleton.inverseBindMatrices
   }
 
+  getSkinMatrices(): Float32Array {
+    const boneCount = this.skeleton.bones.length
+    const worldMats = this.runtimeSkeleton.worldMatrices
+    const invBindMats = this.skeleton.inverseBindMatrices
+    const skinMatrices = new Float32Array(boneCount * 16)
+
+    // Compute skin matrices: skinMatrix = worldMatrix × inverseBindMatrix
+    for (let i = 0; i < boneCount; i++) {
+      const worldMat = new Mat4(worldMats.subarray(i * 16, (i + 1) * 16))
+      const invBindMat = new Mat4(invBindMats.subarray(i * 16, (i + 1) * 16))
+      const skinMat = worldMat.multiply(invBindMat)
+      skinMatrices.set(skinMat.values, i * 16)
+    }
+
+    return skinMatrices
+  }
+
   setMorphWeight(name: string, weight: number, durationMs?: number): void {
     const idx = this.runtimeMorph.nameIndex[name] ?? -1
     if (idx < 0 || idx >= this.runtimeMorph.weights.length) return
