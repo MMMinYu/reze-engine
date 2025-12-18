@@ -26,10 +26,6 @@ export class Vec3 {
     return Math.sqrt(this.x * this.x + this.y * this.y + this.z * this.z)
   }
 
-  lengthSquared(): number {
-    return this.x * this.x + this.y * this.y + this.z * this.z
-  }
-
   normalize(): Vec3 {
     const len = this.length()
     if (len === 0) return new Vec3(0, 0, 0)
@@ -50,10 +46,6 @@ export class Vec3 {
 
   scale(scalar: number): Vec3 {
     return new Vec3(this.x * scalar, this.y * scalar, this.z * scalar)
-  }
-
-  clone(): Vec3 {
-    return new Vec3(this.x, this.y, this.z)
   }
 }
 
@@ -101,47 +93,6 @@ export class Quat {
     const len = this.length()
     if (len === 0) return new Quat(0, 0, 0, 1)
     return new Quat(this.x / len, this.y / len, this.z / len, this.w / len)
-  }
-
-  // Rotate a vector by this quaternion: result = q * v * q^-1
-  rotateVec(v: Vec3): Vec3 {
-    // Treat v as pure quaternion (x, y, z, 0)
-    const qx = this.x,
-      qy = this.y,
-      qz = this.z,
-      qw = this.w
-    const vx = v.x,
-      vy = v.y,
-      vz = v.z
-
-    // t = 2 * cross(q.xyz, v)
-    const tx = 2 * (qy * vz - qz * vy)
-    const ty = 2 * (qz * vx - qx * vz)
-    const tz = 2 * (qx * vy - qy * vx)
-
-    // result = v + q.w * t + cross(q.xyz, t)
-    return new Vec3(
-      vx + qw * tx + (qy * tz - qz * ty),
-      vy + qw * ty + (qz * tx - qx * tz),
-      vz + qw * tz + (qx * ty - qy * tx)
-    )
-  }
-
-  // Static method: create quaternion that rotates from one direction to another
-  static fromTo(from: Vec3, to: Vec3): Quat {
-    const dot = from.dot(to)
-    if (dot > 0.999999) return new Quat(0, 0, 0, 1) // Already aligned
-    if (dot < -0.999999) {
-      // 180 degrees
-      let axis = from.cross(new Vec3(1, 0, 0))
-      if (axis.length() < 0.001) axis = from.cross(new Vec3(0, 1, 0))
-      return new Quat(axis.x, axis.y, axis.z, 0).normalize()
-    }
-
-    const axis = from.cross(to)
-    const w = Math.sqrt((1 + dot) * 2)
-    const invW = 1 / w
-    return new Quat(axis.x * invW, axis.y * invW, axis.z * invW, w * 0.5).normalize()
   }
 
   // Static method: create quaternion from rotation axis and angle
@@ -208,31 +159,6 @@ export class Quat {
     const z = cy * cx * sz - sy * sx * cz
 
     return new Quat(x, y, z, w).normalize()
-  }
-
-  // Convert quaternion to Euler angles (ZXY order, inverse of fromEuler)
-  toEuler(): Vec3 {
-    const qx = this.x
-    const qy = this.y
-    const qz = this.z
-    const qw = this.w
-
-    // ZXY order (left-handed)
-    // Roll (X): rotation around X axis
-    const sinr_cosp = 2 * (qw * qx + qy * qz)
-    const cosr_cosp = 1 - 2 * (qx * qx + qy * qy)
-    const rotX = Math.atan2(sinr_cosp, cosr_cosp)
-
-    // Pitch (Y): rotation around Y axis
-    const sinp = 2 * (qw * qy - qz * qx)
-    const rotY = Math.abs(sinp) >= 1 ? (sinp >= 0 ? Math.PI / 2 : -Math.PI / 2) : Math.asin(sinp)
-
-    // Yaw (Z): rotation around Z axis
-    const siny_cosp = 2 * (qw * qz + qx * qy)
-    const cosy_cosp = 1 - 2 * (qy * qy + qz * qz)
-    const rotZ = Math.atan2(siny_cosp, cosy_cosp)
-
-    return new Vec3(rotX, rotY, rotZ)
   }
 }
 

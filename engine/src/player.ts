@@ -18,17 +18,15 @@ export class Player {
   private frames: VMDKeyFrame[] = []
   private boneTracks: Map<string, Array<{ boneFrame: BoneFrame; time: number }>> = new Map()
   private morphTracks: Map<string, Array<{ morphFrame: MorphFrame; time: number }>> = new Map()
-  private duration: number = 0
+  private _duration: number = 0
 
   // Playback state
   private isPlaying: boolean = false
   private isPaused: boolean = false
-  private currentTime: number = 0
+  private _currentTime: number = 0
 
   // Timing
   private startTime: number = 0 // Real-time when playback started
-  private pausedTime: number = 0 // Accumulated paused duration
-  private pauseStartTime: number = 0
 
   /**
    * Load VMD animation file
@@ -43,75 +41,57 @@ export class Player {
    * Process frames into tracks
    */
   private processFrames(): void {
-    // Process bone frames
-    const allBoneKeyFrames: Array<{ boneFrame: BoneFrame; time: number }> = []
+    // Helper to group frames by name and sort by time
+    const groupFrames = <T>(
+      items: Array<{ item: T; name: string; time: number }>
+    ): Map<string, Array<{ item: T; time: number }>> => {
+      const tracks = new Map<string, Array<{ item: T; time: number }>>()
+      for (const { item, name, time } of items) {
+        if (!tracks.has(name)) tracks.set(name, [])
+        tracks.get(name)!.push({ item, time })
+      }
+      for (const keyFrames of tracks.values()) {
+        keyFrames.sort((a, b) => a.time - b.time)
+      }
+      return tracks
+    }
+
+    // Collect all bone and morph frames
+    const boneItems: Array<{ item: BoneFrame; name: string; time: number }> = []
+    const morphItems: Array<{ item: MorphFrame; name: string; time: number }> = []
+
     for (const keyFrame of this.frames) {
       for (const boneFrame of keyFrame.boneFrames) {
-        allBoneKeyFrames.push({
-          boneFrame,
-          time: keyFrame.time,
-        })
+        boneItems.push({ item: boneFrame, name: boneFrame.boneName, time: keyFrame.time })
       }
-    }
-
-    const boneKeyFramesByBone = new Map<string, Array<{ boneFrame: BoneFrame; time: number }>>()
-    for (const { boneFrame, time } of allBoneKeyFrames) {
-      if (!boneKeyFramesByBone.has(boneFrame.boneName)) {
-        boneKeyFramesByBone.set(boneFrame.boneName, [])
-      }
-      boneKeyFramesByBone.get(boneFrame.boneName)!.push({ boneFrame, time })
-    }
-
-    for (const keyFrames of boneKeyFramesByBone.values()) {
-      keyFrames.sort((a, b) => a.time - b.time)
-    }
-
-    // Process morph frames
-    const allMorphKeyFrames: Array<{ morphFrame: MorphFrame; time: number }> = []
-    for (const keyFrame of this.frames) {
       for (const morphFrame of keyFrame.morphFrames) {
-        allMorphKeyFrames.push({
-          morphFrame,
-          time: keyFrame.time,
-        })
+        morphItems.push({ item: morphFrame, name: morphFrame.morphName, time: keyFrame.time })
       }
     }
 
-    const morphKeyFramesByMorph = new Map<string, Array<{ morphFrame: MorphFrame; time: number }>>()
-    for (const { morphFrame, time } of allMorphKeyFrames) {
-      if (!morphKeyFramesByMorph.has(morphFrame.morphName)) {
-        morphKeyFramesByMorph.set(morphFrame.morphName, [])
-      }
-      morphKeyFramesByMorph.get(morphFrame.morphName)!.push({ morphFrame, time })
+    // Transform to expected format
+    this.boneTracks = new Map()
+    for (const [name, frames] of groupFrames(boneItems).entries()) {
+      this.boneTracks.set(
+        name,
+        frames.map((f) => ({ boneFrame: f.item, time: f.time }))
+      )
     }
 
-    for (const keyFrames of morphKeyFramesByMorph.values()) {
-      keyFrames.sort((a, b) => a.time - b.time)
+    this.morphTracks = new Map()
+    for (const [name, frames] of groupFrames(morphItems).entries()) {
+      this.morphTracks.set(
+        name,
+        frames.map((f) => ({ morphFrame: f.item, time: f.time }))
+      )
     }
 
-    // Store tracks
-    this.boneTracks = boneKeyFramesByBone
-    this.morphTracks = morphKeyFramesByMorph
-
-    // Calculate animation duration from max frame time
-    let maxFrameTime = 0
-    for (const keyFrames of this.boneTracks.values()) {
-      if (keyFrames.length > 0) {
-        const lastTime = keyFrames[keyFrames.length - 1].time
-        if (lastTime > maxFrameTime) {
-          maxFrameTime = lastTime
-        }
-      }
-    }
-    for (const keyFrames of this.morphTracks.values()) {
-      if (keyFrames.length > 0) {
-        const lastTime = keyFrames[keyFrames.length - 1].time
-        if (lastTime > maxFrameTime) {
-          maxFrameTime = lastTime
-        }
-      }
-    }
-    this.duration = maxFrameTime > 0 ? maxFrameTime : 0
+    // Calculate duration from all tracks
+    const allTracks = [...this.boneTracks.values(), ...this.morphTracks.values()]
+    this._duration = allTracks.reduce((max, keyFrames) => {
+      const lastTime = keyFrames[keyFrames.length - 1]?.time ?? 0
+      return Math.max(max, lastTime)
+    }, 0)
   }
 
   /**
@@ -121,16 +101,8 @@ export class Player {
   play(): void {
     if (this.frames.length === 0) return
 
-    if (this.isPaused) {
-      // Resume from paused position - don't adjust time, just continue from where we paused
-      this.isPaused = false
-      // Adjust start time so current time calculation continues smoothly
-      this.startTime = performance.now() - this.currentTime * 1000
-    } else {
-      // Start from beginning or current seek position
-      this.startTime = performance.now() - this.currentTime * 1000
-      this.pausedTime = 0
-    }
+    this.isPaused = false
+    this.startTime = performance.now() - this._currentTime * 1000
 
     this.isPlaying = true
   }
@@ -140,9 +112,7 @@ export class Player {
    */
   pause(): void {
     if (!this.isPlaying || this.isPaused) return
-
     this.isPaused = true
-    this.pauseStartTime = performance.now()
   }
 
   /**
@@ -151,22 +121,19 @@ export class Player {
   stop(): void {
     this.isPlaying = false
     this.isPaused = false
-    this.currentTime = 0
+    this._currentTime = 0
     this.startTime = 0
-    this.pausedTime = 0
   }
 
   /**
    * Seek to specific time
    */
   seek(time: number): void {
-    const clampedTime = Math.max(0, Math.min(time, this.duration))
-    this.currentTime = clampedTime
+    const clampedTime = Math.max(0, Math.min(time, this._duration))
+    this._currentTime = clampedTime
 
-    // Adjust start time if playing
     if (this.isPlaying && !this.isPaused) {
       this.startTime = performance.now() - clampedTime * 1000
-      this.pausedTime = 0
     }
   }
 
@@ -181,21 +148,21 @@ export class Player {
 
     // If paused, return current pose at paused time (no time update)
     if (this.isPaused) {
-      return this.getPoseAtTime(this.currentTime)
+      return this.getPoseAtTime(this._currentTime)
     }
 
     // Calculate current animation time
     const elapsedSeconds = (currentRealTime - this.startTime) / 1000
-    this.currentTime = elapsedSeconds
+    this._currentTime = elapsedSeconds
 
     // Check if animation ended
-    if (this.currentTime >= this.duration) {
-      this.currentTime = this.duration
+    if (this._currentTime >= this._duration) {
+      this._currentTime = this._duration
       this.pause() // Auto-pause at end
-      return this.getPoseAtTime(this.currentTime)
+      return this.getPoseAtTime(this._currentTime)
     }
 
-    return this.getPoseAtTime(this.currentTime)
+    return this.getPoseAtTime(this._currentTime)
   }
 
   /**
@@ -208,136 +175,86 @@ export class Player {
       morphWeights: new Map(),
     }
 
-    // Helper to find upper bound index (binary search)
-    const upperBoundFrameIndex = (time: number, keyFrames: Array<{ boneFrame: BoneFrame; time: number }>): number => {
-      let left = 0
-      let right = keyFrames.length
+    // Generic binary search for upper bound
+    const upperBound = <T extends { time: number }>(time: number, keyFrames: T[]): number => {
+      let left = 0,
+        right = keyFrames.length
       while (left < right) {
         const mid = Math.floor((left + right) / 2)
-        if (keyFrames[mid].time <= time) {
-          left = mid + 1
-        } else {
-          right = mid
-        }
+        if (keyFrames[mid].time <= time) left = mid + 1
+        else right = mid
       }
       return left
     }
 
-    // Process each bone track
+    // Process bone tracks
     for (const [boneName, keyFrames] of this.boneTracks.entries()) {
       if (keyFrames.length === 0) continue
 
-      // Clamp frame time to track range
-      const startTime = keyFrames[0].time
-      const endTime = keyFrames[keyFrames.length - 1].time
-      const clampedFrameTime = Math.max(startTime, Math.min(endTime, time))
+      const clampedTime = Math.max(keyFrames[0].time, Math.min(keyFrames[keyFrames.length - 1].time, time))
+      const idx = upperBound(clampedTime, keyFrames) - 1
+      if (idx < 0) continue
 
-      const upperBoundIndex = upperBoundFrameIndex(clampedFrameTime, keyFrames)
-      const upperBoundIndexMinusOne = upperBoundIndex - 1
+      const frameA = keyFrames[idx].boneFrame
+      const frameB = keyFrames[idx + 1]?.boneFrame
 
-      if (upperBoundIndexMinusOne < 0) continue
-
-      const timeB = keyFrames[upperBoundIndex]?.time
-      const boneFrameA = keyFrames[upperBoundIndexMinusOne].boneFrame
-
-      if (timeB === undefined) {
-        // Last keyframe or beyond - use the last keyframe value
-        pose.boneRotations.set(boneName, boneFrameA.rotation)
-        pose.boneTranslations.set(boneName, boneFrameA.translation)
+      if (!frameB) {
+        pose.boneRotations.set(boneName, frameA.rotation)
+        pose.boneTranslations.set(boneName, frameA.translation)
       } else {
-        // Interpolate between two keyframes
-        const timeA = keyFrames[upperBoundIndexMinusOne].time
-        const boneFrameB = keyFrames[upperBoundIndex].boneFrame
-        const gradient = (clampedFrameTime - timeA) / (timeB - timeA)
+        const timeA = keyFrames[idx].time
+        const timeB = keyFrames[idx + 1].time
+        const gradient = (clampedTime - timeA) / (timeB - timeA)
+        const interp = frameB.interpolation
 
-        // Interpolate rotation using Bezier
-        const interp = boneFrameB.interpolation
-        const rotWeight = bezierInterpolate(
-          interp[0] / 127, // x1
-          interp[1] / 127, // x2
-          interp[2] / 127, // y1
-          interp[3] / 127, // y2
-          gradient
-        )
-        const interpolatedRotation = Quat.slerp(boneFrameA.rotation, boneFrameB.rotation, rotWeight)
-
-        // Interpolate translation using Bezier (separate curves for X, Y, Z)
-        const xWeight = bezierInterpolate(
-          interp[0] / 127, // X_x1
-          interp[8] / 127, // X_x2
-          interp[4] / 127, // X_y1
-          interp[12] / 127, // X_y2
-          gradient
-        )
-        const yWeight = bezierInterpolate(
-          interp[16] / 127, // Y_x1
-          interp[24] / 127, // Y_x2
-          interp[20] / 127, // Y_y1
-          interp[28] / 127, // Y_y2
-          gradient
-        )
-        const zWeight = bezierInterpolate(
-          interp[32] / 127, // Z_x1
-          interp[40] / 127, // Z_x2
-          interp[36] / 127, // Z_y1
-          interp[44] / 127, // Z_y2
-          gradient
+        pose.boneRotations.set(
+          boneName,
+          Quat.slerp(
+            frameA.rotation,
+            frameB.rotation,
+            bezierInterpolate(interp[0] / 127, interp[1] / 127, interp[2] / 127, interp[3] / 127, gradient)
+          )
         )
 
-        const interpolatedTranslation = new Vec3(
-          boneFrameA.translation.x + (boneFrameB.translation.x - boneFrameA.translation.x) * xWeight,
-          boneFrameA.translation.y + (boneFrameB.translation.y - boneFrameA.translation.y) * yWeight,
-          boneFrameA.translation.z + (boneFrameB.translation.z - boneFrameA.translation.z) * zWeight
-        )
+        const lerp = (a: number, b: number, w: number) => a + (b - a) * w
+        const getWeight = (offset: number) =>
+          bezierInterpolate(
+            interp[offset] / 127,
+            interp[offset + 8] / 127,
+            interp[offset + 4] / 127,
+            interp[offset + 12] / 127,
+            gradient
+          )
 
-        pose.boneRotations.set(boneName, interpolatedRotation)
-        pose.boneTranslations.set(boneName, interpolatedTranslation)
+        pose.boneTranslations.set(
+          boneName,
+          new Vec3(
+            lerp(frameA.translation.x, frameB.translation.x, getWeight(0)),
+            lerp(frameA.translation.y, frameB.translation.y, getWeight(16)),
+            lerp(frameA.translation.z, frameB.translation.z, getWeight(32))
+          )
+        )
       }
     }
 
-    // Helper to find upper bound index for morph frames
-    const upperBoundMorphIndex = (time: number, keyFrames: Array<{ morphFrame: MorphFrame; time: number }>): number => {
-      let left = 0
-      let right = keyFrames.length
-      while (left < right) {
-        const mid = Math.floor((left + right) / 2)
-        if (keyFrames[mid].time <= time) {
-          left = mid + 1
-        } else {
-          right = mid
-        }
-      }
-      return left
-    }
-
-    // Process each morph track
+    // Process morph tracks
     for (const [morphName, keyFrames] of this.morphTracks.entries()) {
       if (keyFrames.length === 0) continue
 
-      // Clamp frame time to track range
-      const startTime = keyFrames[0].time
-      const endTime = keyFrames[keyFrames.length - 1].time
-      const clampedFrameTime = Math.max(startTime, Math.min(endTime, time))
+      const clampedTime = Math.max(keyFrames[0].time, Math.min(keyFrames[keyFrames.length - 1].time, time))
+      const idx = upperBound(clampedTime, keyFrames) - 1
+      if (idx < 0) continue
 
-      const upperBoundIndex = upperBoundMorphIndex(clampedFrameTime, keyFrames)
-      const upperBoundIndexMinusOne = upperBoundIndex - 1
+      const frameA = keyFrames[idx].morphFrame
+      const frameB = keyFrames[idx + 1]?.morphFrame
 
-      if (upperBoundIndexMinusOne < 0) continue
-
-      const timeB = keyFrames[upperBoundIndex]?.time
-      const morphFrameA = keyFrames[upperBoundIndexMinusOne].morphFrame
-
-      if (timeB === undefined) {
-        // Last keyframe or beyond - use the last keyframe value
-        pose.morphWeights.set(morphName, morphFrameA.weight)
+      if (!frameB) {
+        pose.morphWeights.set(morphName, frameA.weight)
       } else {
-        // Linear interpolation between two keyframes
-        const timeA = keyFrames[upperBoundIndexMinusOne].time
-        const morphFrameB = keyFrames[upperBoundIndex].morphFrame
-        const gradient = (clampedFrameTime - timeA) / (timeB - timeA)
-        const interpolatedWeight = morphFrameA.weight + (morphFrameB.weight - morphFrameA.weight) * gradient
-
-        pose.morphWeights.set(morphName, interpolatedWeight)
+        const timeA = keyFrames[idx].time
+        const timeB = keyFrames[idx + 1].time
+        const gradient = (clampedTime - timeA) / (timeB - timeA)
+        pose.morphWeights.set(morphName, frameA.weight + (frameB.weight - frameA.weight) * gradient)
       }
     }
 
@@ -349,37 +266,25 @@ export class Player {
    */
   getProgress(): AnimationProgress {
     return {
-      current: this.currentTime,
-      duration: this.duration,
-      percentage: this.duration > 0 ? (this.currentTime / this.duration) * 100 : 0,
+      current: this._currentTime,
+      duration: this._duration,
+      percentage: this._duration > 0 ? (this._currentTime / this._duration) * 100 : 0,
     }
   }
 
-  /**
-   * Get current time
-   */
-  getCurrentTime(): number {
-    return this.currentTime
+  get currentTime(): number {
+    return this._currentTime
   }
 
-  /**
-   * Get animation duration
-   */
-  getDuration(): number {
-    return this.duration
+  get duration(): number {
+    return this._duration
   }
 
-  /**
-   * Check if playing
-   */
-  isPlayingState(): boolean {
+  get isPlayingState(): boolean {
     return this.isPlaying && !this.isPaused
   }
 
-  /**
-   * Check if paused
-   */
-  isPausedState(): boolean {
+  get isPausedState(): boolean {
     return this.isPaused
   }
 }

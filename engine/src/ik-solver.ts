@@ -117,11 +117,7 @@ export class IKSolverSystem {
       }
     }
 
-    // Get IK bone and target positions
-    const ikPosition = this.getWorldTranslation(ikBoneIndex, worldMatrices)
-    const targetPosition = this.getWorldTranslation(targetBoneIndex, worldMatrices)
-
-    if (ikPosition.subtract(targetPosition).length() < this.EPSILON) return
+    if (this.getDistance(ikBoneIndex, targetBoneIndex, worldMatrices) < this.EPSILON) return
 
     // Build IK chains
     const chains: IKChain[] = []
@@ -135,11 +131,7 @@ export class IKSolverSystem {
     }
     this.updateWorldMatrix(targetBoneIndex, bones, localRotations, localTranslations, worldMatrices, undefined)
 
-    // Re-read positions after initial update
-    const updatedIkPosition = this.getWorldTranslation(ikBoneIndex, worldMatrices)
-    const updatedTargetPosition = this.getWorldTranslation(targetBoneIndex, worldMatrices)
-
-    if (updatedIkPosition.subtract(updatedTargetPosition).length() < this.EPSILON) return
+    if (this.getDistance(ikBoneIndex, targetBoneIndex, worldMatrices) < this.EPSILON) return
 
     // Solve iteratively
     const iteration = Math.min(solver.iterationCount, 256)
@@ -165,29 +157,17 @@ export class IKSolverSystem {
         }
       }
 
-      // Re-read positions after this iteration
-      const currentIkPosition = this.getWorldTranslation(ikBoneIndex, worldMatrices)
-      const currentTargetPosition = this.getWorldTranslation(targetBoneIndex, worldMatrices)
-      const distance = currentIkPosition.subtract(currentTargetPosition).length()
-      if (distance < this.EPSILON) break
+      if (this.getDistance(ikBoneIndex, targetBoneIndex, worldMatrices) < this.EPSILON) break
     }
 
     // Apply IK rotations to local rotations
     for (const link of solver.links) {
       const chainInfo = ikChainInfo[link.boneIndex]
-      if (chainInfo && chainInfo.ikRotation) {
+      if (chainInfo?.ikRotation) {
         const qi = link.boneIndex * 4
-        const localRot = new Quat(
-          localRotations[qi],
-          localRotations[qi + 1],
-          localRotations[qi + 2],
-          localRotations[qi + 3]
-        )
+        const localRot = this.getQuatFromArray(localRotations, qi)
         const finalRot = chainInfo.ikRotation.multiply(localRot).normalize()
-        localRotations[qi] = finalRot.x
-        localRotations[qi + 1] = finalRot.y
-        localRotations[qi + 2] = finalRot.z
-        localRotations[qi + 3] = finalRot.w
+        this.setQuatToArray(localRotations, qi, finalRot)
       }
     }
   }
@@ -227,25 +207,20 @@ export class IKSolverSystem {
           finalRotationAxis = this.transformNormal(chainRotationAxis, invParentRot).normalize()
           break
         }
-        case InternalSolveAxis.X: {
-          const m = parentWorldRotMatrix.values
-          const axisX = new Vec3(m[0], m[1], m[2])
-          const dot = chainRotationAxis.dot(axisX)
-          finalRotationAxis = new Vec3(dot >= 0 ? 1 : -1, 0, 0)
-          break
-        }
-        case InternalSolveAxis.Y: {
-          const m = parentWorldRotMatrix.values
-          const axisY = new Vec3(m[4], m[5], m[6])
-          const dot = chainRotationAxis.dot(axisY)
-          finalRotationAxis = new Vec3(0, dot >= 0 ? 1 : -1, 0)
-          break
-        }
+        case InternalSolveAxis.X:
+        case InternalSolveAxis.Y:
         case InternalSolveAxis.Z: {
           const m = parentWorldRotMatrix.values
-          const axisZ = new Vec3(m[8], m[9], m[10])
-          const dot = chainRotationAxis.dot(axisZ)
-          finalRotationAxis = new Vec3(0, 0, dot >= 0 ? 1 : -1)
+          const axisOffset = (chain.solveAxis - InternalSolveAxis.X) * 4
+          const axis = new Vec3(m[axisOffset], m[axisOffset + 1], m[axisOffset + 2])
+          const dot = chainRotationAxis.dot(axis)
+          const sign = dot >= 0 ? 1 : -1
+          finalRotationAxis =
+            chain.solveAxis === InternalSolveAxis.X
+              ? new Vec3(sign, 0, 0)
+              : chain.solveAxis === InternalSolveAxis.Y
+              ? new Vec3(0, sign, 0)
+              : new Vec3(0, 0, sign)
           break
         }
         default:
@@ -267,84 +242,16 @@ export class IKSolverSystem {
       chainInfo.ikRotation = ikRotation.multiply(chainInfo.ikRotation)
 
       // Apply angle constraints if present
-      if (chain.minimumAngle !== null && chain.maximumAngle !== null) {
+      if (chain.minimumAngle && chain.maximumAngle) {
         const qi = chainBoneIndex * 4
-        const localRot = new Quat(
-          localRotations[qi],
-          localRotations[qi + 1],
-          localRotations[qi + 2],
-          localRotations[qi + 3]
-        )
+        const localRot = this.getQuatFromArray(localRotations, qi)
         chainInfo.localRotation = localRot.clone()
 
         const combinedRot = chainInfo.ikRotation.multiply(localRot)
-        const rotMatrix = Mat4.fromQuat(combinedRot.x, combinedRot.y, combinedRot.z, combinedRot.w)
-        const m = rotMatrix.values
-
-        let rX: number, rY: number, rZ: number
-
-        switch (chain.rotationOrder) {
-          case InternalEulerRotationOrder.YXZ: {
-            rX = Math.asin(-m[9]) // m32
-            if (Math.abs(rX) > this.THRESHOLD) {
-              rX = rX < 0 ? -this.THRESHOLD : this.THRESHOLD
-            }
-            let cosX = Math.cos(rX)
-            if (cosX !== 0) cosX = 1 / cosX
-            rY = Math.atan2(m[8] * cosX, m[10] * cosX) // m31, m33
-            rZ = Math.atan2(m[1] * cosX, m[5] * cosX) // m12, m22
-
-            rX = this.limitAngle(rX, chain.minimumAngle.x, chain.maximumAngle.x, useAxis)
-            rY = this.limitAngle(rY, chain.minimumAngle.y, chain.maximumAngle.y, useAxis)
-            rZ = this.limitAngle(rZ, chain.minimumAngle.z, chain.maximumAngle.z, useAxis)
-
-            chainInfo.ikRotation = Quat.fromAxisAngle(new Vec3(0, 1, 0), rY)
-            chainInfo.ikRotation = chainInfo.ikRotation.multiply(Quat.fromAxisAngle(new Vec3(1, 0, 0), rX))
-            chainInfo.ikRotation = chainInfo.ikRotation.multiply(Quat.fromAxisAngle(new Vec3(0, 0, 1), rZ))
-            break
-          }
-          case InternalEulerRotationOrder.ZYX: {
-            rY = Math.asin(-m[2]) // m13
-            if (Math.abs(rY) > this.THRESHOLD) {
-              rY = rY < 0 ? -this.THRESHOLD : this.THRESHOLD
-            }
-            let cosY = Math.cos(rY)
-            if (cosY !== 0) cosY = 1 / cosY
-            rX = Math.atan2(m[6] * cosY, m[10] * cosY) // m23, m33
-            rZ = Math.atan2(m[1] * cosY, m[0] * cosY) // m12, m11
-
-            rX = this.limitAngle(rX, chain.minimumAngle.x, chain.maximumAngle.x, useAxis)
-            rY = this.limitAngle(rY, chain.minimumAngle.y, chain.maximumAngle.y, useAxis)
-            rZ = this.limitAngle(rZ, chain.minimumAngle.z, chain.maximumAngle.z, useAxis)
-
-            chainInfo.ikRotation = Quat.fromAxisAngle(new Vec3(0, 0, 1), rZ)
-            chainInfo.ikRotation = chainInfo.ikRotation.multiply(Quat.fromAxisAngle(new Vec3(0, 1, 0), rY))
-            chainInfo.ikRotation = chainInfo.ikRotation.multiply(Quat.fromAxisAngle(new Vec3(1, 0, 0), rX))
-            break
-          }
-          case InternalEulerRotationOrder.XZY: {
-            rZ = Math.asin(-m[4]) // m21
-            if (Math.abs(rZ) > this.THRESHOLD) {
-              rZ = rZ < 0 ? -this.THRESHOLD : this.THRESHOLD
-            }
-            let cosZ = Math.cos(rZ)
-            if (cosZ !== 0) cosZ = 1 / cosZ
-            rX = Math.atan2(m[6] * cosZ, m[5] * cosZ) // m23, m22
-            rY = Math.atan2(m[8] * cosZ, m[0] * cosZ) // m31, m11
-
-            rX = this.limitAngle(rX, chain.minimumAngle.x, chain.maximumAngle.x, useAxis)
-            rY = this.limitAngle(rY, chain.minimumAngle.y, chain.maximumAngle.y, useAxis)
-            rZ = this.limitAngle(rZ, chain.minimumAngle.z, chain.maximumAngle.z, useAxis)
-
-            chainInfo.ikRotation = Quat.fromAxisAngle(new Vec3(1, 0, 0), rX)
-            chainInfo.ikRotation = chainInfo.ikRotation.multiply(Quat.fromAxisAngle(new Vec3(0, 0, 1), rZ))
-            chainInfo.ikRotation = chainInfo.ikRotation.multiply(Quat.fromAxisAngle(new Vec3(0, 1, 0), rY))
-            break
-          }
-        }
-
-        const invertedLocalRotation = localRot.conjugate().normalize()
-        chainInfo.ikRotation = chainInfo.ikRotation.multiply(invertedLocalRotation)
+        const euler = this.extractEulerAngles(combinedRot, chain.rotationOrder)
+        const limited = this.limitEulerAngles(euler, chain.minimumAngle, chain.maximumAngle, useAxis)
+        chainInfo.ikRotation = this.reconstructQuatFromEuler(limited, chain.rotationOrder)
+        chainInfo.ikRotation = chainInfo.ikRotation.multiply(localRot.conjugate().normalize())
       }
     }
 
@@ -368,9 +275,90 @@ export class IKSolverSystem {
     }
   }
 
+  private static getDistance(boneIndex1: number, boneIndex2: number, worldMatrices: Float32Array): number {
+    const pos1 = this.getWorldTranslation(boneIndex1, worldMatrices)
+    const pos2 = this.getWorldTranslation(boneIndex2, worldMatrices)
+    return pos1.subtract(pos2).length()
+  }
+
   private static getWorldTranslation(boneIndex: number, worldMatrices: Float32Array): Vec3 {
     const offset = boneIndex * 16
     return new Vec3(worldMatrices[offset + 12], worldMatrices[offset + 13], worldMatrices[offset + 14])
+  }
+
+  private static getQuatFromArray(array: Float32Array, offset: number): Quat {
+    return new Quat(array[offset], array[offset + 1], array[offset + 2], array[offset + 3])
+  }
+
+  private static setQuatToArray(array: Float32Array, offset: number, quat: Quat): void {
+    array[offset] = quat.x
+    array[offset + 1] = quat.y
+    array[offset + 2] = quat.z
+    array[offset + 3] = quat.w
+  }
+
+  private static extractEulerAngles(quat: Quat, order: InternalEulerRotationOrder): Vec3 {
+    const rotMatrix = Mat4.fromQuat(quat.x, quat.y, quat.z, quat.w)
+    const m = rotMatrix.values
+
+    switch (order) {
+      case InternalEulerRotationOrder.YXZ: {
+        let rX = Math.asin(-m[9])
+        if (Math.abs(rX) > this.THRESHOLD) rX = rX < 0 ? -this.THRESHOLD : this.THRESHOLD
+        let cosX = Math.cos(rX)
+        if (cosX !== 0) cosX = 1 / cosX
+        const rY = Math.atan2(m[8] * cosX, m[10] * cosX)
+        const rZ = Math.atan2(m[1] * cosX, m[5] * cosX)
+        return new Vec3(rX, rY, rZ)
+      }
+      case InternalEulerRotationOrder.ZYX: {
+        let rY = Math.asin(-m[2])
+        if (Math.abs(rY) > this.THRESHOLD) rY = rY < 0 ? -this.THRESHOLD : this.THRESHOLD
+        let cosY = Math.cos(rY)
+        if (cosY !== 0) cosY = 1 / cosY
+        const rX = Math.atan2(m[6] * cosY, m[10] * cosY)
+        const rZ = Math.atan2(m[1] * cosY, m[0] * cosY)
+        return new Vec3(rX, rY, rZ)
+      }
+      case InternalEulerRotationOrder.XZY: {
+        let rZ = Math.asin(-m[4])
+        if (Math.abs(rZ) > this.THRESHOLD) rZ = rZ < 0 ? -this.THRESHOLD : this.THRESHOLD
+        let cosZ = Math.cos(rZ)
+        if (cosZ !== 0) cosZ = 1 / cosZ
+        const rX = Math.atan2(m[6] * cosZ, m[5] * cosZ)
+        const rY = Math.atan2(m[8] * cosZ, m[0] * cosZ)
+        return new Vec3(rX, rY, rZ)
+      }
+    }
+  }
+
+  private static limitEulerAngles(euler: Vec3, min: Vec3, max: Vec3, useAxis: boolean): Vec3 {
+    return new Vec3(
+      this.limitAngle(euler.x, min.x, max.x, useAxis),
+      this.limitAngle(euler.y, min.y, max.y, useAxis),
+      this.limitAngle(euler.z, min.z, max.z, useAxis)
+    )
+  }
+
+  private static reconstructQuatFromEuler(euler: Vec3, order: InternalEulerRotationOrder): Quat {
+    const axes = [
+      [new Vec3(1, 0, 0), new Vec3(0, 1, 0), new Vec3(0, 0, 1)],
+      [new Vec3(0, 0, 1), new Vec3(0, 1, 0), new Vec3(1, 0, 0)],
+      [new Vec3(0, 1, 0), new Vec3(1, 0, 0), new Vec3(0, 0, 1)],
+    ]
+
+    const [axis1, axis2, axis3] = axes[order]
+    const [angle1, angle2, angle3] =
+      order === InternalEulerRotationOrder.YXZ
+        ? [euler.y, euler.x, euler.z]
+        : order === InternalEulerRotationOrder.ZYX
+        ? [euler.z, euler.y, euler.x]
+        : [euler.x, euler.z, euler.y]
+
+    let result = Quat.fromAxisAngle(axis1, angle1)
+    result = result.multiply(Quat.fromAxisAngle(axis2, angle2))
+    result = result.multiply(Quat.fromAxisAngle(axis3, angle3))
+    return result
   }
 
   private static getParentWorldRotationMatrix(boneIndex: number, bones: Bone[], worldMatrices: Float32Array): Mat4 {
@@ -409,13 +397,7 @@ export class IKSolverSystem {
     const qi = boneIndex * 4
     const ti = boneIndex * 3
 
-    // Get local rotation
-    const localRot = new Quat(
-      localRotations[qi],
-      localRotations[qi + 1],
-      localRotations[qi + 2],
-      localRotations[qi + 3]
-    )
+    const localRot = this.getQuatFromArray(localRotations, qi)
 
     // Apply IK rotation if available
     let finalRot = localRot

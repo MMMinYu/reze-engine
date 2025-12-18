@@ -135,7 +135,6 @@ export class Engine {
 
   private player: Player = new Player()
   private hasAnimation = false // Set to true when loadAnimation is called
-  private animationStartTime: number = 0 // Track when animation first started (for A-pose prevention)
 
   constructor(canvas: HTMLCanvasElement, options?: EngineOptions) {
     this.canvas = canvas
@@ -1317,8 +1316,8 @@ export class Engine {
   public playAnimation() {
     if (!this.hasAnimation || !this.currentModel) return
 
-    const wasPaused = this.player.isPausedState()
-    const wasPlaying = this.player.isPlayingState()
+    const wasPaused = this.player.isPausedState
+    const wasPlaying = this.player.isPlayingState
 
     // Only reset pose and physics if starting from beginning (not resuming)
     if (!wasPlaying && !wasPaused) {
@@ -1365,9 +1364,6 @@ export class Engine {
 
     // Start playback (or resume if paused)
     this.player.play()
-    if (this.animationStartTime === 0) {
-      this.animationStartTime = performance.now()
-    }
   }
 
   public stopAnimation() {
@@ -1659,23 +1655,7 @@ export class Engine {
       const materialAlpha = mat.diffuse[3]
       const isTransparent = materialAlpha < 1.0 - Engine.TRANSPARENCY_EPSILON
 
-      // Create material uniform data
-      const materialUniformData = new Float32Array(8)
-      materialUniformData[0] = materialAlpha
-      materialUniformData[1] = 1.0 // alphaMultiplier: 1.0 for non-hair materials
-      materialUniformData[2] = this.rimLightIntensity
-      materialUniformData[3] = 0.0 // _padding1
-      materialUniformData[4] = 1.0 // rimColor.r
-      materialUniformData[5] = 1.0 // rimColor.g
-      materialUniformData[6] = 1.0 // rimColor.b
-      materialUniformData[7] = 0.0 // isOverEyes
-
-      const materialUniformBuffer = this.device.createBuffer({
-        label: `material uniform: ${mat.name}`,
-        size: materialUniformData.byteLength,
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-      })
-      this.device.queue.writeBuffer(materialUniformBuffer, 0, materialUniformData)
+      const materialUniformBuffer = this.createMaterialUniformBuffer(mat.name, materialAlpha, 0.0)
 
       // Create bind groups using the shared bind group layout - All pipelines (main, eye, hair multiply, hair opaque) use the same shader and layout
       const bindGroup = this.device.createBindGroup({
@@ -1691,33 +1671,22 @@ export class Engine {
         ],
       })
 
-      if (mat.isEye) {
+      const addDrawCall = (draws: DrawCall[]) => {
         if (indexCount > 0) {
-          this.eyeDraws.push({
-            count: indexCount,
-            firstIndex: currentIndexOffset,
-            bindGroup,
-          })
+          draws.push({ count: indexCount, firstIndex: currentIndexOffset, bindGroup })
         }
+      }
+
+      if (mat.isEye) {
+        addDrawCall(this.eyeDraws)
       } else if (mat.isHair) {
         // Hair materials: create separate bind groups for over-eyes vs over-non-eyes
         const createHairBindGroup = (isOverEyes: boolean) => {
-          const uniformData = new Float32Array(8)
-          uniformData[0] = materialAlpha
-          uniformData[1] = 1.0 // alphaMultiplier (shader adjusts based on isOverEyes)
-          uniformData[2] = this.rimLightIntensity
-          uniformData[3] = 0.0 // _padding1
-          uniformData[4] = 1.0 // rimColor.rgb
-          uniformData[5] = 1.0
-          uniformData[6] = 1.0
-          uniformData[7] = isOverEyes ? 1.0 : 0.0 // isOverEyes
-
-          const buffer = this.device.createBuffer({
-            label: `material uniform (${isOverEyes ? "over eyes" : "over non-eyes"}): ${mat.name}`,
-            size: uniformData.byteLength,
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-          })
-          this.device.queue.writeBuffer(buffer, 0, uniformData)
+          const buffer = this.createMaterialUniformBuffer(
+            `${mat.name} (${isOverEyes ? "over eyes" : "over non-eyes"})`,
+            materialAlpha,
+            isOverEyes ? 1.0 : 0.0
+          )
 
           return this.device.createBindGroup({
             label: `material bind group (${isOverEyes ? "over eyes" : "over non-eyes"}): ${mat.name}`,
@@ -1742,7 +1711,6 @@ export class Engine {
             firstIndex: currentIndexOffset,
             bindGroup: bindGroupOverEyes,
           })
-
           this.hairDrawsOverNonEyes.push({
             count: indexCount,
             firstIndex: currentIndexOffset,
@@ -1750,41 +1718,27 @@ export class Engine {
           })
         }
       } else if (isTransparent) {
-        if (indexCount > 0) {
-          this.transparentDraws.push({
-            count: indexCount,
-            firstIndex: currentIndexOffset,
-            bindGroup,
-          })
-        }
+        addDrawCall(this.transparentDraws)
       } else {
-        if (indexCount > 0) {
-          this.opaqueDraws.push({
-            count: indexCount,
-            firstIndex: currentIndexOffset,
-            bindGroup,
-          })
-        }
+        addDrawCall(this.opaqueDraws)
       }
 
       // Edge flag is at bit 4 (0x10) in PMX format
       if ((mat.edgeFlag & 0x10) !== 0 && mat.edgeSize > 0) {
-        const materialUniformData = new Float32Array(8)
-        materialUniformData[0] = mat.edgeColor[0] // edgeColor.r
-        materialUniformData[1] = mat.edgeColor[1] // edgeColor.g
-        materialUniformData[2] = mat.edgeColor[2] // edgeColor.b
-        materialUniformData[3] = mat.edgeColor[3] // edgeColor.a
-        materialUniformData[4] = mat.edgeSize
-        materialUniformData[5] = 0.0 // isOverEyes
-        materialUniformData[6] = 0.0
-        materialUniformData[7] = 0.0
-
-        const materialUniformBuffer = this.device.createBuffer({
-          label: `outline material uniform: ${mat.name}`,
-          size: materialUniformData.byteLength,
-          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-        })
-        this.device.queue.writeBuffer(materialUniformBuffer, 0, materialUniformData)
+        const materialUniformData = new Float32Array([
+          mat.edgeColor[0],
+          mat.edgeColor[1],
+          mat.edgeColor[2],
+          mat.edgeColor[3],
+          mat.edgeSize,
+          0,
+          0,
+          0,
+        ])
+        const materialUniformBuffer = this.createUniformBuffer(
+          `outline material uniform: ${mat.name}`,
+          materialUniformData
+        )
 
         const outlineBindGroup = this.device.createBindGroup({
           label: `outline bind group: ${mat.name}`,
@@ -1797,36 +1751,35 @@ export class Engine {
         })
 
         if (indexCount > 0) {
-          if (mat.isEye) {
-            this.eyeOutlineDraws.push({
-              count: indexCount,
-              firstIndex: currentIndexOffset,
-              bindGroup: outlineBindGroup,
-            })
-          } else if (mat.isHair) {
-            this.hairOutlineDraws.push({
-              count: indexCount,
-              firstIndex: currentIndexOffset,
-              bindGroup: outlineBindGroup,
-            })
-          } else if (isTransparent) {
-            this.transparentOutlineDraws.push({
-              count: indexCount,
-              firstIndex: currentIndexOffset,
-              bindGroup: outlineBindGroup,
-            })
-          } else {
-            this.opaqueOutlineDraws.push({
-              count: indexCount,
-              firstIndex: currentIndexOffset,
-              bindGroup: outlineBindGroup,
-            })
-          }
+          const outlineDraws = mat.isEye
+            ? this.eyeOutlineDraws
+            : mat.isHair
+            ? this.hairOutlineDraws
+            : isTransparent
+            ? this.transparentOutlineDraws
+            : this.opaqueOutlineDraws
+          outlineDraws.push({ count: indexCount, firstIndex: currentIndexOffset, bindGroup: outlineBindGroup })
         }
       }
 
       currentIndexOffset += indexCount
     }
+  }
+
+  private createMaterialUniformBuffer(label: string, alpha: number, isOverEyes: number): GPUBuffer {
+    const data = new Float32Array(8)
+    data.set([alpha, 1.0, this.rimLightIntensity, 0.0, 1.0, 1.0, 1.0, isOverEyes])
+    return this.createUniformBuffer(`material uniform: ${label}`, data)
+  }
+
+  private createUniformBuffer(label: string, data: Float32Array | Uint32Array): GPUBuffer {
+    const buffer = this.device.createBuffer({
+      label,
+      size: data.byteLength,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    })
+    this.device.queue.writeBuffer(buffer, 0, data as ArrayBufferView<ArrayBuffer>)
+    return buffer
   }
 
   private async createTextureFromPath(path: string): Promise<GPUTexture | null> {

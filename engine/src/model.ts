@@ -279,35 +279,24 @@ export class Model {
   }
 
   private initializeRotTweenBuffers(): void {
-    const n = this.skeleton.bones.length
-    this.rotTweenState = {
-      active: new Uint8Array(n),
-      startQuat: new Float32Array(n * 4),
-      targetQuat: new Float32Array(n * 4),
-      startTimeMs: new Float32Array(n),
-      durationMs: new Float32Array(n),
-    }
+    this.rotTweenState = this.createTweenState(this.skeleton.bones.length, 4, 4)
   }
 
   private initializeTransTweenBuffers(): void {
-    const n = this.skeleton.bones.length
-    this.transTweenState = {
-      active: new Uint8Array(n),
-      startVec: new Float32Array(n * 3),
-      targetVec: new Float32Array(n * 3),
-      startTimeMs: new Float32Array(n),
-      durationMs: new Float32Array(n),
-    }
+    this.transTweenState = this.createTweenState(this.skeleton.bones.length, 3, 3)
   }
 
   private initializeMorphTweenBuffers(): void {
-    const n = this.morphing.morphs.length
-    this.morphTweenState = {
-      active: new Uint8Array(n),
-      startWeight: new Float32Array(n),
-      targetWeight: new Float32Array(n),
-      startTimeMs: new Float32Array(n),
-      durationMs: new Float32Array(n),
+    this.morphTweenState = this.createTweenState(this.morphing.morphs.length, 1, 1)
+  }
+
+  private createTweenState(count: number, startSize: number, targetSize: number): any {
+    return {
+      active: new Uint8Array(count),
+      startQuat: new Float32Array(count * startSize),
+      targetQuat: new Float32Array(count * targetSize),
+      startTimeMs: new Float32Array(count),
+      durationMs: new Float32Array(count),
     }
   }
 
@@ -410,33 +399,22 @@ export class Model {
     return hasActiveTweens
   }
 
-  // Get interleaved vertex data for GPU upload
-  // Format: [x,y,z, nx,ny,nz, u,v, x,y,z, nx,ny,nz, u,v, ...]
   getVertices(): Float32Array<ArrayBuffer> {
     return this.vertexData
   }
 
-  // Get texture information
   getTextures(): Texture[] {
     return this.textures
   }
 
-  // Get material information
   getMaterials(): Material[] {
     return this.materials
   }
 
-  // Get vertex count
-  getVertexCount(): number {
-    return this.vertexCount
-  }
-
-  // Get index data for GPU upload
   getIndices(): Uint32Array<ArrayBuffer> {
     return this.indexData
   }
 
-  // Accessors for skeleton/skinning
   getSkeleton(): Skeleton {
     return this.skeleton
   }
@@ -445,7 +423,6 @@ export class Model {
     return this.skinning
   }
 
-  // Accessors for physics data
   getRigidbodies(): Rigidbody[] {
     return this.rigidbodies
   }
@@ -454,7 +431,6 @@ export class Model {
     return this.joints
   }
 
-  // Accessors for morphing
   getMorphing(): Morphing {
     return this.morphing
   }
@@ -464,10 +440,6 @@ export class Model {
   }
 
   // ------- Bone helpers (public API) -------
-
-  getBoneNames(): string[] {
-    return this.skeleton.bones.map((b) => b.name)
-  }
 
   rotateBones(names: string[], quats: Quat[], durationMs?: number): void {
     const state = this.rotTweenState
@@ -644,10 +616,6 @@ export class Model {
 
   getBoneInverseBindMatrices(): Float32Array {
     return this.skeleton.inverseBindMatrices
-  }
-
-  getMorphNames(): string[] {
-    return this.morphing.morphs.map((m) => m.name)
   }
 
   setMorphWeight(name: string, weight: number, durationMs?: number): void {
