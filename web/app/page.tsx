@@ -192,7 +192,6 @@ export default function Home() {
         })
         engineRef.current = engine
         await engine.init()
-        await handleLoadAnimation()
         await engine.loadModel("/models/塞尔凯特2/塞尔凯特2.pmx")
 
         setLoading(false)
@@ -200,6 +199,7 @@ export default function Home() {
         engine.runRenderLoop(() => {
           setStats(engine.getStats())
         })
+        await handleLoadAnimation()
 
         await new Promise((resolve) => requestAnimationFrame(resolve))
         engineRef.current.seekAnimation(0)

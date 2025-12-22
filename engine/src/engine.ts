@@ -1,9 +1,7 @@
 import { Camera } from "./camera"
-import { Mat4, Quat, Vec3 } from "./math"
+import { Quat, Vec3 } from "./math"
 import { Model } from "./model"
 import { PmxLoader } from "./pmx-loader"
-import { Physics } from "./physics"
-import { AnimationPose, Player } from "./player"
 
 export type EngineOptions = {
   ambientColor?: Vec3
@@ -113,7 +111,6 @@ export class Engine {
 
   private currentModel: Model | null = null
   private modelDir: string = ""
-  private physics: Physics | null = null
   private materialSampler!: GPUSampler
   private textureCache = new Map<string, GPUTexture>()
   private vertexBufferNeedsUpdate = false
@@ -131,9 +128,6 @@ export class Engine {
   }
   private animationFrameId: number | null = null
   private renderLoopCallback: (() => void) | null = null
-
-  private player: Player = new Player()
-  private hasAnimation = false // Set to true when loadAnimation is called
 
   constructor(canvas: HTMLCanvasElement, options?: EngineOptions) {
     this.canvas = canvas
@@ -1086,118 +1080,28 @@ export class Engine {
   }
 
   public async loadAnimation(url: string) {
-    await this.player.loadVmd(url)
-    this.hasAnimation = true
-
-    // Show first frame (time 0) immediately
-    if (this.currentModel) {
-      const initialPose = this.player.getPoseAtTime(0)
-      this.resetBonesAndPhysics(initialPose, true)
-    }
+    if (!this.currentModel) return
+    await this.currentModel.loadVmd(url)
   }
 
   public playAnimation() {
-    if (!this.hasAnimation || !this.currentModel) return
-
-    const wasPaused = this.player.isPausedState
-    const wasPlaying = this.player.isPlayingState
-
-    // Only reset pose and physics if starting from beginning (not resuming)
-    if (!wasPlaying && !wasPaused) {
-      const initialPose = this.player.getPoseAtTime(0)
-      this.resetBonesAndPhysics(initialPose, true)
-    }
-
-    // Start playback (or resume if paused)
-    this.player.play()
+    this.currentModel?.playAnimation()
   }
 
   public stopAnimation() {
-    this.player.stop()
+    this.currentModel?.stopAnimation()
   }
 
   public pauseAnimation() {
-    this.player.pause()
+    this.currentModel?.pauseAnimation()
   }
 
   public seekAnimation(time: number) {
-    if (!this.currentModel || !this.hasAnimation) return
-
-    this.player.seek(time)
-
-    // Immediately apply pose at seeked time (don't reset bones without keyframes)
-    const pose = this.player.getPoseAtTime(time)
-    this.resetBonesAndPhysics(pose, false)
+    this.currentModel?.seekAnimation(time)
   }
 
   public getAnimationProgress() {
-    return this.player.getProgress()
-  }
-
-  /**
-   * Apply animation pose to model
-   */
-  private applyPose(pose: AnimationPose): void {
-    if (!this.currentModel) return
-
-    // Apply bone rotations
-    if (pose.boneRotations.size > 0) {
-      const boneNames = Array.from(pose.boneRotations.keys())
-      const rotations = Array.from(pose.boneRotations.values())
-      this.rotateBones(boneNames, rotations, 0)
-    }
-
-    // Apply bone translations
-    if (pose.boneTranslations.size > 0) {
-      const boneNames = Array.from(pose.boneTranslations.keys())
-      const translations = Array.from(pose.boneTranslations.values())
-      this.moveBones(boneNames, translations, 0)
-    }
-
-    // Apply morph weights
-    for (const [morphName, weight] of pose.morphWeights.entries()) {
-      this.setMorphWeight(morphName, weight, 0)
-    }
-  }
-
-  /**
-   * Reset bones and physics to match a given pose
-   * @param pose The pose to apply
-   * @param resetBonesWithoutKeyframes If true, reset bones that don't have keyframes in the pose to identity
-   */
-  private resetBonesAndPhysics(pose: AnimationPose, resetBonesWithoutKeyframes: boolean = false): void {
-    if (!this.currentModel) return
-
-    this.applyPose(pose)
-
-    // Reset bones without keyframes if requested (for initial animation setup)
-    if (resetBonesWithoutKeyframes) {
-      const skeleton = this.currentModel.getSkeleton()
-      const bonesWithPose = new Set(pose.boneRotations.keys())
-      const bonesToReset: string[] = []
-      for (const bone of skeleton.bones) {
-        if (!bonesWithPose.has(bone.name)) {
-          bonesToReset.push(bone.name)
-        }
-      }
-
-      if (bonesToReset.length > 0) {
-        const identityQuat = new Quat(0, 0, 0, 1)
-        const identityQuats = new Array(bonesToReset.length).fill(identityQuat)
-        this.rotateBones(bonesToReset, identityQuats, 0)
-      }
-    }
-
-    // Update model pose and physics
-    this.currentModel.evaluatePose()
-
-    if (this.physics) {
-      const worldMats = this.currentModel.getBoneWorldMatrices()
-      this.physics.reset(worldMats, this.currentModel.getBoneInverseBindMatrices())
-
-      // Compute and upload skin matrices immediately
-      this.computeSkinMatrices()
-    }
+    return this.currentModel?.getAnimationProgress() ?? { current: 0, duration: 0, percentage: 0 }
   }
 
   public getStats(): EngineStats {
@@ -1246,8 +1150,6 @@ export class Engine {
     this.modelDir = dir
 
     const model = await PmxLoader.load(path)
-
-    this.physics = new Physics(model.getRigidbodies(), model.getJoints())
     await this.setupModelBuffers(model)
   }
 
@@ -1615,19 +1517,10 @@ export class Engine {
       this.updateCameraUniforms()
       this.updateRenderTarget()
 
-      // Animate VMD animation if playing
-      if (this.hasAnimation && this.currentModel) {
-        const pose = this.player.update(currentTime)
-        if (pose) {
-          this.applyPose(pose)
-        }
-      }
-
-      // Update model pose first (this may update morph weights via tweens)
-      // We need to do this before creating the encoder to ensure vertex buffer is ready
+      // Update model (handles tweens, animation, physics, IK, and skin matrices)
       if (this.currentModel) {
-        const hasActiveMorphTweens = this.currentModel.evaluatePose()
-        if (hasActiveMorphTweens) {
+        const verticesChanged = this.currentModel.update(deltaTime)
+        if (verticesChanged) {
           this.vertexBufferNeedsUpdate = true
         }
       }
@@ -1638,8 +1531,8 @@ export class Engine {
         this.vertexBufferNeedsUpdate = false
       }
 
-      // Update model pose (computes skin matrices on CPU)
-      this.updateModelPose(deltaTime)
+      // Update skin matrices buffer
+      this.updateSkinMatrices()
 
       // Use single encoder for render
       const encoder = this.device.createCommandEncoder()
@@ -1811,22 +1704,12 @@ export class Engine {
     }
   }
 
-  private updateModelPose(deltaTime: number) {
-    // Note: evaluatePose is called earlier in render() to update vertex buffer before encoder creation
-    // Here we just get the matrices and update physics/compute
-    const worldMats = this.currentModel!.getBoneWorldMatrices()
+  private updateSkinMatrices() {
+    if (!this.currentModel || !this.skinMatrixBuffer) return
 
-    if (this.physics) {
-      this.physics.step(deltaTime, worldMats, this.currentModel!.getBoneInverseBindMatrices())
-    }
-
-    this.computeSkinMatrices()
-  }
-
-  private computeSkinMatrices() {
-    const skinMatrices = this.currentModel!.getSkinMatrices()
+    const skinMatrices = this.currentModel.getSkinMatrices()
     this.device.queue.writeBuffer(
-      this.skinMatrixBuffer!,
+      this.skinMatrixBuffer,
       0,
       skinMatrices.buffer,
       skinMatrices.byteOffset,
