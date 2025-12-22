@@ -102,7 +102,7 @@ export default function Home() {
   }, [])
 
   // Play animation
-  const handlePlay = useCallback(() => {
+  const handlePlay = useCallback(async () => {
     if (engineRef.current) {
       // iOS CRITICAL: Call audio.play() DIRECTLY from click handler
       // This must be synchronous - no async/await, no callbacks
@@ -123,6 +123,7 @@ export default function Home() {
           audioRef.current.currentTime = 0
         }
         setProgress({ ...progress, current: 0, percentage: 0 })
+        await new Promise((resolve) => requestAnimationFrame(resolve))
       }
       engineRef.current.playAnimation()
       setIsPlaying(true)
