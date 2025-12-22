@@ -101,15 +101,6 @@ export default function Home() {
     }
   }, [])
 
-  // Load animation
-  const handleLoadAnimation = useCallback(async () => {
-    if (engineRef.current) {
-      await engineRef.current.loadAnimation("/animations/IRIS OUT.vmd")
-      const prog = engineRef.current.getAnimationProgress()
-      setProgress(prog)
-    }
-  }, [])
-
   // Play animation
   const handlePlay = useCallback(() => {
     if (engineRef.current) {
@@ -199,15 +190,15 @@ export default function Home() {
         engine.runRenderLoop(() => {
           setStats(engine.getStats())
         })
-        await handleLoadAnimation()
 
-        await new Promise((resolve) => requestAnimationFrame(resolve))
-        engineRef.current.seekAnimation(0)
+        await engine.loadAnimation("/animations/IRIS OUT.vmd")
+        const prog = engine.getAnimationProgress()
+        setProgress(prog)
       } catch (error) {
         setEngineError(error instanceof Error ? error.message : "Unknown error")
       }
     }
-  }, [handleLoadAnimation])
+  }, [])
 
   useEffect(() => {
     void (async () => {

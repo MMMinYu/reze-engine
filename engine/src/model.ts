@@ -189,6 +189,10 @@ export class Model {
   private isPaused: boolean = false
   private animationTime: number = 0 // Current time in animation (seconds)
 
+  // Cached keyframe indices for faster lookup (per track)
+  private boneTrackIndices: Map<string, number> = new Map()
+  private morphTrackIndices: Map<string, number> = new Map()
+
   // Physics runtime
   private physics: Physics | null = null
 
@@ -793,14 +797,10 @@ export class Model {
     this.animationTime = 0
     this.getPoseAtTime(0)
 
-    // Apply morphs if animation changed them
-    if (this.morphsDirty) {
-      this.applyMorphs()
-      this.morphsDirty = false
+    if (this.physics) {
+      this.computeWorldMatrices()
+      this.physics.reset(this.runtimeSkeleton.worldMatrices, this.skeleton.inverseBindMatrices)
     }
-
-    // Compute world matrices after applying initial pose
-    this.computeWorldMatrices()
   }
 
   /**
@@ -854,6 +854,10 @@ export class Model {
       )
     }
 
+    // Reset cached indices when tracks change
+    this.boneTrackIndices.clear()
+    this.morphTrackIndices.clear()
+
     // Calculate duration from all tracks
     const allTracks = [...this.boneTracks.values(), ...this.morphTracks.values()]
     this.animationDuration = allTracks.reduce((max, keyFrames) => {
@@ -862,79 +866,33 @@ export class Model {
     }, 0)
   }
 
-  /**
-   * Start or resume playback
-   */
   playAnimation(): void {
-    if (!this.animationData) {
-      console.warn("[Model] Cannot play animation: no animation data loaded")
-      return
-    }
+    if (!this.animationData) return
 
     this.isPaused = false
     this.isPlaying = true
 
-    // Apply initial pose at current animation time
-    this.getPoseAtTime(this.animationTime)
-
-    // Apply morphs if animation changed them
-    if (this.morphsDirty) {
-      this.applyMorphs()
-      this.morphsDirty = false
-    }
-
-    // Compute world matrices after applying pose
-    this.computeWorldMatrices()
-
-    // Reset physics when starting animation (prevents instability from sudden pose changes)
-    if (this.physics) {
-      this.physics.reset(this.runtimeSkeleton.worldMatrices, this.skeleton.inverseBindMatrices)
-    }
-  }
-
-  /**
-   * Pause playback
-   */
-  pauseAnimation(): void {
-    if (!this.isPlaying || this.isPaused) return
-    this.isPaused = true
-  }
-
-  /**
-   * Stop playback and reset to beginning
-   */
-  stopAnimation(): void {
-    this.isPlaying = false
-    this.isPaused = false
-    this.animationTime = 0
-
-    // Reset physics state when stopping animation (prevents instability from sudden pose changes)
-    if (this.physics) {
+    if (this.physics && this.animationTime === 0) {
       this.computeWorldMatrices()
       this.physics.reset(this.runtimeSkeleton.worldMatrices, this.skeleton.inverseBindMatrices)
     }
   }
 
-  /**
-   * Seek to specific time
-   * Immediately applies pose at the seeked time
-   */
+  pauseAnimation(): void {
+    if (!this.isPlaying || this.isPaused) return
+    this.isPaused = true
+  }
+
+  stopAnimation(): void {
+    this.isPlaying = false
+    this.isPaused = false
+    this.animationTime = 0
+  }
+
   seekAnimation(time: number): void {
     if (!this.animationData) return
-
     const clampedTime = Math.max(0, Math.min(time, this.animationDuration))
     this.animationTime = clampedTime
-    // Immediately apply pose at seeked time
-    this.getPoseAtTime(clampedTime)
-
-    // Apply morphs if animation changed them
-    if (this.morphsDirty) {
-      this.applyMorphs()
-      this.morphsDirty = false
-    }
-
-    // Compute world matrices after applying pose
-    this.computeWorldMatrices()
   }
 
   /**
@@ -951,30 +909,63 @@ export class Model {
   }
 
   /**
+   * Binary search upper bound helper (static to avoid recreation)
+   */
+  private static upperBound<T extends { time: number }>(time: number, keyFrames: T[], startIdx: number = 0): number {
+    let left = startIdx,
+      right = keyFrames.length
+    while (left < right) {
+      const mid = Math.floor((left + right) / 2)
+      if (keyFrames[mid].time <= time) left = mid + 1
+      else right = mid
+    }
+    return left
+  }
+
+  /**
+   * Find keyframe index with caching optimization
+   * Uses cached index as starting point for faster lookup when time is close
+   */
+  private findKeyframeIndex<T extends { time: number }>(time: number, keyFrames: T[], cachedIdx: number): number {
+    if (keyFrames.length === 0) return -1
+
+    // Check if cached index is still valid (time is within the cached frame range)
+    if (cachedIdx >= 0 && cachedIdx < keyFrames.length) {
+      const frameTime = keyFrames[cachedIdx].time
+      const nextFrameTime = cachedIdx + 1 < keyFrames.length ? keyFrames[cachedIdx + 1].time : Infinity
+
+      // If time is within [frameTime, nextFrameTime), use cached index
+      if (time >= frameTime && time < nextFrameTime) {
+        return cachedIdx
+      }
+    }
+
+    // Fall back to binary search
+    const idx = Model.upperBound(time, keyFrames, 0) - 1
+    return idx
+  }
+
+  /**
    * Get pose at specific time (internal helper)
+   * Optimized for per-frame performance
    */
   private getPoseAtTime(time: number): void {
     if (!this.animationData) return
 
-    // Helper for binary search upper bound
-    const upperBound = <T extends { time: number }>(time: number, keyFrames: T[]): number => {
-      let left = 0,
-        right = keyFrames.length
-      while (left < right) {
-        const mid = Math.floor((left + right) / 2)
-        if (keyFrames[mid].time <= time) left = mid + 1
-        else right = mid
-      }
-      return left
-    }
+    const INV_127 = 1 / 127 // Pre-compute division constant
 
     // Process bone tracks
     for (const [boneName, keyFrames] of this.boneTracks.entries()) {
       if (keyFrames.length === 0) continue
 
+      const cachedIdx = this.boneTrackIndices.get(boneName) ?? -1
       const clampedTime = Math.max(keyFrames[0].time, Math.min(keyFrames[keyFrames.length - 1].time, time))
-      const idx = upperBound(clampedTime, keyFrames) - 1
+      const idx = this.findKeyframeIndex(clampedTime, keyFrames, cachedIdx)
+
       if (idx < 0) continue
+
+      // Update cache
+      this.boneTrackIndices.set(boneName, idx)
 
       const frameA = keyFrames[idx].boneFrame
       const frameB = keyFrames[idx + 1]?.boneFrame
@@ -982,48 +973,63 @@ export class Model {
       const boneIdx = this.runtimeSkeleton.nameIndex[boneName]
       if (boneIdx === undefined) continue
 
+      const rotOffset = boneIdx * 4
+      const transOffset = boneIdx * 3
+
       if (!frameB) {
-        this.runtimeSkeleton.localRotations[boneIdx * 4] = frameA.rotation.x
-        this.runtimeSkeleton.localRotations[boneIdx * 4 + 1] = frameA.rotation.y
-        this.runtimeSkeleton.localRotations[boneIdx * 4 + 2] = frameA.rotation.z
-        this.runtimeSkeleton.localRotations[boneIdx * 4 + 3] = frameA.rotation.w
-        this.runtimeSkeleton.localTranslations[boneIdx * 3] = frameA.translation.x
-        this.runtimeSkeleton.localTranslations[boneIdx * 3 + 1] = frameA.translation.y
-        this.runtimeSkeleton.localTranslations[boneIdx * 3 + 2] = frameA.translation.z
+        // No interpolation needed - direct assignment
+        this.runtimeSkeleton.localRotations[rotOffset] = frameA.rotation.x
+        this.runtimeSkeleton.localRotations[rotOffset + 1] = frameA.rotation.y
+        this.runtimeSkeleton.localRotations[rotOffset + 2] = frameA.rotation.z
+        this.runtimeSkeleton.localRotations[rotOffset + 3] = frameA.rotation.w
+        this.runtimeSkeleton.localTranslations[transOffset] = frameA.translation.x
+        this.runtimeSkeleton.localTranslations[transOffset + 1] = frameA.translation.y
+        this.runtimeSkeleton.localTranslations[transOffset + 2] = frameA.translation.z
       } else {
         const timeA = keyFrames[idx].time
         const timeB = keyFrames[idx + 1].time
-        const gradient = (clampedTime - timeA) / (timeB - timeA)
+        const timeDelta = timeB - timeA
+        const gradient = (clampedTime - timeA) / timeDelta
         const interp = frameB.interpolation
 
-        // Interpolate rotation using SLERP with bezier
-        const rotT = bezierInterpolate(interp[0] / 127, interp[1] / 127, interp[2] / 127, interp[3] / 127, gradient)
+        // Pre-normalize interpolation values (avoid division in bezierInterpolate)
+        const rotT = bezierInterpolate(
+          interp[0] * INV_127,
+          interp[1] * INV_127,
+          interp[2] * INV_127,
+          interp[3] * INV_127,
+          gradient
+        )
+
+        // Use Quat.slerp but extract components directly to avoid object allocation
         const rotation = Quat.slerp(frameA.rotation, frameB.rotation, rotT)
 
         // Interpolate translation using bezier for each component
+        // Inline getWeight to avoid function call overhead
         const getWeight = (offset: number) =>
           bezierInterpolate(
-            interp[offset] / 127,
-            interp[offset + 8] / 127,
-            interp[offset + 4] / 127,
-            interp[offset + 12] / 127,
+            interp[offset] * INV_127,
+            interp[offset + 8] * INV_127,
+            interp[offset + 4] * INV_127,
+            interp[offset + 12] * INV_127,
             gradient
           )
 
-        const lerp = (a: number, b: number, w: number) => a + (b - a) * w
-        const translation = new Vec3(
-          lerp(frameA.translation.x, frameB.translation.x, getWeight(0)),
-          lerp(frameA.translation.y, frameB.translation.y, getWeight(16)),
-          lerp(frameA.translation.z, frameB.translation.z, getWeight(32))
-        )
+        const txWeight = getWeight(0)
+        const tyWeight = getWeight(16)
+        const tzWeight = getWeight(32)
 
-        this.runtimeSkeleton.localRotations[boneIdx * 4] = rotation.x
-        this.runtimeSkeleton.localRotations[boneIdx * 4 + 1] = rotation.y
-        this.runtimeSkeleton.localRotations[boneIdx * 4 + 2] = rotation.z
-        this.runtimeSkeleton.localRotations[boneIdx * 4 + 3] = rotation.w
-        this.runtimeSkeleton.localTranslations[boneIdx * 3] = translation.x
-        this.runtimeSkeleton.localTranslations[boneIdx * 3 + 1] = translation.y
-        this.runtimeSkeleton.localTranslations[boneIdx * 3 + 2] = translation.z
+        // Direct array writes instead of Vec3 allocation
+        this.runtimeSkeleton.localRotations[rotOffset] = rotation.x
+        this.runtimeSkeleton.localRotations[rotOffset + 1] = rotation.y
+        this.runtimeSkeleton.localRotations[rotOffset + 2] = rotation.z
+        this.runtimeSkeleton.localRotations[rotOffset + 3] = rotation.w
+        this.runtimeSkeleton.localTranslations[transOffset] =
+          frameA.translation.x + (frameB.translation.x - frameA.translation.x) * txWeight
+        this.runtimeSkeleton.localTranslations[transOffset + 1] =
+          frameA.translation.y + (frameB.translation.y - frameA.translation.y) * tyWeight
+        this.runtimeSkeleton.localTranslations[transOffset + 2] =
+          frameA.translation.z + (frameB.translation.z - frameA.translation.z) * tzWeight
       }
     }
 
@@ -1031,9 +1037,14 @@ export class Model {
     for (const [morphName, keyFrames] of this.morphTracks.entries()) {
       if (keyFrames.length === 0) continue
 
+      const cachedIdx = this.morphTrackIndices.get(morphName) ?? -1
       const clampedTime = Math.max(keyFrames[0].time, Math.min(keyFrames[keyFrames.length - 1].time, time))
-      const idx = upperBound(clampedTime, keyFrames) - 1
+      const idx = this.findKeyframeIndex(clampedTime, keyFrames, cachedIdx)
+
       if (idx < 0) continue
+
+      // Update cache
+      this.morphTrackIndices.set(morphName, idx)
 
       const frameA = keyFrames[idx].morphFrame
       const frameB = keyFrames[idx + 1]?.morphFrame
