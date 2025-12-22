@@ -1,4 +1,4 @@
-import { Mat4, Quat, Vec3, easeInOut, bezierInterpolate } from "./math"
+import { Mat4, Quat, Vec3, bezierInterpolate } from "./math"
 import { Rigidbody, Joint, Physics } from "./physics"
 import { IKSolverSystem } from "./ik-solver"
 import { VMDKeyFrame, VMDLoader, BoneFrame, MorphFrame } from "./vmd-loader"
@@ -358,7 +358,7 @@ export class Model {
       const startMs = state.rotStartTimeMs[i]
       const durMs = Math.max(1, state.rotDurationMs[i])
       const t = Math.max(0, Math.min(1, (now - startMs) / durMs))
-      const e = easeInOut(t)
+      const e = t // Linear interpolation
 
       const qi = i * 4
       const startQuat = new Quat(
@@ -393,7 +393,7 @@ export class Model {
       const startMs = state.transStartTimeMs[i]
       const durMs = Math.max(1, state.transDurationMs[i])
       const t = Math.max(0, Math.min(1, (now - startMs) / durMs))
-      const e = easeInOut(t)
+      const e = t // Linear interpolation
 
       const ti = i * 3
       translations[ti] = state.transStartVec[ti] + (state.transTargetVec[ti] - state.transStartVec[ti]) * e
@@ -416,7 +416,7 @@ export class Model {
       const startMs = state.morphStartTimeMs[i]
       const durMs = Math.max(1, state.morphDurationMs[i])
       const t = Math.max(0, Math.min(1, (now - startMs) / durMs))
-      const e = easeInOut(t)
+      const e = t // Linear interpolation
 
       const oldWeight = weights[i]
       weights[i] = state.morphStartWeight[i] + (state.morphTargetWeight[i] - state.morphStartWeight[i]) * e
@@ -514,7 +514,7 @@ export class Model {
         const startMs = state.rotStartTimeMs[idx]
         const prevDur = Math.max(1, state.rotDurationMs[idx])
         const t = Math.max(0, Math.min(1, (now - startMs) / prevDur))
-        const e = easeInOut(t)
+        const e = t // Linear interpolation
         const startQuat = new Quat(
           state.rotStartQuat[qi],
           state.rotStartQuat[qi + 1],
@@ -632,7 +632,7 @@ export class Model {
         const startMs = state.transStartTimeMs[idx]
         const prevDur = Math.max(1, state.transDurationMs[idx])
         const t = Math.max(0, Math.min(1, (now - startMs) / prevDur))
-        const e = easeInOut(t)
+        const e = t // Linear interpolation
         sx = state.transStartVec[ti] + (state.transTargetVec[ti] - state.transStartVec[ti]) * e
         sy = state.transStartVec[ti + 1] + (state.transTargetVec[ti + 1] - state.transStartVec[ti + 1]) * e
         sz = state.transStartVec[ti + 2] + (state.transTargetVec[ti + 2] - state.transStartVec[ti + 2]) * e
@@ -707,7 +707,7 @@ export class Model {
       const startMs = state.morphStartTimeMs[idx]
       const prevDur = Math.max(1, state.morphDurationMs[idx])
       const t = Math.max(0, Math.min(1, (now - startMs) / prevDur))
-      const e = easeInOut(t)
+      const e = t // Linear interpolation
       startWeight = state.morphStartWeight[idx] + (state.morphTargetWeight[idx] - state.morphStartWeight[idx]) * e
     }
 
