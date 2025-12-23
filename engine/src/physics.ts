@@ -460,12 +460,12 @@ export class Physics {
   // Reset physics state (reposition bodies, clear velocities)
   // Following babylon-mmd pattern: initialize all rigid body positions from current bone poses
   // Call this when starting a new animation to prevent physics instability from sudden pose changes
-  reset(boneWorldMatrices: Float32Array, boneInverseBindMatrices: Float32Array): void {
+  reset(boneWorldMatrices: Mat4[], boneInverseBindMatrices: Float32Array): void {
     if (!this.ammoInitialized || !this.ammo || !this.dynamicsWorld) {
       return
     }
 
-    const boneCount = boneWorldMatrices.length / 16
+    const boneCount = boneWorldMatrices.length
     const Ammo = this.ammo
 
     // Ensure body offsets are computed
@@ -482,10 +482,9 @@ export class Physics {
       if (!ammoBody || rb.boneIndex < 0 || rb.boneIndex >= boneCount) continue
 
       const boneIdx = rb.boneIndex
-      const worldMatIdx = boneIdx * 16
 
       // Get bone world matrix
-      const boneWorldMat = new Mat4(boneWorldMatrices.subarray(worldMatIdx, worldMatIdx + 16))
+      const boneWorldMat = boneWorldMatrices[boneIdx]
 
       // Compute body world matrix: bodyWorld = boneWorld × bodyOffsetMatrix
       // (like babylon-mmd: bodyWorldMatrix = bodyOffsetMatrix.multiplyToRef(bodyWorldMatrix))
@@ -531,13 +530,13 @@ export class Physics {
 
   // Syncs bones to rigidbodies, simulates dynamics, solves constraints
   // Modifies boneWorldMatrices in-place for dynamic rigidbodies that drive bones
-  step(dt: number, boneWorldMatrices: Float32Array, boneInverseBindMatrices: Float32Array): void {
+  step(dt: number, boneWorldMatrices: Mat4[], boneInverseBindMatrices: Float32Array): void {
     // Wait for Ammo to initialize
     if (!this.ammoInitialized || !this.ammo || !this.dynamicsWorld) {
       return
     }
 
-    const boneCount = boneWorldMatrices.length / 16
+    const boneCount = boneWorldMatrices.length
 
     if (this.firstFrame) {
       if (!this.rigidbodiesInitialized) {
@@ -596,7 +595,7 @@ export class Physics {
   }
 
   // Position bodies based on current bone transforms (called on first frame only)
-  private positionBodiesFromBones(boneWorldMatrices: Float32Array, boneCount: number): void {
+  private positionBodiesFromBones(boneWorldMatrices: Mat4[], boneCount: number): void {
     if (!this.ammo || !this.dynamicsWorld) return
 
     const Ammo = this.ammo
@@ -607,9 +606,7 @@ export class Physics {
       if (!ammoBody || rb.boneIndex < 0 || rb.boneIndex >= boneCount) continue
 
       const boneIdx = rb.boneIndex
-      const worldMatIdx = boneIdx * 16
-
-      const boneWorldMat = new Mat4(boneWorldMatrices.subarray(worldMatIdx, worldMatIdx + 16))
+      const boneWorldMat = boneWorldMatrices[boneIdx]
 
       // nodeWorld = boneWorld × shapeLocal (not shapeLocal × boneWorld)
       const bodyOffsetMatrix = rb.bodyOffsetMatrix || rb.bodyOffsetMatrixInverse.inverse()
@@ -646,11 +643,7 @@ export class Physics {
   }
 
   // Sync Static (FollowBone) and Kinematic rigidbodies to follow bone transforms
-  private syncFromBones(
-    boneWorldMatrices: Float32Array,
-    boneInverseBindMatrices: Float32Array,
-    boneCount: number
-  ): void {
+  private syncFromBones(boneWorldMatrices: Mat4[], boneInverseBindMatrices: Float32Array, boneCount: number): void {
     if (!this.ammo || !this.dynamicsWorld) return
 
     const Ammo = this.ammo
@@ -667,9 +660,7 @@ export class Physics {
         rb.boneIndex < boneCount
       ) {
         const boneIdx = rb.boneIndex
-        const worldMatIdx = boneIdx * 16
-
-        const boneWorldMat = new Mat4(boneWorldMatrices.subarray(worldMatIdx, worldMatIdx + 16))
+        const boneWorldMat = boneWorldMatrices[boneIdx]
 
         // nodeWorld = boneWorld × shapeLocal (not shapeLocal × boneWorld)
         const bodyOffsetMatrix = rb.bodyOffsetMatrix || rb.bodyOffsetMatrixInverse.inverse()
@@ -713,7 +704,7 @@ export class Physics {
 
   // Apply dynamic rigidbody world transforms to bone world matrices in-place
   private applyAmmoRigidbodiesToBones(
-    boneWorldMatrices: Float32Array,
+    boneWorldMatrices: Mat4[],
     boneInverseBindMatrices: Float32Array,
     boneCount: number
   ): void {
@@ -727,7 +718,6 @@ export class Physics {
       // Only dynamic rigidbodies drive bones (Static/Kinematic follow bones)
       if (rb.type === RigidbodyType.Dynamic && rb.boneIndex >= 0 && rb.boneIndex < boneCount) {
         const boneIdx = rb.boneIndex
-        const worldMatIdx = boneIdx * 16
 
         const transform = ammoBody.getWorldTransform()
         const origin = transform.getOrigin()
@@ -742,7 +732,7 @@ export class Physics {
 
         const values = boneWorldMat.values
         if (!isNaN(values[0]) && !isNaN(values[15]) && Math.abs(values[0]) < 1e6 && Math.abs(values[15]) < 1e6) {
-          boneWorldMatrices.set(values, worldMatIdx)
+          boneWorldMatrices[boneIdx].values.set(values)
         } else {
           console.warn(`[Physics] Invalid bone world matrix for rigidbody ${i} (${rb.name}), skipping update`)
         }

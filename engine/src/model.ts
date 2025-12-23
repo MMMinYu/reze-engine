@@ -107,9 +107,9 @@ export interface Morphing {
 // Runtime skeleton pose state (updated each frame)
 export interface SkeletonRuntime {
   nameIndex: Record<string, number> // Cached lookup: bone name -> bone index (built on initialization)
-  localRotations: Float32Array // quat per bone (x,y,z,w) length = boneCount*4
-  localTranslations: Float32Array // vec3 per bone length = boneCount*3
-  worldMatrices: Float32Array // mat4 per bone length = boneCount*16
+  localRotations: Quat[] // quat per bone
+  localTranslations: Vec3[] // vec3 per bone
+  worldMatrices: Mat4[] // mat4 per bone
   ikChainInfo?: IKChainInfo[] // IK chain info per bone (only for IK chain bones)
   ikSolvers?: IKSolver[] // All IK solvers in the model
 }
@@ -125,15 +125,15 @@ export interface MorphRuntime {
 interface TweenState {
   // Bone rotation tweens
   rotActive: Uint8Array // 0/1 per bone
-  rotStartQuat: Float32Array // quat per bone (x,y,z,w)
-  rotTargetQuat: Float32Array // quat per bone (x,y,z,w)
+  rotStartQuat: Quat[]
+  rotTargetQuat: Quat[]
   rotStartTimeMs: Float32Array // one float per bone (ms)
   rotDurationMs: Float32Array // one float per bone (ms)
 
   // Bone translation tweens
   transActive: Uint8Array // 0/1 per bone
-  transStartVec: Float32Array // vec3 per bone (x,y,z)
-  transTargetVec: Float32Array // vec3 per bone (x,y,z)
+  transStartVec: Vec3[] // vec3 per bone (x,y,z)
+  transTargetVec: Vec3[] // vec3 per bone (x,y,z)
   transStartTimeMs: Float32Array // one float per bone (ms)
   transDurationMs: Float32Array // one float per bone (ms)
 
@@ -175,7 +175,7 @@ export class Model {
   private cachedIdentityMat2 = Mat4.identity()
 
   // Cached skin matrices array to avoid allocations in getSkinMatrices
-  private cachedSkinMatrices?: Float32Array
+  private skinMatricesArray?: Float32Array
 
   private tweenState!: TweenState
   private tweenTimeMs: number = 0 // Time tracking for tweens (milliseconds)
@@ -241,25 +241,24 @@ export class Model {
   private initializeRuntimeSkeleton(): void {
     const boneCount = this.skeleton.bones.length
 
+    // Pre-allocate object arrays for skeletal pose
+    const localRotations: Quat[] = new Array(boneCount)
+    const localTranslations: Vec3[] = new Array(boneCount)
+    const worldMatrices: Mat4[] = new Array(boneCount)
+    for (let i = 0; i < boneCount; i++) {
+      localRotations[i] = Quat.identity()
+      localTranslations[i] = Vec3.zeros()
+      worldMatrices[i] = Mat4.identity()
+    }
+
     this.runtimeSkeleton = {
-      localRotations: new Float32Array(boneCount * 4),
-      localTranslations: new Float32Array(boneCount * 3),
-      worldMatrices: new Float32Array(boneCount * 16),
+      localRotations,
+      localTranslations,
+      worldMatrices,
       nameIndex: this.skeleton.bones.reduce((acc, bone, index) => {
         acc[bone.name] = index
         return acc
       }, {} as Record<string, number>),
-    }
-
-    const rotations = this.runtimeSkeleton.localRotations
-    for (let i = 0; i < this.skeleton.bones.length; i++) {
-      const qi = i * 4
-      if (rotations[qi + 3] === 0) {
-        rotations[qi] = 0
-        rotations[qi + 1] = 0
-        rotations[qi + 2] = 0
-        rotations[qi + 3] = 1
-      }
     }
 
     // Initialize IK runtime state
@@ -274,8 +273,8 @@ export class Model {
     const ikChainInfo: IKChainInfo[] = new Array(boneCount)
     for (let i = 0; i < boneCount; i++) {
       ikChainInfo[i] = {
-        ikRotation: new Quat(0, 0, 0, 1),
-        localRotation: new Quat(0, 0, 0, 1),
+        ikRotation: Quat.identity(),
+        localRotation: Quat.identity(),
       }
     }
 
@@ -306,18 +305,30 @@ export class Model {
     const boneCount = this.skeleton.bones.length
     const morphCount = this.morphing.morphs.length
 
+    // Pre-allocate Quat and Vec3 arrays to avoid reallocation during tweens
+    const rotStartQuat: Quat[] = new Array(boneCount)
+    const rotTargetQuat: Quat[] = new Array(boneCount)
+    const transStartVec: Vec3[] = new Array(boneCount)
+    const transTargetVec: Vec3[] = new Array(boneCount)
+    for (let i = 0; i < boneCount; i++) {
+      rotStartQuat[i] = Quat.identity()
+      rotTargetQuat[i] = Quat.identity()
+      transStartVec[i] = Vec3.zeros()
+      transTargetVec[i] = Vec3.zeros()
+    }
+
     this.tweenState = {
       // Bone rotation tweens
       rotActive: new Uint8Array(boneCount),
-      rotStartQuat: new Float32Array(boneCount * 4),
-      rotTargetQuat: new Float32Array(boneCount * 4),
+      rotStartQuat,
+      rotTargetQuat,
       rotStartTimeMs: new Float32Array(boneCount),
       rotDurationMs: new Float32Array(boneCount),
 
       // Bone translation tweens
       transActive: new Uint8Array(boneCount),
-      transStartVec: new Float32Array(boneCount * 3),
-      transTargetVec: new Float32Array(boneCount * 3),
+      transStartVec,
+      transTargetVec,
       transStartTimeMs: new Float32Array(boneCount),
       transDurationMs: new Float32Array(boneCount),
 
@@ -360,25 +371,8 @@ export class Model {
       const t = Math.max(0, Math.min(1, (now - startMs) / durMs))
       const e = t // Linear interpolation
 
-      const qi = i * 4
-      const startQuat = new Quat(
-        state.rotStartQuat[qi],
-        state.rotStartQuat[qi + 1],
-        state.rotStartQuat[qi + 2],
-        state.rotStartQuat[qi + 3]
-      )
-      const targetQuat = new Quat(
-        state.rotTargetQuat[qi],
-        state.rotTargetQuat[qi + 1],
-        state.rotTargetQuat[qi + 2],
-        state.rotTargetQuat[qi + 3]
-      )
-      const result = Quat.slerp(startQuat, targetQuat, e)
-
-      rotations[qi] = result.x
-      rotations[qi + 1] = result.y
-      rotations[qi + 2] = result.z
-      rotations[qi + 3] = result.w
+      const result = Quat.slerp(state.rotStartQuat[i], state.rotTargetQuat[i], e)
+      rotations[i].set(result)
 
       if (t >= 1) {
         state.rotActive[i] = 0
@@ -395,12 +389,11 @@ export class Model {
       const t = Math.max(0, Math.min(1, (now - startMs) / durMs))
       const e = t // Linear interpolation
 
-      const ti = i * 3
-      translations[ti] = state.transStartVec[ti] + (state.transTargetVec[ti] - state.transStartVec[ti]) * e
-      translations[ti + 1] =
-        state.transStartVec[ti + 1] + (state.transTargetVec[ti + 1] - state.transStartVec[ti + 1]) * e
-      translations[ti + 2] =
-        state.transStartVec[ti + 2] + (state.transTargetVec[ti + 2] - state.transStartVec[ti + 2]) * e
+      const startVec = state.transStartVec[i]
+      const targetVec = state.transTargetVec[i]
+      translations[i].x = startVec.x + (targetVec.x - startVec.x) * e
+      translations[i].y = startVec.y + (targetVec.y - startVec.y) * e
+      translations[i].z = startVec.z + (targetVec.z - startVec.z) * e
 
       if (t >= 1) {
         state.transActive[i] = 0
@@ -483,7 +476,8 @@ export class Model {
 
   rotateBones(names: string[], quats: Quat[], durationMs?: number): void {
     const state = this.tweenState
-    const normalized = quats.map((q) => q.normalize())
+    // Clone and normalize to avoid mutating input
+    quats.forEach((q) => q.normalize())
     const now = this.tweenTimeMs
     const dur = durationMs && durationMs > 0 ? durationMs : 0
 
@@ -492,56 +486,38 @@ export class Model {
       const idx = this.runtimeSkeleton.nameIndex[name] ?? -1
       if (idx < 0 || idx >= this.skeleton.bones.length) continue
 
-      const qi = idx * 4
       const rotations = this.runtimeSkeleton.localRotations
-      const [tx, ty, tz, tw] = normalized[i].toArray()
+      const targetNorm = quats[i]
 
       if (dur === 0) {
-        rotations[qi] = tx
-        rotations[qi + 1] = ty
-        rotations[qi + 2] = tz
-        rotations[qi + 3] = tw
+        rotations[idx].set(targetNorm)
         state.rotActive[idx] = 0
         continue
       }
 
-      let sx = rotations[qi]
-      let sy = rotations[qi + 1]
-      let sz = rotations[qi + 2]
-      let sw = rotations[qi + 3]
+      const currentRot = rotations[idx]
+      let sx = currentRot.x
+      let sy = currentRot.y
+      let sz = currentRot.z
+      let sw = currentRot.w
 
       if (state.rotActive[idx] === 1) {
         const startMs = state.rotStartTimeMs[idx]
         const prevDur = Math.max(1, state.rotDurationMs[idx])
         const t = Math.max(0, Math.min(1, (now - startMs) / prevDur))
         const e = t // Linear interpolation
-        const startQuat = new Quat(
-          state.rotStartQuat[qi],
-          state.rotStartQuat[qi + 1],
-          state.rotStartQuat[qi + 2],
-          state.rotStartQuat[qi + 3]
-        )
-        const targetQuat = new Quat(
-          state.rotTargetQuat[qi],
-          state.rotTargetQuat[qi + 1],
-          state.rotTargetQuat[qi + 2],
-          state.rotTargetQuat[qi + 3]
-        )
-        const result = Quat.slerp(startQuat, targetQuat, e)
+        const result = Quat.slerp(state.rotStartQuat[idx], state.rotTargetQuat[idx], e)
         sx = result.x
         sy = result.y
         sz = result.z
         sw = result.w
       }
 
-      state.rotStartQuat[qi] = sx
-      state.rotStartQuat[qi + 1] = sy
-      state.rotStartQuat[qi + 2] = sz
-      state.rotStartQuat[qi + 3] = sw
-      state.rotTargetQuat[qi] = tx
-      state.rotTargetQuat[qi + 1] = ty
-      state.rotTargetQuat[qi + 2] = tz
-      state.rotTargetQuat[qi + 3] = tw
+      state.rotStartQuat[idx].x = sx
+      state.rotStartQuat[idx].y = sy
+      state.rotStartQuat[idx].z = sz
+      state.rotStartQuat[idx].w = sw
+      state.rotTargetQuat[idx].set(targetNorm)
       state.rotStartTimeMs[idx] = now
       state.rotDurationMs[idx] = dur
       state.rotActive[idx] = 1
@@ -554,7 +530,6 @@ export class Model {
     const state = this.tweenState
     const now = this.tweenTimeMs
     const dur = durationMs && durationMs > 0 ? durationMs : 0
-    const localRot = this.runtimeSkeleton.localRotations
 
     // Compute bind pose world positions for all bones
     const skeleton = this.skeleton
@@ -575,9 +550,8 @@ export class Model {
       if (idx < 0 || idx >= this.skeleton.bones.length) continue
 
       const bone = this.skeleton.bones[idx]
-      const ti = idx * 3
-      const qi = idx * 4
       const translations = this.runtimeSkeleton.localTranslations
+      const localRot = this.runtimeSkeleton.localRotations
       const vmdRelativeTranslation = relativeTranslations[i]
 
       // VMD translation is relative to bind pose world position
@@ -591,7 +565,7 @@ export class Model {
       if (bone.parentIndex >= 0) {
         parentBindPoseWorldPos = computeBindPoseWorldPosition(bone.parentIndex)
       } else {
-        parentBindPoseWorldPos = new Vec3(0, 0, 0)
+        parentBindPoseWorldPos = Vec3.zeros()
       }
 
       // Transform target world position to parent's local space
@@ -604,8 +578,9 @@ export class Model {
       )
 
       // Apply inverse rotation to get local translation
-      const localRotation = new Quat(localRot[qi], localRot[qi + 1], localRot[qi + 2], localRot[qi + 3])
-      const invRotation = localRotation.conjugate().normalize()
+      const localRotation = localRot[idx]
+      // Clone to avoid mutating, then conjugate and normalize
+      const invRotation = localRotation.clone().conjugate().normalize()
       const rotationMat = Mat4.fromQuat(invRotation.x, invRotation.y, invRotation.z, invRotation.w)
       const rm = rotationMat.values
       const localTranslation = new Vec3(
@@ -617,33 +592,36 @@ export class Model {
       const [tx, ty, tz] = [localTranslation.x, localTranslation.y, localTranslation.z]
 
       if (dur === 0) {
-        translations[ti] = tx
-        translations[ti + 1] = ty
-        translations[ti + 2] = tz
+        translations[idx].x = tx
+        translations[idx].y = ty
+        translations[idx].z = tz
         state.transActive[idx] = 0
         continue
       }
 
-      let sx = translations[ti]
-      let sy = translations[ti + 1]
-      let sz = translations[ti + 2]
+      const currentTrans = translations[idx]
+      let sx = currentTrans.x
+      let sy = currentTrans.y
+      let sz = currentTrans.z
 
       if (state.transActive[idx] === 1) {
         const startMs = state.transStartTimeMs[idx]
         const prevDur = Math.max(1, state.transDurationMs[idx])
         const t = Math.max(0, Math.min(1, (now - startMs) / prevDur))
         const e = t // Linear interpolation
-        sx = state.transStartVec[ti] + (state.transTargetVec[ti] - state.transStartVec[ti]) * e
-        sy = state.transStartVec[ti + 1] + (state.transTargetVec[ti + 1] - state.transStartVec[ti + 1]) * e
-        sz = state.transStartVec[ti + 2] + (state.transTargetVec[ti + 2] - state.transStartVec[ti + 2]) * e
+        const startVec = state.transStartVec[idx]
+        const targetVec = state.transTargetVec[idx]
+        sx = startVec.x + (targetVec.x - startVec.x) * e
+        sy = startVec.y + (targetVec.y - startVec.y) * e
+        sz = startVec.z + (targetVec.z - startVec.z) * e
       }
 
-      state.transStartVec[ti] = sx
-      state.transStartVec[ti + 1] = sy
-      state.transStartVec[ti + 2] = sz
-      state.transTargetVec[ti] = tx
-      state.transTargetVec[ti + 1] = ty
-      state.transTargetVec[ti + 2] = tz
+      state.transStartVec[idx].x = sx
+      state.transStartVec[idx].y = sy
+      state.transStartVec[idx].z = sz
+      state.transTargetVec[idx].x = tx
+      state.transTargetVec[idx].y = ty
+      state.transTargetVec[idx].z = tz
       state.transStartTimeMs[idx] = now
       state.transDurationMs[idx] = dur
       state.transActive[idx] = 1
@@ -651,7 +629,14 @@ export class Model {
   }
 
   getBoneWorldMatrices(): Float32Array {
-    return this.runtimeSkeleton.worldMatrices
+    // Convert Mat4[] to Float32Array for WebGPU compatibility
+    const boneCount = this.skeleton.bones.length
+    const worldMats = this.runtimeSkeleton.worldMatrices
+    const result = new Float32Array(boneCount * 16)
+    for (let i = 0; i < boneCount; i++) {
+      result.set(worldMats[i].values, i * 16)
+    }
+    return result
   }
 
   getBoneInverseBindMatrices(): Float32Array {
@@ -664,19 +649,18 @@ export class Model {
     const invBindMats = this.skeleton.inverseBindMatrices
 
     // Initialize cached array if needed or if bone count changed
-    if (!this.cachedSkinMatrices || this.cachedSkinMatrices.length !== boneCount * 16) {
-      this.cachedSkinMatrices = new Float32Array(boneCount * 16)
+    if (!this.skinMatricesArray || this.skinMatricesArray.length !== boneCount * 16) {
+      this.skinMatricesArray = new Float32Array(boneCount * 16)
     }
 
-    const skinMatrices = this.cachedSkinMatrices
+    const skinMatrices = this.skinMatricesArray
 
     // Compute skin matrices: skinMatrix = worldMatrix × inverseBindMatrix
-    // Use Mat4.multiplyArrays to avoid creating Mat4 objects
     for (let i = 0; i < boneCount; i++) {
-      const worldOffset = i * 16
+      const worldMat = worldMats[i]
       const invBindOffset = i * 16
       const skinOffset = i * 16
-      Mat4.multiplyArrays(worldMats, worldOffset, invBindMats, invBindOffset, skinMatrices, skinOffset)
+      Mat4.multiplyArrays(worldMat.values, 0, invBindMats, invBindOffset, skinMatrices, skinOffset)
     }
 
     return skinMatrices
@@ -973,18 +957,13 @@ export class Model {
       const boneIdx = this.runtimeSkeleton.nameIndex[boneName]
       if (boneIdx === undefined) continue
 
-      const rotOffset = boneIdx * 4
-      const transOffset = boneIdx * 3
+      const localRot = this.runtimeSkeleton.localRotations[boneIdx]
+      const localTrans = this.runtimeSkeleton.localTranslations[boneIdx]
 
       if (!frameB) {
         // No interpolation needed - direct assignment
-        this.runtimeSkeleton.localRotations[rotOffset] = frameA.rotation.x
-        this.runtimeSkeleton.localRotations[rotOffset + 1] = frameA.rotation.y
-        this.runtimeSkeleton.localRotations[rotOffset + 2] = frameA.rotation.z
-        this.runtimeSkeleton.localRotations[rotOffset + 3] = frameA.rotation.w
-        this.runtimeSkeleton.localTranslations[transOffset] = frameA.translation.x
-        this.runtimeSkeleton.localTranslations[transOffset + 1] = frameA.translation.y
-        this.runtimeSkeleton.localTranslations[transOffset + 2] = frameA.translation.z
+        localRot.set(frameA.rotation)
+        localTrans.set(frameA.translation)
       } else {
         const timeA = keyFrames[idx].time
         const timeB = keyFrames[idx + 1].time
@@ -1001,7 +980,7 @@ export class Model {
           gradient
         )
 
-        // Use Quat.slerp but extract components directly to avoid object allocation
+        // Use Quat.slerp to interpolate rotation
         const rotation = Quat.slerp(frameA.rotation, frameB.rotation, rotT)
 
         // Interpolate translation using bezier for each component
@@ -1019,17 +998,11 @@ export class Model {
         const tyWeight = getWeight(16)
         const tzWeight = getWeight(32)
 
-        // Direct array writes instead of Vec3 allocation
-        this.runtimeSkeleton.localRotations[rotOffset] = rotation.x
-        this.runtimeSkeleton.localRotations[rotOffset + 1] = rotation.y
-        this.runtimeSkeleton.localRotations[rotOffset + 2] = rotation.z
-        this.runtimeSkeleton.localRotations[rotOffset + 3] = rotation.w
-        this.runtimeSkeleton.localTranslations[transOffset] =
-          frameA.translation.x + (frameB.translation.x - frameA.translation.x) * txWeight
-        this.runtimeSkeleton.localTranslations[transOffset + 1] =
-          frameA.translation.y + (frameB.translation.y - frameA.translation.y) * tyWeight
-        this.runtimeSkeleton.localTranslations[transOffset + 2] =
-          frameA.translation.z + (frameB.translation.z - frameA.translation.z) * tzWeight
+        // Direct property writes to avoid object allocation
+        localRot.set(rotation)
+        localTrans.x = frameA.translation.x + (frameB.translation.x - frameA.translation.x) * txWeight
+        localTrans.y = frameA.translation.y + (frameB.translation.y - frameA.translation.y) * tyWeight
+        localTrans.z = frameA.translation.z + (frameB.translation.z - frameA.translation.z) * tzWeight
       }
     }
 
@@ -1137,7 +1110,7 @@ export class Model {
     const bones = this.skeleton.bones
     const localRot = this.runtimeSkeleton.localRotations
     const localTrans = this.runtimeSkeleton.localTranslations
-    const worldBuf = this.runtimeSkeleton.worldMatrices
+    const worldMats = this.runtimeSkeleton.worldMatrices
     const boneCount = bones.length
 
     if (boneCount === 0) return
@@ -1153,8 +1126,8 @@ export class Model {
         console.warn(`[RZM] bone ${i} parent out of range: ${b.parentIndex}`)
       }
 
-      const qi = i * 4
-      let rotateM = Mat4.fromQuat(localRot[qi], localRot[qi + 1], localRot[qi + 2], localRot[qi + 3])
+      const boneRot = localRot[i]
+      let rotateM = Mat4.fromQuat(boneRot.x, boneRot.y, boneRot.z, boneRot.w)
       let addLocalTx = 0,
         addLocalTy = 0,
         addLocalTz = 0
@@ -1169,14 +1142,12 @@ export class Model {
         const hasRatio = Math.abs(ratio) > 1e-6
 
         if (hasRatio) {
-          const apQi = appendParentIdx * 4
-          const apTi = appendParentIdx * 3
-
           if (b.appendRotate) {
-            let ax = localRot[apQi]
-            let ay = localRot[apQi + 1]
-            let az = localRot[apQi + 2]
-            const aw = localRot[apQi + 3]
+            const appendRot = localRot[appendParentIdx]
+            let ax = appendRot.x
+            let ay = appendRot.y
+            let az = appendRot.z
+            const aw = appendRot.w
             const absRatio = ratio < 0 ? -ratio : ratio
             if (ratio < 0) {
               ax = -ax
@@ -1184,40 +1155,40 @@ export class Model {
               az = -az
             }
             const appendQuat = new Quat(ax, ay, az, aw)
-            const result = Quat.slerp(new Quat(0, 0, 0, 1), appendQuat, absRatio)
+            const result = Quat.slerp(Quat.identity(), appendQuat, absRatio)
             rotateM = Mat4.fromQuat(result.x, result.y, result.z, result.w).multiply(rotateM)
           }
 
           if (b.appendMove) {
+            const appendTrans = localTrans[appendParentIdx]
             const appendRatio = b.appendRatio ?? 1
-            addLocalTx = localTrans[apTi] * appendRatio
-            addLocalTy = localTrans[apTi + 1] * appendRatio
-            addLocalTz = localTrans[apTi + 2] * appendRatio
+            addLocalTx = appendTrans.x * appendRatio
+            addLocalTy = appendTrans.y * appendRatio
+            addLocalTz = appendTrans.z * appendRatio
           }
         }
       }
 
       // Build local matrix: identity + bind translation, then rotation, then local translation, then append translation
-      const ti = i * 3
-      const localTx = localTrans[ti] + addLocalTx
-      const localTy = localTrans[ti + 1] + addLocalTy
-      const localTz = localTrans[ti + 2] + addLocalTz
+      const boneTrans = localTrans[i]
+      const localTx = boneTrans.x + addLocalTx
+      const localTy = boneTrans.y + addLocalTy
+      const localTz = boneTrans.z + addLocalTz
       this.cachedIdentityMat1
         .setIdentity()
         .translateInPlace(b.bindTranslation[0], b.bindTranslation[1], b.bindTranslation[2])
       this.cachedIdentityMat2.setIdentity().translateInPlace(localTx, localTy, localTz)
       const localM = this.cachedIdentityMat1.multiply(rotateM).multiply(this.cachedIdentityMat2)
 
-      const worldOffset = i * 16
+      const worldMat = worldMats[i]
       if (b.parentIndex >= 0) {
         const p = b.parentIndex
         if (!computed[p]) computeWorld(p)
-        const parentOffset = p * 16
-        // Use cachedIdentityMat2 as temporary buffer for parent * local multiplication
-        Mat4.multiplyArrays(worldBuf, parentOffset, localM.values, 0, this.cachedIdentityMat2.values, 0)
-        worldBuf.subarray(worldOffset, worldOffset + 16).set(this.cachedIdentityMat2.values)
+        const parentMat = worldMats[p]
+        // Multiply parent world matrix by local matrix
+        Mat4.multiplyArrays(parentMat.values, 0, localM.values, 0, worldMat.values, 0)
       } else {
-        worldBuf.subarray(worldOffset, worldOffset + 16).set(localM.values)
+        worldMat.values.set(localM.values)
       }
       computed[i] = true
     }

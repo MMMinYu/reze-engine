@@ -14,6 +14,10 @@ export class Vec3 {
     this.z = z
   }
 
+  static zeros(): Vec3 {
+    return new Vec3(0, 0, 0)
+  }
+
   add(other: Vec3): Vec3 {
     return new Vec3(this.x + other.x, this.y + other.y, this.z + other.z)
   }
@@ -26,10 +30,20 @@ export class Vec3 {
     return Math.sqrt(this.x * this.x + this.y * this.y + this.z * this.z)
   }
 
+  // Normalize this vector in-place (mutates this object)
   normalize(): Vec3 {
     const len = this.length()
-    if (len === 0) return new Vec3(0, 0, 0)
-    return new Vec3(this.x / len, this.y / len, this.z / len)
+    if (len === 0) {
+      this.x = 0
+      this.y = 0
+      this.z = 0
+    } else {
+      const invLen = 1 / len
+      this.x *= invLen
+      this.y *= invLen
+      this.z *= invLen
+    }
+    return this
   }
 
   cross(other: Vec3): Vec3 {
@@ -47,6 +61,14 @@ export class Vec3 {
   scale(scalar: number): Vec3 {
     return new Vec3(this.x * scalar, this.y * scalar, this.z * scalar)
   }
+
+  // Set this vector's components from another vector (in-place mutation)
+  set(other: Vec3): Vec3 {
+    this.x = other.x
+    this.y = other.y
+    this.z = other.z
+    return this
+  }
 }
 
 export class Quat {
@@ -60,6 +82,10 @@ export class Quat {
     this.y = y
     this.z = z
     this.w = w
+  }
+
+  static identity(): Quat {
+    return new Quat(0, 0, 0, 1)
   }
 
   add(other: Quat): Quat {
@@ -80,32 +106,66 @@ export class Quat {
     )
   }
 
+  // Conjugate this quaternion in-place (mutates this object)
+  // Conjugate (inverse for unit quaternions): (x, y, z, w) -> (-x, -y, -z, w)
   conjugate(): Quat {
-    // Conjugate (inverse for unit quaternions): (x, y, z, w) -> (-x, -y, -z, w)
-    return new Quat(-this.x, -this.y, -this.z, this.w)
+    this.x = -this.x
+    this.y = -this.y
+    this.z = -this.z
+    return this
   }
 
   length(): number {
     return Math.sqrt(this.x * this.x + this.y * this.y + this.z * this.z + this.w * this.w)
   }
 
+  // Normalize this quaternion in-place (mutates this object)
   normalize(): Quat {
     const len = this.length()
-    if (len === 0) return new Quat(0, 0, 0, 1)
-    return new Quat(this.x / len, this.y / len, this.z / len, this.w / len)
+    if (len === 0) {
+      this.x = 0
+      this.y = 0
+      this.z = 0
+      this.w = 1
+    } else {
+      const invLen = 1 / len
+      this.x *= invLen
+      this.y *= invLen
+      this.z *= invLen
+      this.w *= invLen
+    }
+    return this
   }
 
   // Static method: create quaternion from rotation axis and angle
   static fromAxisAngle(axis: Vec3, angle: number): Quat {
-    const normalizedAxis = axis.normalize()
+    // Clone to avoid mutating input, then normalize
+    const nx = axis.x
+    const ny = axis.y
+    const nz = axis.z
+    const len = Math.sqrt(nx * nx + ny * ny + nz * nz)
+    const invLen = len > 0 ? 1 / len : 0
+    const normalizedX = nx * invLen
+    const normalizedY = ny * invLen
+    const normalizedZ = nz * invLen
+
     const halfAngle = angle * 0.5
     const sinHalf = Math.sin(halfAngle)
     const cosHalf = Math.cos(halfAngle)
-    return new Quat(normalizedAxis.x * sinHalf, normalizedAxis.y * sinHalf, normalizedAxis.z * sinHalf, cosHalf)
+    return new Quat(normalizedX * sinHalf, normalizedY * sinHalf, normalizedZ * sinHalf, cosHalf)
   }
 
   toArray(): [number, number, number, number] {
     return [this.x, this.y, this.z, this.w]
+  }
+
+  // Set this quaternion's components from another quaternion (in-place mutation)
+  set(other: Quat): Quat {
+    this.x = other.x
+    this.y = other.y
+    this.z = other.z
+    this.w = other.w
+    return this
   }
 
   // Spherical linear interpolation between two quaternions
@@ -205,9 +265,13 @@ export class Mat4 {
   // For left-handed: camera looks along +Z direction
   static lookAt(eye: Vec3, target: Vec3, up: Vec3): Mat4 {
     // In left-handed: forward = target - eye (Z+ direction)
-    const forward = target.subtract(eye).normalize()
-    const right = up.cross(forward).normalize() // X+ is right
-    const upVec = forward.cross(right).normalize() // Y+ is up
+    // These operations create new Vec3 objects, so normalize() mutates those new objects
+    const forward = target.subtract(eye)
+    forward.normalize()
+    const right = up.cross(forward)
+    right.normalize() // X+ is right
+    const upVec = forward.cross(right)
+    upVec.normalize() // Y+ is up
 
     return new Mat4(
       new Float32Array([
