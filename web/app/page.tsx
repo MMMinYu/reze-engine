@@ -254,7 +254,7 @@ export default function Home() {
       <Header stats={stats} />
 
       {engineError && (
-        <div className="absolute inset-0 w-full h-full flex items-center justify-center text-white p-6">
+        <div className="absolute inset-0 w-full h-full flex items-center justify-center text-white p-6 z-50 text-lg font-medium">
           Engine Error: {engineError}
         </div>
       )}
