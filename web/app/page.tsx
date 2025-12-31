@@ -176,7 +176,7 @@ export default function Home() {
       // Initialize engine
       try {
         const engine = new Engine(canvasRef.current, {
-          ambientColor: new Vec3(0.75, 0.85, 1.0),
+          ambientColor: new Vec3(0.77, 0.88, 1.0),
           bloomIntensity: 0.15,
           rimLightIntensity: 0.4,
           cameraDistance: 26.5,
@@ -184,13 +184,14 @@ export default function Home() {
         })
         engineRef.current = engine
         await engine.init()
-        await engine.loadModel("/models/塞尔凯特2/塞尔凯特2.pmx")
+        await engine.loadModel("/models/reze/reze.pmx")
 
         setLoading(false)
 
         engine.runRenderLoop(() => {
           setStats(engine.getStats())
         })
+        engine.setMorphWeight("抗穿模", 1.0)
 
         await engine.loadAnimation("/animations/IRIS OUT.vmd")
         const prog = engine.getAnimationProgress()

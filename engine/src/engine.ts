@@ -366,12 +366,12 @@ export class Engine {
 
           let lightAccum = light.ambientColor;
           
-          // Rim light calculation
+          // Rim light calculation - proper Fresnel for edge-only highlights
           let viewDir = normalize(camera.viewPos - input.worldPos);
-          var rimFactor = 1.0 - max(dot(n, viewDir), 0.0);
-          rimFactor = rimFactor * rimFactor; // Optimized: direct multiply instead of pow(x, 2.0)
+          let fresnel = 1.0 - abs(dot(n, viewDir));
+          let rimFactor = pow(fresnel, 4.0); // Higher power for sharper edge-only effect
           let rimLight = material.rimColor * material.rimIntensity * rimFactor;
-          
+
           let color = albedo * lightAccum + rimLight;
           
           return vec4f(color, finalAlpha);
