@@ -178,7 +178,7 @@ export default function Home() {
         const engine = new Engine(canvasRef.current, {
           ambientColor: new Vec3(0.77, 0.88, 1.0),
           bloomIntensity: 0.15,
-          rimLightIntensity: 0.4,
+          rimLightIntensity: 0.5,
           cameraDistance: 26.5,
           cameraTarget: new Vec3(0, 12.1, 0),
         })
