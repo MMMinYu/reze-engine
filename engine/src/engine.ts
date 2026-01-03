@@ -9,6 +9,16 @@ export type EngineOptions = {
   rimLightIntensity?: number
   cameraDistance?: number
   cameraTarget?: Vec3
+  cameraFov?: number
+}
+
+export const DEFAULT_ENGINE_OPTIONS: Required<EngineOptions> = {
+  ambientColor: new Vec3(1.0, 1.0, 1.0),
+  bloomIntensity: 0.12,
+  rimLightIntensity: 0.45,
+  cameraDistance: 26.6,
+  cameraTarget: new Vec3(0, 12.5, 0),
+  cameraFov: Math.PI / 4,
 }
 
 export interface EngineStats {
@@ -42,8 +52,9 @@ export class Engine {
   private camera!: Camera
   private cameraUniformBuffer!: GPUBuffer
   private cameraMatrixData = new Float32Array(36)
-  private cameraDistance: number = 26.6
-  private cameraTarget: Vec3 = new Vec3(0, 12.5, 0)
+  private cameraDistance!: number
+  private cameraTarget!: Vec3
+  private cameraFov!: number
   private lightUniformBuffer!: GPUBuffer
   private lightData = new Float32Array(4)
   private vertexBuffer!: GPUBuffer
@@ -72,18 +83,8 @@ export class Engine {
   private readonly STENCIL_EYE_VALUE = 1
   private readonly BLOOM_DOWNSCALE_FACTOR = 2
 
-  // Default values
-  private static readonly DEFAULT_BLOOM_THRESHOLD = 0.01
-  private static readonly DEFAULT_BLOOM_INTENSITY = 0.12
-  private static readonly DEFAULT_RIM_LIGHT_INTENSITY = 0.45
-  private static readonly DEFAULT_CAMERA_DISTANCE = 26.6
-  private static readonly DEFAULT_CAMERA_TARGET = new Vec3(0, 12.5, 0)
-  private static readonly TRANSPARENCY_EPSILON = 0.001
-  private static readonly STATS_FPS_UPDATE_INTERVAL_MS = 1000
-  private static readonly STATS_FRAME_TIME_ROUNDING = 100
-
   // Ambient light settings
-  private ambientColor: Vec3 = new Vec3(1.0, 1.0, 1.0)
+  private ambientColor!: Vec3
   // Bloom post-processing textures
   private sceneRenderTexture!: GPUTexture
   private sceneRenderTextureView!: GPUTextureView // Cached view (recreated on resize)
@@ -104,10 +105,10 @@ export class Engine {
   private bloomBlurVBindGroup?: GPUBindGroup
   private bloomComposeBindGroup?: GPUBindGroup
   // Bloom settings
-  private bloomThreshold: number = Engine.DEFAULT_BLOOM_THRESHOLD
-  private bloomIntensity: number = Engine.DEFAULT_BLOOM_INTENSITY
+  private bloomThreshold!: number
+  private bloomIntensity!: number
   // Rim light settings
-  private rimLightIntensity: number = Engine.DEFAULT_RIM_LIGHT_INTENSITY
+  private rimLightIntensity!: number
 
   private currentModel: Model | null = null
   private modelDir: string = ""
@@ -132,11 +133,12 @@ export class Engine {
   constructor(canvas: HTMLCanvasElement, options?: EngineOptions) {
     this.canvas = canvas
     if (options) {
-      this.ambientColor = options.ambientColor ?? new Vec3(1.0, 1.0, 1.0)
-      this.bloomIntensity = options.bloomIntensity ?? Engine.DEFAULT_BLOOM_INTENSITY
-      this.rimLightIntensity = options.rimLightIntensity ?? Engine.DEFAULT_RIM_LIGHT_INTENSITY
-      this.cameraDistance = options.cameraDistance ?? Engine.DEFAULT_CAMERA_DISTANCE
-      this.cameraTarget = options.cameraTarget ?? Engine.DEFAULT_CAMERA_TARGET
+      this.ambientColor = options.ambientColor ?? DEFAULT_ENGINE_OPTIONS.ambientColor!
+      this.bloomIntensity = options.bloomIntensity ?? DEFAULT_ENGINE_OPTIONS.bloomIntensity
+      this.rimLightIntensity = options.rimLightIntensity ?? DEFAULT_ENGINE_OPTIONS.rimLightIntensity
+      this.cameraDistance = options.cameraDistance ?? DEFAULT_ENGINE_OPTIONS.cameraDistance
+      this.cameraTarget = options.cameraTarget ?? DEFAULT_ENGINE_OPTIONS.cameraTarget
+      this.cameraFov = options.cameraFov ?? DEFAULT_ENGINE_OPTIONS.cameraFov
     }
   }
 
@@ -1052,7 +1054,7 @@ export class Engine {
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     })
 
-    this.camera = new Camera(Math.PI, Math.PI / 2.5, this.cameraDistance, this.cameraTarget)
+    this.camera = new Camera(Math.PI, Math.PI / 2.5, this.cameraDistance, this.cameraTarget, this.cameraFov)
 
     this.camera.aspect = this.canvas.width / this.canvas.height
     this.camera.attachControl(this.canvas)
@@ -1285,7 +1287,7 @@ export class Engine {
       if (!diffuseTexture) throw new Error(`Material "${mat.name}" has no diffuse texture`)
 
       const materialAlpha = mat.diffuse[3]
-      const isTransparent = materialAlpha < 1.0 - Engine.TRANSPARENCY_EPSILON
+      const isTransparent = materialAlpha < 1.0 - 0.001
 
       const materialUniformBuffer = this.createMaterialUniformBuffer(mat.name, materialAlpha, 0.0)
 
@@ -1739,17 +1741,15 @@ export class Engine {
       this.frameTimeSum -= avg
       this.frameTimeCount = maxSamples
     }
-    this.stats.frameTime =
-      Math.round((this.frameTimeSum / this.frameTimeCount) * Engine.STATS_FRAME_TIME_ROUNDING) /
-      Engine.STATS_FRAME_TIME_ROUNDING
+    this.stats.frameTime = Math.round((this.frameTimeSum / this.frameTimeCount) * 100) / 100
 
     // FPS tracking
     const now = performance.now()
     this.framesSinceLastUpdate++
     const elapsed = now - this.lastFpsUpdate
 
-    if (elapsed >= Engine.STATS_FPS_UPDATE_INTERVAL_MS) {
-      this.stats.fps = Math.round((this.framesSinceLastUpdate / elapsed) * Engine.STATS_FPS_UPDATE_INTERVAL_MS)
+    if (elapsed >= 1000) {
+      this.stats.fps = Math.round((this.framesSinceLastUpdate / elapsed) * 1000)
       this.framesSinceLastUpdate = 0
       this.lastFpsUpdate = now
     }

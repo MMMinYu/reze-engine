@@ -179,8 +179,9 @@ export default function Home() {
           ambientColor: new Vec3(0.82, 0.88, 1.0),
           bloomIntensity: 0.12,
           rimLightIntensity: 0.5,
-          cameraDistance: 26.5,
-          cameraTarget: new Vec3(0, 12.1, 0),
+          cameraDistance: 40,
+          cameraTarget: new Vec3(0, 11.4, 0),
+          cameraFov: Math.PI / 6,
         })
         engineRef.current = engine
         await engine.init()
