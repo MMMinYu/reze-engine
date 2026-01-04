@@ -185,7 +185,7 @@ export default function Home() {
         })
         engineRef.current = engine
         await engine.init()
-        await engine.loadModel("/models/reze/reze.pmx")
+        await engine.loadModel("/models/reze/reze_smol.pmx")
 
         setLoading(false)
 
