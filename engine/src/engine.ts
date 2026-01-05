@@ -621,7 +621,7 @@ export class Engine {
         writeMask: 0,
       },
       fragmentEntryPoint: "fs",
-      cullMode: "front",
+      cullMode: "none",
       depthStencil: {
         format: "depth24plus-stencil8",
         depthWriteEnabled: true,
@@ -640,7 +640,7 @@ export class Engine {
         shaderModule,
         vertexBuffers: fullVertexBuffers,
         fragmentTarget: standardBlend,
-        cullMode: "front",
+        cullMode: "none",
         depthStencil: {
           format: "depth24plus-stencil8",
           depthWriteEnabled: false,
@@ -1155,6 +1155,7 @@ export class Engine {
     this.modelDir = dir
 
     const model = await PmxLoader.load(path)
+    console.log(model)
     await this.setupModelBuffers(model)
   }
 

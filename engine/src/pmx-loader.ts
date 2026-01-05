@@ -313,7 +313,7 @@ export class PmxLoader {
         mat.isFace = materialName.includes("face") || materialName.includes("脸")
 
         // Classify hair materials
-        mat.isHair = materialName.includes("hair_f")
+        mat.isHair = materialName.includes("hair_f") || materialName.includes("头发")
 
         this.materials.push(mat)
       }
