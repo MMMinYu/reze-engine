@@ -195,7 +195,7 @@ export default function Home() {
         })
         engine.setMorphWeight("抗穿模", 1.0)
 
-        await engine.loadAnimation("/animations/pool.vmd")
+        await engine.loadAnimation("/animations/IRIS OUT.vmd")
         const prog = engine.getAnimationProgress()
         setProgress(prog)
       } catch (error) {
