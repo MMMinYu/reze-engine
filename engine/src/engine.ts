@@ -6,6 +6,7 @@ import { PmxLoader } from "./pmx-loader"
 export type EngineOptions = {
   ambientColor?: Vec3
   bloomIntensity?: number
+  bloomThreshold?: number
   rimLightIntensity?: number
   cameraDistance?: number
   cameraTarget?: Vec3
@@ -15,6 +16,7 @@ export type EngineOptions = {
 export const DEFAULT_ENGINE_OPTIONS: Required<EngineOptions> = {
   ambientColor: new Vec3(1.0, 1.0, 1.0),
   bloomIntensity: 0.12,
+  bloomThreshold: 0.5,
   rimLightIntensity: 0.45,
   cameraDistance: 26.6,
   cameraTarget: new Vec3(0, 12.5, 0),
@@ -135,6 +137,7 @@ export class Engine {
     if (options) {
       this.ambientColor = options.ambientColor ?? DEFAULT_ENGINE_OPTIONS.ambientColor!
       this.bloomIntensity = options.bloomIntensity ?? DEFAULT_ENGINE_OPTIONS.bloomIntensity
+      this.bloomThreshold = options.bloomThreshold ?? DEFAULT_ENGINE_OPTIONS.bloomThreshold
       this.rimLightIntensity = options.rimLightIntensity ?? DEFAULT_ENGINE_OPTIONS.rimLightIntensity
       this.cameraDistance = options.cameraDistance ?? DEFAULT_ENGINE_OPTIONS.cameraDistance
       this.cameraTarget = options.cameraTarget ?? DEFAULT_ENGINE_OPTIONS.cameraTarget

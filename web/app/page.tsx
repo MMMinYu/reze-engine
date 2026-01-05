@@ -176,12 +176,13 @@ export default function Home() {
       // Initialize engine
       try {
         const engine = new Engine(canvasRef.current, {
-          ambientColor: new Vec3(0.82, 0.88, 1.0),
-          bloomIntensity: 0.12,
+          ambientColor: new Vec3(0.82, 0.9, 0.99),
+          bloomIntensity: 0.15,
+          bloomThreshold: 0.5,
           rimLightIntensity: 0.5,
-          cameraDistance: 30.5,
-          cameraTarget: new Vec3(0, 12, 0),
-          cameraFov: Math.PI / 4.5,
+          cameraDistance: 26.5,
+          cameraTarget: new Vec3(0, 12.2, 0),
+          cameraFov: Math.PI / 4,
         })
         engineRef.current = engine
         await engine.init()
@@ -194,7 +195,7 @@ export default function Home() {
         })
         engine.setMorphWeight("抗穿模", 1.0)
 
-        await engine.loadAnimation("/animations/IRIS OUT.vmd")
+        await engine.loadAnimation("/animations/pool.vmd")
         const prog = engine.getAnimationProgress()
         setProgress(prog)
       } catch (error) {
