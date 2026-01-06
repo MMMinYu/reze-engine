@@ -274,8 +274,8 @@ export default function Home() {
 
       {/* Player Controls */}
       {!loading && !engineError && (
-        <div className="absolute bottom-4 left-4 right-4 z-50 px-2 bg-black/30 backdrop-blur-xs rounded-full outline-none">
-          <div className="max-w-4xl mx-auto pr-2">
+        <div className="absolute bottom-4 left-4 right-4 z-50 ">
+          <div className="max-w-4xl mx-auto  px-2 pr-4 bg-black/30 backdrop-blur-xs rounded-full outline-none">
             {/* Single Row: Play/Pause - Time - Slider - Remaining Time */}
             <div className="flex items-center gap-3">
               {/* Play/Pause Button (Left) */}
