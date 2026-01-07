@@ -14,7 +14,7 @@ export type EngineOptions = {
 }
 
 export const DEFAULT_ENGINE_OPTIONS: Required<EngineOptions> = {
-  ambientColor: new Vec3(1.0, 1.0, 1.0),
+  ambientColor: new Vec3(0.85, 0.85, 0.85),
   bloomIntensity: 0.12,
   bloomThreshold: 0.5,
   rimLightIntensity: 0.45,
@@ -58,7 +58,8 @@ export class Engine {
   private cameraTarget!: Vec3
   private cameraFov!: number
   private lightUniformBuffer!: GPUBuffer
-  private lightData = new Float32Array(4)
+  private lightData = new Float32Array(64)
+  private lightCount = 0
   private vertexBuffer!: GPUBuffer
   private indexBuffer?: GPUBuffer
   private resizeObserver: ResizeObserver | null = null
@@ -296,8 +297,14 @@ export class Engine {
           _padding: f32,
         };
 
+        struct Light {
+          direction: vec4f,
+          color: vec4f,
+        };
+
         struct LightUniforms {
-          ambientColor: vec3f,
+          ambientColor: vec4f,
+          lights: array<Light, 4>,
         };
 
         struct MaterialUniforms {
@@ -369,8 +376,18 @@ export class Engine {
           let n = normalize(input.normal);
           let albedo = textureSample(diffuseTexture, diffuseSampler, input.uv).rgb;
 
-          let lightAccum = light.ambientColor;
-          
+          // Accumulate light contribution
+          var lightAccum = light.ambientColor.xyz;
+          for (var i = 0u; i < 4u; i++) {
+            let intensity = light.lights[i].color.w;
+            if (intensity > 0.0) {
+              let l = -light.lights[i].direction.xyz;
+              let nDotL = max(dot(n, l), 0.0);
+              let radiance = light.lights[i].color.xyz * intensity;
+              lightAccum += radiance * nDotL;
+            }
+          }
+
           // Rim light calculation - proper Fresnel for edge-only highlights
           let viewDir = normalize(camera.viewPos - input.worldPos);
           let fresnel = 1.0 - abs(dot(n, viewDir));
@@ -1067,21 +1084,60 @@ export class Engine {
   private setupLighting() {
     this.lightUniformBuffer = this.device.createBuffer({
       label: "light uniforms",
-      size: 4 * 4, // 4 floats: ambientColor vec3f (3) + padding (1)
+      size: 64 * 4, // 64 floats: ambientColor vec4f (4) + 4 lights * 2 vec4f each (32)
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     })
 
-    this.setAmbientColor(this.ambientColor)
+    // Initialize light buffer to zeros
+    this.lightData.fill(0)
+    this.lightCount = 0
 
-    this.device.queue.writeBuffer(this.lightUniformBuffer, 0, this.lightData)
+    this.setAmbientColor(this.ambientColor)
+    this.addLight(new Vec3(-0.3, -0.7, 0.6).normalize(), new Vec3(1.0, 0.9, 0.8), 0.08)
+    this.addLight(new Vec3(0.5, -0.6, 0.6).normalize(), new Vec3(0.9, 0.95, 1.0), 0.07)
+    this.addLight(new Vec3(0.0, -0.3, -1.0).normalize(), new Vec3(0.95, 0.95, 0.9), 0.06)
   }
 
   private setAmbientColor(color: Vec3) {
-    // Layout: ambientColor (0-2), padding (3)
-    this.lightData[0] = color.x
-    this.lightData[1] = color.y
-    this.lightData[2] = color.z
-    this.lightData[3] = 0.0 // Padding for vec3f alignment
+    // Layout: ambientColor (0-3), lights (4-63) - 2 vec4f per light
+    this.lightData[0] = color.x // ambientColor.x
+    this.lightData[1] = color.y // ambientColor.y
+    this.lightData[2] = color.z // ambientColor.z
+    this.lightData[3] = 1.0 // ambientColor.w
+    this.updateLightBuffer()
+  }
+
+  public clearLights() {
+    this.lightCount = 0
+    // Clear all light data by setting intensity to 0
+    for (let i = 0; i < 4; i++) {
+      const baseIndex = 4 + i * 8
+      this.lightData[baseIndex + 7] = 0 // color.w / intensity
+    }
+    this.updateLightBuffer()
+  }
+
+  public addLight(direction: Vec3, color: Vec3, intensity: number = 1.0): boolean {
+    if (this.lightCount >= 4) return false
+
+    const normalized = direction.normalize()
+    const baseIndex = 4 + this.lightCount * 8 // Start at index 4, 8 floats per light (2 vec4f)
+    this.lightData[baseIndex] = normalized.x // direction.x
+    this.lightData[baseIndex + 1] = normalized.y // direction.y
+    this.lightData[baseIndex + 2] = normalized.z // direction.z
+    this.lightData[baseIndex + 3] = 0 // direction.w
+    this.lightData[baseIndex + 4] = color.x // color.x
+    this.lightData[baseIndex + 5] = color.y // color.y
+    this.lightData[baseIndex + 6] = color.z // color.z
+    this.lightData[baseIndex + 7] = intensity // color.w / intensity
+
+    this.lightCount++
+    this.updateLightBuffer()
+    return true
+  }
+
+  private updateLightBuffer() {
+    this.device.queue.writeBuffer(this.lightUniformBuffer, 0, this.lightData)
   }
 
   public async loadAnimation(url: string) {
