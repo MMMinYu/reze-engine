@@ -44,6 +44,7 @@ interface DrawCall {
   count: number
   firstIndex: number
   bindGroup: GPUBindGroup
+  materialName: string
 }
 
 export class Engine {
@@ -120,6 +121,8 @@ export class Engine {
   private vertexBufferNeedsUpdate = false
   // Unified draw call list
   private drawCalls: DrawCall[] = []
+  // Material visibility tracking
+  private hiddenMaterials = new Set<string>()
 
   private lastFpsUpdate = performance.now()
   private framesSinceLastUpdate = 0
@@ -1232,6 +1235,30 @@ export class Engine {
     }
   }
 
+  public setMaterialVisible(name: string, visible: boolean): void {
+    if (visible) {
+      this.hiddenMaterials.delete(name)
+    } else {
+      this.hiddenMaterials.add(name)
+    }
+  }
+
+  public isMaterialVisible(name: string): boolean {
+    return !this.hiddenMaterials.has(name)
+  }
+
+  public getBones(): string[] {
+    return this.currentModel?.getSkeleton().bones.map((bone) => bone.name) ?? []
+  }
+
+  public getMorphs(): string[] {
+    return this.currentModel?.getMorphing().morphs.map((morph) => morph.name) ?? []
+  }
+
+  public getMaterials(): string[] {
+    return this.currentModel?.getMaterials().map((material) => material.name) ?? []
+  }
+
   private updateVertexBuffer(): void {
     if (!this.currentModel || !this.vertexBuffer) return
     const vertices = this.currentModel.getVertices()
@@ -1367,7 +1394,13 @@ export class Engine {
 
       if (indexCount > 0) {
         if (mat.isEye) {
-          this.drawCalls.push({ type: "eye", count: indexCount, firstIndex: currentIndexOffset, bindGroup })
+          this.drawCalls.push({
+            type: "eye",
+            count: indexCount,
+            firstIndex: currentIndexOffset,
+            bindGroup,
+            materialName: mat.name,
+          })
         } else if (mat.isHair) {
           // Hair materials: create separate bind groups for over-eyes vs over-non-eyes
           const createHairBindGroup = (isOverEyes: boolean) => {
@@ -1399,17 +1432,31 @@ export class Engine {
             count: indexCount,
             firstIndex: currentIndexOffset,
             bindGroup: bindGroupOverEyes,
+            materialName: mat.name,
           })
           this.drawCalls.push({
             type: "hair-over-non-eyes",
             count: indexCount,
             firstIndex: currentIndexOffset,
             bindGroup: bindGroupOverNonEyes,
+            materialName: mat.name,
           })
         } else if (isTransparent) {
-          this.drawCalls.push({ type: "transparent", count: indexCount, firstIndex: currentIndexOffset, bindGroup })
+          this.drawCalls.push({
+            type: "transparent",
+            count: indexCount,
+            firstIndex: currentIndexOffset,
+            bindGroup,
+            materialName: mat.name,
+          })
         } else {
-          this.drawCalls.push({ type: "opaque", count: indexCount, firstIndex: currentIndexOffset, bindGroup })
+          this.drawCalls.push({
+            type: "opaque",
+            count: indexCount,
+            firstIndex: currentIndexOffset,
+            bindGroup,
+            materialName: mat.name,
+          })
         }
       }
 
@@ -1453,6 +1500,7 @@ export class Engine {
             count: indexCount,
             firstIndex: currentIndexOffset,
             bindGroup: outlineBindGroup,
+            materialName: mat.name,
           })
         }
       }
@@ -1475,6 +1523,10 @@ export class Engine {
     })
     this.device.queue.writeBuffer(buffer, 0, data as ArrayBufferView<ArrayBuffer>)
     return buffer
+  }
+
+  private shouldRenderDrawCall(drawCall: DrawCall): boolean {
+    return !this.hiddenMaterials.has(drawCall.materialName)
   }
 
   private async createTextureFromPath(path: string): Promise<GPUTexture | null> {
@@ -1516,7 +1568,7 @@ export class Engine {
     pass.setPipeline(this.eyePipeline)
     pass.setStencilReference(this.STENCIL_EYE_VALUE)
     for (const draw of this.drawCalls) {
-      if (draw.type === "eye") {
+      if (draw.type === "eye" && this.shouldRenderDrawCall(draw)) {
         pass.setBindGroup(0, draw.bindGroup)
         pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
       }
@@ -1526,11 +1578,13 @@ export class Engine {
   // Helper: Render hair with post-alpha-eye effect (depth pre-pass + stencil-based shading + outlines)
   private renderHair(pass: GPURenderPassEncoder) {
     // Hair depth pre-pass (reduces overdraw via early depth rejection)
-    const hasHair = this.drawCalls.some((d) => d.type === "hair-over-eyes" || d.type === "hair-over-non-eyes")
+    const hasHair = this.drawCalls.some(
+      (d) => (d.type === "hair-over-eyes" || d.type === "hair-over-non-eyes") && this.shouldRenderDrawCall(d)
+    )
     if (hasHair) {
       pass.setPipeline(this.hairDepthPipeline)
       for (const draw of this.drawCalls) {
-        if (draw.type === "hair-over-eyes" || draw.type === "hair-over-non-eyes") {
+        if ((draw.type === "hair-over-eyes" || draw.type === "hair-over-non-eyes") && this.shouldRenderDrawCall(draw)) {
           pass.setBindGroup(0, draw.bindGroup)
           pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
         }
@@ -1538,7 +1592,7 @@ export class Engine {
     }
 
     // Hair shading (split by stencil for transparency over eyes)
-    const hairOverEyes = this.drawCalls.filter((d) => d.type === "hair-over-eyes")
+    const hairOverEyes = this.drawCalls.filter((d) => d.type === "hair-over-eyes" && this.shouldRenderDrawCall(d))
     if (hairOverEyes.length > 0) {
       pass.setPipeline(this.hairPipelineOverEyes)
       pass.setStencilReference(this.STENCIL_EYE_VALUE)
@@ -1548,7 +1602,9 @@ export class Engine {
       }
     }
 
-    const hairOverNonEyes = this.drawCalls.filter((d) => d.type === "hair-over-non-eyes")
+    const hairOverNonEyes = this.drawCalls.filter(
+      (d) => d.type === "hair-over-non-eyes" && this.shouldRenderDrawCall(d)
+    )
     if (hairOverNonEyes.length > 0) {
       pass.setPipeline(this.hairPipelineOverNonEyes)
       pass.setStencilReference(this.STENCIL_EYE_VALUE)
@@ -1559,7 +1615,7 @@ export class Engine {
     }
 
     // Hair outlines
-    const hairOutlines = this.drawCalls.filter((d) => d.type === "hair-outline")
+    const hairOutlines = this.drawCalls.filter((d) => d.type === "hair-outline" && this.shouldRenderDrawCall(d))
     if (hairOutlines.length > 0) {
       pass.setPipeline(this.hairOutlinePipeline)
       for (const draw of hairOutlines) {
@@ -1610,7 +1666,7 @@ export class Engine {
         // Pass 1: Opaque
         pass.setPipeline(this.modelPipeline)
         for (const draw of this.drawCalls) {
-          if (draw.type === "opaque") {
+          if (draw.type === "opaque" && this.shouldRenderDrawCall(draw)) {
             pass.setBindGroup(0, draw.bindGroup)
             pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
           }
@@ -1627,7 +1683,7 @@ export class Engine {
         // Pass 4: Transparent
         pass.setPipeline(this.modelPipeline)
         for (const draw of this.drawCalls) {
-          if (draw.type === "transparent") {
+          if (draw.type === "transparent" && this.shouldRenderDrawCall(draw)) {
             pass.setBindGroup(0, draw.bindGroup)
             pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
           }
@@ -1783,7 +1839,7 @@ export class Engine {
     pass.setPipeline(this.outlinePipeline)
     const outlineType: DrawCallType = transparent ? "transparent-outline" : "opaque-outline"
     for (const draw of this.drawCalls) {
-      if (draw.type === outlineType) {
+      if (draw.type === outlineType && this.shouldRenderDrawCall(draw)) {
         pass.setBindGroup(0, draw.bindGroup)
         pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
       }

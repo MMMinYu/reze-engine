@@ -193,7 +193,12 @@ export default function Home() {
         engine.runRenderLoop(() => {
           setStats(engine.getStats())
         })
-        engine.setMorphWeight("抗穿模", 1.0)
+        // engine.setMorphWeight("抗穿模", 1.0)
+        console.log("materials", engine.getMaterials())
+        console.log("bones", engine.getBones())
+        console.log("morphs", engine.getMorphs())
+        // engine.setMaterialVisible("材質1", false)
+        // engine.setMaterialVisible("GT Bow Button Blouse", false)
 
         await engine.loadAnimation("/animations/IRIS OUT.vmd")
         const prog = engine.getAnimationProgress()
