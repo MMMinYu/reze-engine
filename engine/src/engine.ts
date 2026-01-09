@@ -1,7 +1,9 @@
 import { Camera } from "./camera"
-import { Quat, Vec3 } from "./math"
+import { Mat4, Quat, Vec3 } from "./math"
 import { Model } from "./model"
 import { PmxLoader } from "./pmx-loader"
+
+export type RaycastCallback = (materialName: string | null) => void
 
 export type EngineOptions = {
   ambientColor?: Vec3
@@ -11,9 +13,12 @@ export type EngineOptions = {
   cameraDistance?: number
   cameraTarget?: Vec3
   cameraFov?: number
+  onRaycast?: RaycastCallback
 }
 
-export const DEFAULT_ENGINE_OPTIONS: Required<EngineOptions> = {
+export type RequiredEngineOptions = Required<Omit<EngineOptions, "onRaycast">> & Pick<EngineOptions, "onRaycast">
+
+export const DEFAULT_ENGINE_OPTIONS: RequiredEngineOptions = {
   ambientColor: new Vec3(0.85, 0.85, 0.85),
   bloomIntensity: 0.12,
   bloomThreshold: 0.5,
@@ -21,6 +26,7 @@ export const DEFAULT_ENGINE_OPTIONS: Required<EngineOptions> = {
   cameraDistance: 26.6,
   cameraTarget: new Vec3(0, 12.5, 0),
   cameraFov: Math.PI / 4,
+  onRaycast: undefined,
 }
 
 export interface EngineStats {
@@ -114,6 +120,12 @@ export class Engine {
   // Rim light settings
   private rimLightIntensity!: number
 
+  // Raycasting
+  private onRaycast?: RaycastCallback
+  private cachedSkinnedVertices?: Float32Array
+  private cachedSkinMatricesVersion = -1
+  private skinMatricesVersion = 0
+
   private currentModel: Model | null = null
   private modelDir: string = ""
   private materialSampler!: GPUSampler
@@ -146,6 +158,7 @@ export class Engine {
       this.cameraDistance = options.cameraDistance ?? DEFAULT_ENGINE_OPTIONS.cameraDistance
       this.cameraTarget = options.cameraTarget ?? DEFAULT_ENGINE_OPTIONS.cameraTarget
       this.cameraFov = options.cameraFov ?? DEFAULT_ENGINE_OPTIONS.cameraFov
+      this.onRaycast = options.onRaycast
     }
   }
 
@@ -989,6 +1002,11 @@ export class Engine {
     this.resizeObserver = new ResizeObserver(() => this.handleResize())
     this.resizeObserver.observe(this.canvas)
     this.handleResize()
+
+    // Setup raycasting click handler
+    if (this.onRaycast) {
+      this.canvas.addEventListener("click", this.handleCanvasClick)
+    }
   }
 
   private handleResize() {
@@ -1215,6 +1233,11 @@ export class Engine {
 
     const model = await PmxLoader.load(path)
     console.log(model)
+
+    // Clear cached skinned vertices when loading a new model
+    this.cachedSkinnedVertices = undefined
+    this.cachedSkinMatricesVersion = -1
+
     await this.setupModelBuffers(model)
   }
 
@@ -1625,6 +1648,233 @@ export class Engine {
     }
   }
 
+  private handleCanvasClick = (event: MouseEvent) => {
+    if (!this.onRaycast || !this.currentModel) return
+
+    const rect = this.canvas.getBoundingClientRect()
+    const x = event.clientX - rect.left
+    const y = event.clientY - rect.top
+
+    this.performRaycast(x, y)
+  }
+
+  private performRaycast(screenX: number, screenY: number) {
+    if (!this.currentModel || !this.onRaycast) return
+
+    const materials = this.currentModel.getMaterials()
+    if (materials.length === 0) return
+
+    // Get camera matrices
+    const viewMatrix = this.camera.getViewMatrix()
+    const projectionMatrix = this.camera.getProjectionMatrix()
+
+    // Convert screen coordinates to world space ray (like Babylon.js)
+    const canvas = this.canvas
+    const rect = canvas.getBoundingClientRect()
+
+    // Convert to clip space (-1 to 1)
+    const clipX = (screenX / rect.width) * 2 - 1
+    const clipY = 1 - (screenY / rect.height) * 2 // Flip Y
+
+    // Create ray in clip space at near and far planes
+    const clipNear = new Vec3(clipX, clipY, -1) // Near plane
+    const clipFar = new Vec3(clipX, clipY, 1) // Far plane
+
+    // Transform to world space using inverse view-projection matrix
+    const viewProjMatrix = projectionMatrix.multiply(viewMatrix)
+    const inverseViewProj = viewProjMatrix.inverse()
+
+    // Transform point through 4x4 matrix with perspective division
+    const transformPoint = (matrix: Mat4, point: Vec3): Vec3 => {
+      const m = matrix.values
+      const x = point.x,
+        y = point.y,
+        z = point.z
+
+      // Compute transformed point (matrix * vec4(point, 1.0))
+      const result = new Vec3(
+        m[0] * x + m[4] * y + m[8] * z + m[12],
+        m[1] * x + m[5] * y + m[9] * z + m[13],
+        m[2] * x + m[6] * y + m[10] * z + m[14]
+      )
+
+      // Perspective division
+      const w = m[3] * x + m[7] * y + m[11] * z + m[15]
+      const invW = w !== 0 ? 1 / w : 1
+
+      return result.scale(invW)
+    }
+
+    const worldNear = transformPoint(inverseViewProj, clipNear)
+    const worldFar = transformPoint(inverseViewProj, clipFar)
+
+    // Create ray from camera position through the clicked point
+    const rayOrigin = this.camera.getPosition()
+    const rayDirection = worldFar.subtract(worldNear).normalize()
+
+    // Get model geometry for ray-triangle intersection
+    const baseVertices = this.currentModel.getVertices()
+    const indices = this.currentModel.getIndices()
+    const skinning = this.currentModel.getSkinning()
+
+    if (!baseVertices || !indices || !skinning) {
+      if (this.onRaycast) {
+        this.onRaycast(null)
+      }
+      return
+    }
+
+    // Use cached skinned vertices if available and up-to-date
+    let vertices: Float32Array
+    if (this.cachedSkinnedVertices && this.cachedSkinMatricesVersion === this.skinMatricesVersion) {
+      vertices = this.cachedSkinnedVertices
+    } else {
+      // Apply current skinning transformations to get animated vertex positions
+      vertices = new Float32Array(baseVertices.length)
+      const skinMatrices = this.currentModel.getSkinMatrices()
+
+      // Helper function to transform point by 4x4 matrix
+      const transformByMatrix = (matrix: Float32Array, offset: number, point: Vec3): Vec3 => {
+        const m = matrix
+        const x = point.x,
+          y = point.y,
+          z = point.z
+        return new Vec3(
+          m[offset + 0] * x + m[offset + 4] * y + m[offset + 8] * z + m[offset + 12],
+          m[offset + 1] * x + m[offset + 5] * y + m[offset + 9] * z + m[offset + 13],
+          m[offset + 2] * x + m[offset + 6] * y + m[offset + 10] * z + m[offset + 14]
+        )
+      }
+
+      for (let i = 0; i < baseVertices.length; i += 8) {
+        const vertexIndex = Math.floor(i / 8)
+        const position = new Vec3(baseVertices[i], baseVertices[i + 1], baseVertices[i + 2])
+
+        // Get bone influences for this vertex
+        const jointIndices = [
+          skinning.joints[vertexIndex * 4],
+          skinning.joints[vertexIndex * 4 + 1],
+          skinning.joints[vertexIndex * 4 + 2],
+          skinning.joints[vertexIndex * 4 + 3],
+        ]
+
+        const weights = [
+          skinning.weights[vertexIndex * 4],
+          skinning.weights[vertexIndex * 4 + 1],
+          skinning.weights[vertexIndex * 4 + 2],
+          skinning.weights[vertexIndex * 4 + 3],
+        ]
+
+        // Normalize weights (same as shader)
+        const weightSum = weights[0] + weights[1] + weights[2] + weights[3]
+        const invWeightSum = weightSum > 0.0001 ? 1.0 / weightSum : 1.0
+        const normalizedWeights = weightSum > 0.0001 ? weights.map((w) => w * invWeightSum) : [1.0, 0.0, 0.0, 0.0]
+
+        // Apply skinning transformation (same as shader)
+        let skinnedPosition = new Vec3(0, 0, 0)
+
+        for (let j = 0; j < 4; j++) {
+          const weight = normalizedWeights[j]
+          if (weight > 0) {
+            const matrixOffset = jointIndices[j] * 16
+            const transformed = transformByMatrix(skinMatrices, matrixOffset, position)
+            skinnedPosition = skinnedPosition.add(transformed.scale(weight))
+          }
+        }
+
+        // Store transformed position, copy other attributes unchanged
+        vertices[i] = skinnedPosition.x
+        vertices[i + 1] = skinnedPosition.y
+        vertices[i + 2] = skinnedPosition.z
+        vertices[i + 3] = baseVertices[i + 3] // normal X
+        vertices[i + 4] = baseVertices[i + 4] // normal Y
+        vertices[i + 5] = baseVertices[i + 5] // normal Z
+        vertices[i + 6] = baseVertices[i + 6] // UV X
+        vertices[i + 7] = baseVertices[i + 7] // UV Y
+      }
+
+      // Cache the result
+      this.cachedSkinnedVertices = vertices
+      this.cachedSkinMatricesVersion = this.skinMatricesVersion
+    }
+
+    let closestHit: { materialName: string; distance: number } | null = null
+    const maxDistance = 1000 // Reasonable max distance
+
+    // Test ray against all triangles (Möller-Trumbore algorithm)
+    for (let i = 0; i < indices.length; i += 3) {
+      const idx0 = indices[i] * 8 // Each vertex has 8 floats (pos + normal + uv)
+      const idx1 = indices[i + 1] * 8
+      const idx2 = indices[i + 2] * 8
+
+      // Get triangle vertices in world space (first 3 floats are position)
+      const v0 = new Vec3(vertices[idx0], vertices[idx0 + 1], vertices[idx0 + 2])
+      const v1 = new Vec3(vertices[idx1], vertices[idx1 + 1], vertices[idx1 + 2])
+      const v2 = new Vec3(vertices[idx2], vertices[idx2 + 1], vertices[idx2 + 2])
+
+      // Find which material this triangle belongs to
+      // Each material has mat.vertexCount indices (3 per triangle)
+      let triangleMaterialIndex = -1
+      let indexOffset = 0
+      for (let matIdx = 0; matIdx < materials.length; matIdx++) {
+        const mat = materials[matIdx]
+        if (i >= indexOffset && i < indexOffset + mat.vertexCount) {
+          triangleMaterialIndex = matIdx
+          break
+        }
+        indexOffset += mat.vertexCount
+      }
+
+      if (triangleMaterialIndex === -1) continue
+
+      // Skip invisible materials
+      const materialName = materials[triangleMaterialIndex].name
+      if (this.hiddenMaterials.has(materialName)) continue
+
+      // Ray-triangle intersection test (Möller-Trumbore algorithm)
+      const edge1 = v1.subtract(v0)
+      const edge2 = v2.subtract(v0)
+      const h = rayDirection.cross(edge2)
+      const a = edge1.dot(h)
+
+      if (Math.abs(a) < 0.0001) continue // Ray is parallel to triangle
+
+      const f = 1.0 / a
+      const s = rayOrigin.subtract(v0)
+      const u = f * s.dot(h)
+
+      if (u < 0.0 || u > 1.0) continue
+
+      const q = s.cross(edge1)
+      const v = f * rayDirection.dot(q)
+
+      if (v < 0.0 || u + v > 1.0) continue
+
+      // At this point we have a hit
+      const t = f * edge2.dot(q)
+
+      if (t > 0.0001 && t < maxDistance) {
+        // Backface culling: only consider front-facing triangles
+        const triangleNormal = edge1.cross(edge2).normalize()
+        const isFrontFace = triangleNormal.dot(rayDirection) < 0
+
+        if (isFrontFace) {
+          if (!closestHit || t < closestHit.distance) {
+            closestHit = {
+              materialName: materials[triangleMaterialIndex].name,
+              distance: t,
+            }
+          }
+        }
+      }
+    }
+
+    // Call the callback with the result
+    if (this.onRaycast) {
+      this.onRaycast(closestHit?.materialName || null)
+    }
+  }
+
   // Render strategy: 1) Opaque non-eye/hair 2) Eyes (stencil=1) 3) Hair (depth pre-pass + split by stencil) 4) Transparent 5) Bloom
   public render() {
     if (this.multisampleTexture && this.camera && this.device) {
@@ -1833,6 +2083,9 @@ export class Engine {
       skinMatrices.byteOffset,
       skinMatrices.byteLength
     )
+
+    // Increment version to invalidate cached skinned vertices
+    this.skinMatricesVersion++
   }
 
   private drawOutlines(pass: GPURenderPassEncoder, transparent: boolean) {

@@ -227,14 +227,11 @@ export class Model {
     this.initializeRuntimeSkeleton()
     this.initializeRuntimeMorph()
     this.initializeTweenBuffers()
-    this.applyMorphs() // Apply initial morphs (all weights are 0, so no change)
+    this.applyMorphs()
 
     // Initialize physics if rigidbodies exist
     if (rigidbodies.length > 0) {
       this.physics = new Physics(rigidbodies, joints)
-      console.log(`[Model] Physics initialized with ${rigidbodies.length} rigidbodies`)
-    } else {
-      console.log("[Model] No rigidbodies found, physics disabled")
     }
   }
 

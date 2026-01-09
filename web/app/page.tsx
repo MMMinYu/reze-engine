@@ -183,6 +183,11 @@ export default function Home() {
           cameraDistance: 26.5,
           cameraTarget: new Vec3(0, 12.2, 0),
           cameraFov: Math.PI / 4,
+          onRaycast: (material) => {
+            if (material) {
+              console.log("material", material)
+            }
+          },
         })
         engineRef.current = engine
         await engine.init()
