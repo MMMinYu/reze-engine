@@ -35,6 +35,9 @@ export default function Home() {
   const [isPlaying, setIsPlaying] = useState(false)
   const [isPaused, setIsPaused] = useState(false)
   const [progress, setProgress] = useState({ current: 0, duration: 0, percentage: 0 })
+  const [selectedMaterial, setSelectedMaterial] = useState<string | null>(null)
+  const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 })
+  const [rippleId, setRippleId] = useState(0)
 
   // Update progress using requestAnimationFrame for smooth updates
   useEffect(() => {
@@ -65,6 +68,18 @@ export default function Home() {
       }
     }
   }, [isPlaying, isPaused])
+
+  // Track mouse position for ripple effect
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      setMousePosition({ x: e.clientX, y: e.clientY })
+    }
+
+    window.addEventListener("mousemove", handleMouseMove)
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove)
+    }
+  }, [])
 
   // Create and preload audio element on mount
   useEffect(() => {
@@ -184,9 +199,13 @@ export default function Home() {
           cameraTarget: new Vec3(0, 12.2, 0),
           cameraFov: Math.PI / 4,
           onRaycast: (material) => {
+            console.log("material", material)
+
             if (material) {
-              console.log("material", material)
+              // Start new ripple animation each time material is clicked
+              setRippleId((prev) => prev + 1)
             }
+            setSelectedMaterial(material)
           },
         })
         engineRef.current = engine
@@ -280,6 +299,32 @@ export default function Home() {
           className="w-full h-full md:h-auto touch-none z-0 object-cover"
         />
       </div>
+
+      {/* Ripple effect around cursor when material is selected */}
+      {selectedMaterial && (
+        <div
+          key={rippleId}
+          className="absolute pointer-events-none z-2"
+          style={{
+            left: mousePosition.x - 32,
+            top: mousePosition.y - 32,
+            width: 64,
+            height: 64,
+          }}
+        >
+          <div
+            className="w-full h-full rounded-full"
+            style={{
+              background:
+                "radial-gradient(circle, rgba(255,59,48,1.0) 0%, rgba(255,59,48,0.9) 20%, rgba(255,59,48,0.7) 40%, rgba(255,59,48,0.6) 60%, rgba(255,59,48,0.1) 80%, transparent 100%)",
+              boxShadow:
+                "0 0 35px rgba(255,59,48,1.0), 0 0 70px rgba(255,59,48,0.7), inset 0 0 25px rgba(255,59,48,0.5)",
+              animation: "ripple 0.5s ease-out forwards",
+            }}
+          />
+        </div>
+      )}
+
       <canvas ref={canvasRef} className="absolute inset-0 w-full h-full touch-none z-1" />
 
       {/* Player Controls */}
