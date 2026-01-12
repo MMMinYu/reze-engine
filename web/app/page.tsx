@@ -179,8 +179,8 @@ export default function Home() {
       try {
         const engine = new Engine(canvasRef.current, {
           ambientColor: new Vec3(0.85, 0.9, 0.98),
-          cameraDistance: 26.5,
-          cameraTarget: new Vec3(0, 12.2, 0),
+          cameraDistance: 30,
+          cameraTarget: new Vec3(0, 12, 0),
           onRaycast: (material: string | null, screenX: number, screenY: number) => {
             console.log("material", material)
 
@@ -197,7 +197,13 @@ export default function Home() {
         engineRef.current = engine
         await engine.init()
         await engine.loadModel("/models/reze/reze_smol.pmx")
-        engine.addGround({ diffuseColor: new Vec3(0.9, 0.5, 1.0) })
+        engine.addGround({
+          width: 160,
+          height: 160,
+          fadeStart: 10.0,
+          fadeEnd: 100.0,
+          diffuseColor: new Vec3(0.9, 0.5, 1.0),
+        })
 
         setLoading(false)
 
