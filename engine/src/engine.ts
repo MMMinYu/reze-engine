@@ -40,6 +40,7 @@ type DrawCallType =
   | "hair-over-eyes"
   | "hair-over-non-eyes"
   | "transparent"
+  | "ground"
   | "opaque-outline"
   | "eye-outline"
   | "hair-outline"
@@ -77,6 +78,10 @@ export class Engine {
   private hairPipelineOverEyes!: GPURenderPipeline
   private hairPipelineOverNonEyes!: GPURenderPipeline
   private hairDepthPipeline!: GPURenderPipeline
+  // Ground/reflection pipeline
+  private groundPipeline!: GPURenderPipeline
+  private groundBindGroupLayout!: GPUBindGroupLayout
+  private reflectionPipeline!: GPURenderPipeline
   // Outline pipelines
   private outlinePipeline!: GPURenderPipeline
   private hairOutlinePipeline!: GPURenderPipeline
@@ -119,6 +124,16 @@ export class Engine {
   private bloomIntensity!: number
   // Rim light settings
   private rimLightIntensity!: number
+
+  // Ground/reflection properties
+  private groundVertexBuffer?: GPUBuffer
+  private groundIndexBuffer?: GPUBuffer
+  private groundReflectionTexture?: GPUTexture
+  private groundReflectionResolveTexture?: GPUTexture // Resolve target for multisampled texture
+  private groundReflectionDepthTexture?: GPUTexture
+  private groundReflectionBindGroup?: GPUBindGroup
+  private groundMaterialUniformBuffer?: GPUBuffer
+  private groundHasReflections = false
 
   // Raycasting
   private onRaycast?: RaycastCallback
@@ -444,6 +459,159 @@ export class Engine {
       shaderModule,
       vertexBuffers: fullVertexBuffers,
       fragmentTarget: standardBlend,
+      cullMode: "none",
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        depthWriteEnabled: true,
+        depthCompare: "less-equal",
+      },
+    })
+
+    // Create ground/reflection pipeline with reflection texture support
+    this.groundBindGroupLayout = this.device.createBindGroupLayout({
+      label: "ground bind group layout",
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } }, // camera
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } }, // light
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: {} }, // reflectionTexture
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, sampler: {} }, // reflectionSampler
+        { binding: 4, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } }, // groundMaterial
+      ],
+    })
+
+    const groundPipelineLayout = this.device.createPipelineLayout({
+      label: "ground pipeline layout",
+      bindGroupLayouts: [this.groundBindGroupLayout],
+    })
+
+    const groundShaderModule = this.device.createShaderModule({
+      label: "ground shaders",
+      code: /* wgsl */ `
+        struct CameraUniforms {
+          view: mat4x4f,
+          projection: mat4x4f,
+          viewPos: vec3f,
+          _padding: f32,
+        };
+
+        struct LightUniforms {
+          ambientColor: vec4f,
+          lights: array<Light, 4>,
+        };
+
+        struct Light {
+          direction: vec4f,
+          color: vec4f,
+        };
+
+        struct GroundMaterialUniforms {
+          diffuseColor: vec3f,
+          reflectionLevel: f32,
+          fadeStart: f32,
+          fadeEnd: f32,
+          _padding1: f32,
+          _padding2: f32,
+        };
+
+        @group(0) @binding(0) var<uniform> camera: CameraUniforms;
+        @group(0) @binding(1) var<uniform> light: LightUniforms;
+        @group(0) @binding(2) var reflectionTexture: texture_2d<f32>;
+        @group(0) @binding(3) var reflectionSampler: sampler;
+        @group(0) @binding(4) var<uniform> material: GroundMaterialUniforms;
+
+        struct VertexOutput {
+          @builtin(position) position: vec4f,
+          @location(0) normal: vec3f,
+          @location(1) uv: vec2f,
+          @location(2) worldPos: vec3f,
+        };
+
+        @vertex fn vs(
+          @location(0) position: vec3f,
+          @location(1) normal: vec3f,
+          @location(2) uv: vec2f,
+        ) -> VertexOutput {
+          var output: VertexOutput;
+          let worldPos = position;
+          output.position = camera.projection * camera.view * vec4f(worldPos, 1.0);
+          output.normal = normal;
+          output.uv = uv;
+          output.worldPos = worldPos;
+          return output;
+        }
+
+        @fragment fn fs(input: VertexOutput) -> @location(0) vec4f {
+          let n = normalize(input.normal);
+
+          let clipPos = camera.projection * camera.view * vec4f(input.worldPos, 1.0);
+          let ndcPos = clipPos.xyz / clipPos.w;
+          var reflectionUV = vec2f(ndcPos.x * 0.5 + 0.5, 0.5 - ndcPos.y * 0.5);
+
+          let sampledReflectionColor = textureSample(reflectionTexture, reflectionSampler, reflectionUV).rgb;
+          let isValidReflection = clipPos.w > 0.0 &&
+                                  all(reflectionUV >= vec2f(0.0)) && all(reflectionUV <= vec2f(1.0));
+          var reflectionColor = select(vec3f(1.0, 1.0, 1.0), sampledReflectionColor, isValidReflection);
+
+          let distanceFromCamera = length(input.worldPos - camera.viewPos);
+          let fadeFactor = clamp((distanceFromCamera - 15.0) / 20.0, 0.0, 1.0);
+          reflectionColor *= (1.0 - fadeFactor * 0.3);
+
+          let diffuseColor = material.diffuseColor;
+          var finalColor = mix(diffuseColor, reflectionColor, material.reflectionLevel);
+
+          // Ground edge fade effect - smooth fade out at edges based on distance from center
+          let centerDist = length(input.worldPos.xz); // Distance from ground center in XZ plane
+
+          // Smoothstep for much smoother gradient transition
+          let t = clamp((centerDist - material.fadeStart) / (material.fadeEnd - material.fadeStart), 0.0, 1.0);
+          let edgeFade = 1.0 - smoothstep(0.0, 1.0, t);
+          finalColor *= edgeFade;
+
+          // Accumulate light contribution
+          var lightAccum = light.ambientColor.xyz;
+          for (var i = 0u; i < 4u; i++) {
+            let intensity = light.lights[i].color.w;
+            if (intensity > 0.0) {
+              let l = -light.lights[i].direction.xyz;
+              let nDotL = max(dot(n, l), 0.0);
+              let radiance = light.lights[i].color.xyz * intensity;
+              lightAccum += radiance * nDotL;
+            }
+          }
+
+          // Apply lighting to the blended color
+          let litColor = finalColor * lightAccum;
+
+          return vec4f(litColor, edgeFade);
+        }
+      `,
+    })
+
+    this.groundPipeline = this.createRenderPipeline({
+      label: "ground pipeline",
+      layout: groundPipelineLayout,
+      shaderModule: groundShaderModule,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTarget: standardBlend,
+      cullMode: "back",
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        depthWriteEnabled: true,
+        depthCompare: "less-equal",
+      },
+    })
+
+    // Create reflection pipeline (multisampled version for higher quality)
+    this.reflectionPipeline = this.createRenderPipeline({
+      label: "reflection pipeline",
+      layout: mainPipelineLayout,
+      shaderModule,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTarget: {
+        format: this.presentationFormat,
+        blend: standardBlend.blend,
+      },
+      multisample: { count: this.sampleCount }, // Use same multisampling as main render
       cullMode: "none",
       depthStencil: {
         format: "depth24plus-stencil8",
@@ -1161,6 +1329,42 @@ export class Engine {
     return true
   }
 
+  public addGround(options?: {
+    width?: number
+    height?: number
+    diffuseColor?: Vec3
+    reflectionLevel?: number
+    reflectionTextureSize?: number
+    fadeStart?: number
+    fadeEnd?: number
+  }): void {
+    const opts = {
+      width: 100,
+      height: 100,
+      diffuseColor: new Vec3(1, 1, 1),
+      reflectionLevel: 0.5,
+      reflectionTextureSize: 1024,
+      fadeStart: 5.0,
+      fadeEnd: 60.0,
+      ...options,
+    }
+
+    // Create ground geometry
+    this.createGroundGeometry(opts.width, opts.height)
+
+    this.createGroundMaterialBuffer(opts.diffuseColor, opts.reflectionLevel, opts.fadeStart, opts.fadeEnd)
+    this.createReflectionTexture(opts.reflectionTextureSize)
+    this.groundHasReflections = true
+
+    this.drawCalls.push({
+      type: "ground",
+      count: 6, // 2 triangles, 3 indices each
+      firstIndex: 0,
+      bindGroup: this.groundReflectionBindGroup!,
+      materialName: "Ground",
+    })
+  }
+
   private updateLightBuffer() {
     this.device.queue.writeBuffer(this.lightUniformBuffer, 0, this.lightData)
   }
@@ -1377,6 +1581,143 @@ export class Engine {
     }
 
     await this.setupMaterials(model)
+  }
+
+  private createGroundGeometry(width: number = 100, height: number = 100) {
+    const halfWidth = width / 2
+    const halfHeight = height / 2
+
+    const vertices = new Float32Array([
+      // Bottom-left
+      -halfWidth,
+      0,
+      -halfHeight, // position
+      0,
+      1,
+      0, // normal (up)
+      0,
+      0, // uv
+
+      // Bottom-right
+      halfWidth,
+      0,
+      -halfHeight, // position
+      0,
+      1,
+      0, // normal (up)
+      1,
+      0, // uv
+
+      // Top-right
+      halfWidth,
+      0,
+      halfHeight, // position
+      0,
+      1,
+      0, // normal (up)
+      1,
+      1, // uv
+
+      // Top-left
+      -halfWidth,
+      0,
+      halfHeight, // position
+      0,
+      1,
+      0, // normal (up)
+      0,
+      1, // uv
+    ])
+
+    // Create indices for two triangles
+    const indices = new Uint16Array([
+      0,
+      1,
+      2, // First triangle
+      0,
+      2,
+      3, // Second triangle
+    ])
+
+    // Create vertex buffer
+    this.groundVertexBuffer = this.device.createBuffer({
+      label: "ground vertex buffer",
+      size: vertices.byteLength,
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    })
+    this.device.queue.writeBuffer(this.groundVertexBuffer, 0, vertices)
+
+    this.groundIndexBuffer = this.device.createBuffer({
+      label: "ground index buffer",
+      size: indices.byteLength,
+      usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
+    })
+    this.device.queue.writeBuffer(this.groundIndexBuffer, 0, indices)
+  }
+
+  private createGroundMaterialBuffer(
+    diffuseColor: Vec3 = new Vec3(1, 1, 1),
+    reflectionLevel: number = 0.5,
+    fadeStart: number = 5.0,
+    fadeEnd: number = 60.0
+  ) {
+    const materialData = new Float32Array([
+      diffuseColor.x,
+      diffuseColor.y,
+      diffuseColor.z, // diffuseColor (12 bytes)
+      reflectionLevel, // reflectionLevel (4 bytes)
+      fadeStart, // fadeStart (4 bytes)
+      fadeEnd, // fadeEnd (4 bytes)
+      0, // padding (4 bytes)
+      0, // padding (4 bytes)
+      0, // padding (4 bytes)
+      0, // padding (4 bytes)
+    ])
+
+    this.groundMaterialUniformBuffer = this.device.createBuffer({
+      label: "ground material uniform buffer",
+      size: materialData.byteLength,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    })
+    this.device.queue.writeBuffer(this.groundMaterialUniformBuffer, 0, materialData)
+  }
+
+  private createReflectionTexture(size: number = 1024) {
+    this.groundReflectionTexture = this.device.createTexture({
+      label: "ground reflection texture",
+      size: [size, size],
+      sampleCount: this.sampleCount,
+      format: this.presentationFormat,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT,
+    })
+
+    this.groundReflectionResolveTexture = this.device.createTexture({
+      label: "ground reflection resolve texture",
+      size: [size, size],
+      format: this.presentationFormat,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+    })
+
+    this.groundReflectionDepthTexture = this.device.createTexture({
+      label: "ground reflection depth texture",
+      size: [size, size],
+      sampleCount: this.sampleCount,
+      format: "depth24plus-stencil8",
+      usage: GPUTextureUsage.RENDER_ATTACHMENT,
+    })
+
+    // Create a bind group for the reflection texture that can be used in the ground material
+    this.groundReflectionBindGroup = this.device.createBindGroup({
+      label: "ground reflection bind group",
+      layout: this.groundBindGroupLayout,
+      entries: [
+        { binding: 0, resource: { buffer: this.cameraUniformBuffer } },
+        { binding: 1, resource: { buffer: this.lightUniformBuffer } },
+        { binding: 2, resource: this.groundReflectionResolveTexture!.createView() }, // Use resolve texture for sampling
+        { binding: 3, resource: this.materialSampler },
+        { binding: 4, resource: { buffer: this.groundMaterialUniformBuffer! } },
+      ],
+    })
   }
 
   private async setupMaterials(model: Model) {
@@ -1598,19 +1939,135 @@ export class Engine {
   }
 
   // Helper: Render eyes with stencil writing (for post-alpha-eye effect)
-  private renderEyes(pass: GPURenderPassEncoder) {
-    pass.setPipeline(this.eyePipeline)
-    pass.setStencilReference(this.STENCIL_EYE_VALUE)
+  private renderEyes(pass: GPURenderPassEncoder, useReflectionPipeline: boolean = false) {
+    if (useReflectionPipeline) {
+      // For reflections, use the basic reflection pipeline instead of specialized eye pipeline
+      pass.setPipeline(this.reflectionPipeline)
+      for (const draw of this.drawCalls) {
+        if (draw.type === "eye") {
+          pass.setBindGroup(0, draw.bindGroup)
+          pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
+        }
+      }
+    } else {
+      pass.setPipeline(this.eyePipeline)
+      pass.setStencilReference(this.STENCIL_EYE_VALUE)
+      for (const draw of this.drawCalls) {
+        if (draw.type === "eye" && this.shouldRenderDrawCall(draw)) {
+          pass.setBindGroup(0, draw.bindGroup)
+          pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
+        }
+      }
+    }
+  }
+
+  private renderGround(pass: GPURenderPassEncoder) {
+    if (!this.groundHasReflections || !this.groundVertexBuffer || !this.groundIndexBuffer) {
+      return
+    }
+
+    if (this.groundReflectionTexture) {
+      this.renderReflectionTexture()
+    }
+    pass.setPipeline(this.groundPipeline)
+    pass.setVertexBuffer(0, this.groundVertexBuffer)
+    pass.setIndexBuffer(this.groundIndexBuffer, "uint16")
+
     for (const draw of this.drawCalls) {
-      if (draw.type === "eye" && this.shouldRenderDrawCall(draw)) {
+      if (draw.type === "ground" && this.shouldRenderDrawCall(draw)) {
         pass.setBindGroup(0, draw.bindGroup)
         pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
       }
     }
   }
 
+  private renderReflectionTexture() {
+    if (!this.groundReflectionTexture) return
+
+    const mirrorMatrix = this.createMirrorMatrix(new Vec3(0, 1, 0), 0)
+    this.updateCameraUniforms()
+
+    const reflectionEncoder = this.device.createCommandEncoder()
+    const reflectionPassDescriptor: GPURenderPassDescriptor = {
+      label: "reflection render pass",
+      colorAttachments: [
+        {
+          view: this.groundReflectionTexture!.createView(),
+          resolveTarget: this.groundReflectionResolveTexture!.createView(),
+          clearValue: { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }, // White
+          loadOp: "clear",
+          storeOp: "store",
+        },
+      ],
+      depthStencilAttachment: {
+        view: this.groundReflectionDepthTexture!.createView(),
+        depthClearValue: 1.0,
+        depthLoadOp: "clear",
+        depthStoreOp: "store",
+        stencilClearValue: 0,
+        stencilLoadOp: "clear",
+        stencilStoreOp: "discard",
+      },
+    }
+
+    const reflectionPass = reflectionEncoder.beginRenderPass(reflectionPassDescriptor)
+
+    if (this.currentModel) {
+      reflectionPass.setVertexBuffer(0, this.vertexBuffer)
+      reflectionPass.setVertexBuffer(1, this.jointsBuffer)
+      reflectionPass.setVertexBuffer(2, this.weightsBuffer)
+      reflectionPass.setIndexBuffer(this.indexBuffer!, "uint32")
+
+      this.writeMirrorTransformedSkinMatrices(mirrorMatrix)
+      reflectionPass.setPipeline(this.reflectionPipeline)
+      for (const draw of this.drawCalls) {
+        if (draw.type === "opaque" && this.shouldRenderDrawCall(draw)) {
+          reflectionPass.setBindGroup(0, draw.bindGroup)
+          reflectionPass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
+        }
+      }
+
+      // Render eyes (using reflection pipeline)
+      this.renderEyes(reflectionPass, true)
+
+      // Render hair (using reflection pipeline)
+      this.renderHair(reflectionPass, true)
+
+      // Render transparent objects
+      for (const draw of this.drawCalls) {
+        if (draw.type === "transparent" && this.shouldRenderDrawCall(draw)) {
+          reflectionPass.setBindGroup(0, draw.bindGroup)
+          reflectionPass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
+        }
+      }
+
+      this.drawOutlines(reflectionPass, true, true)
+    }
+
+    reflectionPass.end()
+
+    // Submit reflection rendering commands
+    const reflectionCommandBuffer = reflectionEncoder.finish()
+    this.device.queue.submit([reflectionCommandBuffer])
+
+    // Restore original skin matrices
+    this.updateSkinMatrices()
+  }
+
   // Helper: Render hair with post-alpha-eye effect (depth pre-pass + stencil-based shading + outlines)
-  private renderHair(pass: GPURenderPassEncoder) {
+  private renderHair(pass: GPURenderPassEncoder, useReflectionPipeline: boolean = false) {
+    if (useReflectionPipeline) {
+      // For reflections, use the basic reflection pipeline for all hair
+      pass.setPipeline(this.reflectionPipeline)
+      for (const draw of this.drawCalls) {
+        if (draw.type === "hair-over-eyes" || draw.type === "hair-over-non-eyes") {
+          pass.setBindGroup(0, draw.bindGroup)
+          pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
+        }
+      }
+      return
+    }
+
     // Hair depth pre-pass (reduces overdraw via early depth rejection)
     const hasHair = this.drawCalls.some(
       (d) => (d.type === "hair-over-eyes" || d.type === "hair-over-non-eyes") && this.shouldRenderDrawCall(d)
@@ -1707,7 +2164,7 @@ export class Engine {
     const viewMatrix = this.camera.getViewMatrix()
     const projectionMatrix = this.camera.getProjectionMatrix()
 
-    // Convert screen coordinates to world space ray (like Babylon.js)
+    // Convert screen coordinates to world space ray
     const canvas = this.canvas
     const rect = canvas.getBoundingClientRect()
 
@@ -1969,7 +2426,12 @@ export class Engine {
         // Pass 3: Hair rendering (depth pre-pass + shading + outlines)
         this.renderHair(pass)
 
-        // Pass 4: Transparent
+        // Pass 4: Ground (with reflections)
+        if (this.groundHasReflections) {
+          this.renderGround(pass)
+        }
+
+        // Pass 5: Transparent
         pass.setPipeline(this.modelPipeline)
         for (const draw of this.drawCalls) {
           if (draw.type === "transparent" && this.shouldRenderDrawCall(draw)) {
@@ -2127,7 +2589,12 @@ export class Engine {
     this.skinMatricesVersion++
   }
 
-  private drawOutlines(pass: GPURenderPassEncoder, transparent: boolean) {
+  private drawOutlines(pass: GPURenderPassEncoder, transparent: boolean, useReflectionPipeline: boolean = false) {
+    if (useReflectionPipeline) {
+      // Skip outlines for reflections - not critical for the effect
+      return
+    }
+
     pass.setPipeline(this.outlinePipeline)
     const outlineType: DrawCallType = transparent ? "transparent-outline" : "opaque-outline"
     for (const draw of this.drawCalls) {
@@ -2161,5 +2628,52 @@ export class Engine {
       this.framesSinceLastUpdate = 0
       this.lastFpsUpdate = now
     }
+  }
+
+  private createMirrorMatrix(planeNormal: Vec3, planeDistance: number): Mat4 {
+    // Create reflection matrix across a plane
+    const n = planeNormal.normalize()
+
+    return new Mat4(
+      new Float32Array([
+        1 - 2 * n.x * n.x,
+        -2 * n.x * n.y,
+        -2 * n.x * n.z,
+        0,
+        -2 * n.y * n.x,
+        1 - 2 * n.y * n.y,
+        -2 * n.y * n.z,
+        0,
+        -2 * n.z * n.x,
+        -2 * n.z * n.y,
+        1 - 2 * n.z * n.z,
+        0,
+        -2 * planeDistance * n.x,
+        -2 * planeDistance * n.y,
+        -2 * planeDistance * n.z,
+        1,
+      ])
+    )
+  }
+
+  private writeMirrorTransformedSkinMatrices(mirrorMatrix: Mat4) {
+    if (!this.currentModel || !this.skinMatrixBuffer) return
+
+    const originalMatrices = this.currentModel.getSkinMatrices()
+    const transformedMatrices = new Float32Array(originalMatrices.length)
+
+    for (let i = 0; i < originalMatrices.length; i += 16) {
+      const boneMatrixValues = new Float32Array(16)
+      for (let j = 0; j < 16; j++) {
+        boneMatrixValues[j] = originalMatrices[i + j]
+      }
+      const boneMatrix = new Mat4(boneMatrixValues)
+      const transformed = mirrorMatrix.multiply(boneMatrix)
+      for (let j = 0; j < 16; j++) {
+        transformedMatrices[i + j] = transformed.values[j]
+      }
+    }
+
+    this.device.queue.writeBuffer(this.skinMatrixBuffer, 0, transformedMatrices)
   }
 }

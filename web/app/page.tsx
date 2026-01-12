@@ -7,7 +7,6 @@ import Loading from "@/components/loading"
 import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
 import { Play, Pause } from "lucide-react"
-import Image from "next/image"
 
 // Format time as M:SS or MM:SS (with leading zero)
 function formatTime(seconds: number): string {
@@ -180,12 +179,8 @@ export default function Home() {
       try {
         const engine = new Engine(canvasRef.current, {
           ambientColor: new Vec3(0.85, 0.9, 0.98),
-          bloomIntensity: 0.12,
-          bloomThreshold: 0.5,
-          rimLightIntensity: 0.5,
           cameraDistance: 26.5,
           cameraTarget: new Vec3(0, 12.2, 0),
-          cameraFov: Math.PI / 4,
           onRaycast: (material: string | null, screenX: number, screenY: number) => {
             console.log("material", material)
 
@@ -202,6 +197,7 @@ export default function Home() {
         engineRef.current = engine
         await engine.init()
         await engine.loadModel("/models/reze/reze_smol.pmx")
+        engine.addGround({ diffuseColor: new Vec3(0.9, 0.5, 1.0) })
 
         setLoading(false)
 
@@ -279,15 +275,6 @@ export default function Home() {
         </div>
       )}
       {loading && !engineError && <Loading loading={loading} />}
-      <div className="absolute inset-0 w-full h-full flex justify-center items-center">
-        <Image
-          src="/pool.jpeg"
-          alt="Reze Engine"
-          width={1000}
-          height={1000}
-          className="w-full h-full md:h-auto touch-none z-0 object-cover"
-        />
-      </div>
 
       {/* Ripple effect around cursor when material is selected */}
       {selectedMaterial && (
