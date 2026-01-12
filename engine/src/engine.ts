@@ -3,7 +3,7 @@ import { Mat4, Quat, Vec3 } from "./math"
 import { Model } from "./model"
 import { PmxLoader } from "./pmx-loader"
 
-export type RaycastCallback = (materialName: string | null) => void
+export type RaycastCallback = (material: string | null, screenX: number, screenY: number) => void
 
 export type EngineOptions = {
   ambientColor?: Vec3
@@ -125,6 +125,9 @@ export class Engine {
   private cachedSkinnedVertices?: Float32Array
   private cachedSkinMatricesVersion = -1
   private skinMatricesVersion = 0
+  // Double-tap detection
+  private lastTouchTime = 0
+  private readonly DOUBLE_TAP_DELAY = 300 // ms
 
   private currentModel: Model | null = null
   private modelDir: string = ""
@@ -1003,9 +1006,10 @@ export class Engine {
     this.resizeObserver.observe(this.canvas)
     this.handleResize()
 
-    // Setup raycasting click handler
+    // Setup raycasting double-click handler for desktop
     if (this.onRaycast) {
-      this.canvas.addEventListener("click", this.handleCanvasClick)
+      this.canvas.addEventListener("dblclick", this.handleCanvasDoubleClick)
+      this.canvas.addEventListener("touchend", this.handleCanvasTouch)
     }
   }
 
@@ -1218,6 +1222,13 @@ export class Engine {
     this.stopRenderLoop()
     this.stopAnimation()
     if (this.camera) this.camera.detachControl()
+
+    // Remove raycasting event listeners
+    if (this.onRaycast) {
+      this.canvas.removeEventListener("dblclick", this.handleCanvasDoubleClick)
+      this.canvas.removeEventListener("touchend", this.handleCanvasTouch)
+    }
+
     if (this.resizeObserver) {
       this.resizeObserver.disconnect()
       this.resizeObserver = null
@@ -1648,7 +1659,7 @@ export class Engine {
     }
   }
 
-  private handleCanvasClick = (event: MouseEvent) => {
+  private handleCanvasDoubleClick = (event: MouseEvent) => {
     if (!this.onRaycast || !this.currentModel) return
 
     const rect = this.canvas.getBoundingClientRect()
@@ -1656,6 +1667,34 @@ export class Engine {
     const y = event.clientY - rect.top
 
     this.performRaycast(x, y)
+  }
+
+  private handleCanvasTouch = (event: TouchEvent) => {
+    if (!this.onRaycast || !this.currentModel) return
+
+    // Prevent default to avoid triggering mouse events
+    event.preventDefault()
+
+    // Get the first touch
+    const touch = event.changedTouches[0]
+    if (!touch) return
+
+    const currentTime = Date.now()
+    const timeDiff = currentTime - this.lastTouchTime
+
+    // Check for double-tap (within delay threshold)
+    if (timeDiff < this.DOUBLE_TAP_DELAY) {
+      const rect = this.canvas.getBoundingClientRect()
+      const x = touch.clientX - rect.left
+      const y = touch.clientY - rect.top
+
+      this.performRaycast(x, y)
+      // Reset last touch time to prevent triple-tap triggering double-tap
+      this.lastTouchTime = 0
+    } else {
+      // Single tap - update last touch time for potential double-tap
+      this.lastTouchTime = currentTime
+    }
   }
 
   private performRaycast(screenX: number, screenY: number) {
@@ -1719,7 +1758,7 @@ export class Engine {
 
     if (!baseVertices || !indices || !skinning) {
       if (this.onRaycast) {
-        this.onRaycast(null)
+        this.onRaycast(null, screenX, screenY)
       }
       return
     }
@@ -1871,7 +1910,7 @@ export class Engine {
 
     // Call the callback with the result
     if (this.onRaycast) {
-      this.onRaycast(closestHit?.materialName || null)
+      this.onRaycast(closestHit?.materialName || null, screenX, screenY)
     }
   }
 

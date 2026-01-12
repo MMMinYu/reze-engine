@@ -69,18 +69,6 @@ export default function Home() {
     }
   }, [isPlaying, isPaused])
 
-  // Track mouse position for ripple effect
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      setMousePosition({ x: e.clientX, y: e.clientY })
-    }
-
-    window.addEventListener("mousemove", handleMouseMove)
-    return () => {
-      window.removeEventListener("mousemove", handleMouseMove)
-    }
-  }, [])
-
   // Create and preload audio element on mount
   useEffect(() => {
     const audio = new Audio("/IRIS OUT.wav")
@@ -198,8 +186,11 @@ export default function Home() {
           cameraDistance: 26.5,
           cameraTarget: new Vec3(0, 12.2, 0),
           cameraFov: Math.PI / 4,
-          onRaycast: (material) => {
+          onRaycast: (material: string | null, screenX: number, screenY: number) => {
             console.log("material", material)
+
+            // Update mouse position for ripple effect
+            setMousePosition({ x: screenX, y: screenY })
 
             if (material) {
               // Start new ripple animation each time material is clicked
@@ -251,8 +242,6 @@ export default function Home() {
       }
     }
   }, [initEngine])
-
-  // iOS audio unlock: removed - unlock happens in play() method itself
 
   // Space key shortcut for play/pause
   useEffect(() => {
@@ -306,17 +295,17 @@ export default function Home() {
           key={rippleId}
           className="absolute pointer-events-none z-2"
           style={{
-            left: mousePosition.x - 32,
-            top: mousePosition.y - 32,
-            width: 64,
-            height: 64,
+            left: mousePosition.x - 35,
+            top: mousePosition.y - 35,
+            width: 70,
+            height: 70,
           }}
         >
           <div
             className="w-full h-full rounded-full"
             style={{
               background:
-                "radial-gradient(circle, rgba(255,59,48,1.0) 0%, rgba(255,59,48,0.9) 20%, rgba(255,59,48,0.7) 40%, rgba(255,59,48,0.6) 60%, rgba(255,59,48,0.1) 80%, transparent 100%)",
+                "radial-gradient(circle, rgba(255,59,48,1) 0%, rgba(255,59,48,0.9) 20%, rgba(255,59,48,0.7) 40%, rgba(255,59,48,0.6) 60%, rgba(255,59,48,0.1) 80%, transparent 100%)",
               boxShadow:
                 "0 0 35px rgba(255,59,48,1.0), 0 0 70px rgba(255,59,48,0.7), inset 0 0 25px rgba(255,59,48,0.5)",
               animation: "ripple 0.5s ease-out forwards",
