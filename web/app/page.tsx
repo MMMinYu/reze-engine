@@ -207,9 +207,9 @@ export default function Home() {
           setStats(engine.getStats())
         })
         engine.setMorphWeight("抗穿模", 1.0)
-        console.log("materials", engine.getMaterials())
-        console.log("bones", engine.getBones())
-        console.log("morphs", engine.getMorphs())
+        // console.log("materials", engine.getMaterials())
+        // console.log("bones", engine.getBones())
+        // console.log("morphs", engine.getMorphs())
         // engine.setMaterialVisible("材質1", false)
         // engine.setMaterialVisible("GT Bow Button Blouse", false)
 

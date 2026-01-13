@@ -259,6 +259,7 @@ export class IKSolverSystem {
       const link = solver.links[i]
       this.updateWorldMatrix(link.boneIndex, bones, localRotations, localTranslations, worldMatrices, ikChainInfo)
     }
+    this.updateWorldMatrix(ikBoneIndex, bones, localRotations, localTranslations, worldMatrices, undefined)
     this.updateWorldMatrix(targetBoneIndex, bones, localRotations, localTranslations, worldMatrices, undefined)
   }
 
