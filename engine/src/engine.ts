@@ -1480,6 +1480,14 @@ export class Engine {
     }
   }
 
+  public toggleMaterialVisible(name: string): void {
+    if (this.hiddenMaterials.has(name)) {
+      this.hiddenMaterials.delete(name)
+    } else {
+      this.hiddenMaterials.add(name)
+    }
+  }
+
   public isMaterialVisible(name: string): boolean {
     return !this.hiddenMaterials.has(name)
   }
@@ -2326,8 +2334,8 @@ export class Engine {
       if (triangleMaterialIndex === -1) continue
 
       // Skip invisible materials
-      const materialName = materials[triangleMaterialIndex].name
-      if (this.hiddenMaterials.has(materialName)) continue
+      // const materialName = materials[triangleMaterialIndex].name
+      // if (this.hiddenMaterials.has(materialName)) continue
 
       // Ray-triangle intersection test (Möller-Trumbore algorithm)
       const edge1 = v1.subtract(v0)
