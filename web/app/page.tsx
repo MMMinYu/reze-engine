@@ -198,7 +198,7 @@ export default function Home() {
           height: 160,
           fadeStart: 10.0,
           fadeEnd: 80.0,
-          diffuseColor: new Vec3(0.9, 0.1, 1.0),
+          diffuseColor: new Vec3(0.8, 0.1, 1.0),
         })
 
         setLoading(false)
@@ -303,10 +303,7 @@ export default function Home() {
         </div>
       )}
 
-      <canvas
-        ref={canvasRef}
-        className="absolute inset-0 w-full h-full touch-none z-1 bg-gradient-to-b from-red-500 via-red-600 to-red-900"
-      />
+      <canvas ref={canvasRef} className="absolute inset-0 w-full h-full touch-none z-1 bg-indigo-950" />
 
       {/* Player Controls */}
       {!loading && !engineError && (
