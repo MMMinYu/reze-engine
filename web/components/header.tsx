@@ -6,7 +6,7 @@ import { BookOpenText } from "lucide-react"
 
 export default function Header({ stats }: { stats: EngineStats | null }) {
   return (
-    <header className="absolute top-0 left-0 right-0 px-4 md:px-6 py-3 md:py-4 flex items-center gap-2 z-50 w-full select-none flex flex-row justify-between">
+    <header className="absolute top-0 left-0 right-0 px-4 md:px-6 py-2 flex items-center gap-2 z-50 w-full select-none flex flex-row justify-between">
       <div className="flex items-center gap-2">
         <Link href="/">
           <h1
@@ -32,7 +32,7 @@ export default function Header({ stats }: { stats: EngineStats | null }) {
         </div>
       )}
 
-      <div className="pointer-events-auto flex items-center gap-1 bg-black rounded-full h-7">
+      <div className="pointer-events-auto flex flex-row items-center gap-0 px-1 bg-black rounded-full h-7 ">
         <Button variant="ghost" size="icon" asChild className="hover:bg-black hover:text-white rounded-full">
           <Link href="/tutorial">
             <BookOpenText />

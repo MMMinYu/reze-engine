@@ -1310,7 +1310,7 @@ export class Engine {
     this.updateLightBuffer()
   }
 
-  public addLight(direction: Vec3, color: Vec3, intensity: number = 1.0): boolean {
+  private addLight(direction: Vec3, color: Vec3, intensity: number = 1.0): boolean {
     if (this.lightCount >= 4) return false
 
     const normalized = direction.normalize()
