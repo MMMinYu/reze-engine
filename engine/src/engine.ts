@@ -1447,7 +1447,6 @@ export class Engine {
     this.modelDir = dir
 
     const model = await PmxLoader.load(path)
-    console.log(model)
 
     // Clear cached skinned vertices when loading a new model
     this.cachedSkinnedVertices = undefined
@@ -1979,6 +1978,9 @@ export class Engine {
         pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
       }
     }
+
+    // // Restore model index buffer for subsequent rendering
+    // pass.setIndexBuffer(this.indexBuffer!, "uint32")
   }
 
   private renderReflectionTexture() {
@@ -2426,11 +2428,6 @@ export class Engine {
         // Pass 3: Hair rendering (depth pre-pass + shading + outlines)
         this.renderHair(pass)
 
-        // Pass 4: Ground (with reflections)
-        if (this.groundHasReflections) {
-          this.renderGround(pass)
-        }
-
         // Pass 5: Transparent
         pass.setPipeline(this.modelPipeline)
         for (const draw of this.drawCalls) {
@@ -2441,6 +2438,11 @@ export class Engine {
         }
 
         this.drawOutlines(pass, true)
+      }
+
+      // Pass 4: Ground (with reflections)
+      if (this.groundHasReflections) {
+        this.renderGround(pass)
       }
 
       pass.end()

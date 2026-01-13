@@ -178,17 +178,13 @@ export default function Home() {
       // Initialize engine
       try {
         const engine = new Engine(canvasRef.current, {
-          ambientColor: new Vec3(0.85, 0.9, 0.98),
-          cameraDistance: 30,
-          cameraTarget: new Vec3(0, 12, 0),
+          ambientColor: new Vec3(0.85, 0.9, 0.99),
+          cameraDistance: 31.5,
+          cameraTarget: new Vec3(0, 11.5, 0),
           onRaycast: (material: string | null, screenX: number, screenY: number) => {
-            console.log("material", material)
-
-            // Update mouse position for ripple effect
-            setMousePosition({ x: screenX, y: screenY })
-
             if (material) {
-              // Start new ripple animation each time material is clicked
+              console.log("material", material)
+              setMousePosition({ x: screenX, y: screenY })
               setRippleId((prev) => prev + 1)
             }
             setSelectedMaterial(material)
@@ -198,11 +194,11 @@ export default function Home() {
         await engine.init()
         await engine.loadModel("/models/reze/reze_smol.pmx")
         engine.addGround({
-          width: 160,
-          height: 160,
+          width: 120,
+          height: 120,
           fadeStart: 10.0,
-          fadeEnd: 100.0,
-          diffuseColor: new Vec3(0.9, 0.5, 1.0),
+          fadeEnd: 80.0,
+          diffuseColor: new Vec3(0.9, 0.1, 1.0),
         })
 
         setLoading(false)
