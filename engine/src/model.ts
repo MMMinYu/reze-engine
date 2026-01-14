@@ -471,20 +471,19 @@ export class Model {
 
   // ------- Bone helpers (public API) -------
 
-  rotateBones(names: string[], quats: Quat[], durationMs?: number): void {
+  rotateBones(boneRotations: Record<string, Quat>, durationMs?: number): void {
     const state = this.tweenState
     // Clone and normalize to avoid mutating input
-    quats.forEach((q) => q.normalize())
+    Object.values(boneRotations).forEach((q) => q.normalize())
     const now = this.tweenTimeMs
     const dur = durationMs && durationMs > 0 ? durationMs : 0
 
-    for (let i = 0; i < names.length; i++) {
-      const name = names[i]
+    for (const [name, targetQuat] of Object.entries(boneRotations)) {
       const idx = this.runtimeSkeleton.nameIndex[name] ?? -1
       if (idx < 0 || idx >= this.skeleton.bones.length) continue
 
       const rotations = this.runtimeSkeleton.localRotations
-      const targetNorm = quats[i]
+      const targetNorm = targetQuat
 
       if (dur === 0) {
         rotations[idx].set(targetNorm)
@@ -523,7 +522,7 @@ export class Model {
 
   // Move bones using VMD-style relative translations (relative to bind pose world position)
   // This is the default behavior for VMD animations
-  moveBones(names: string[], relativeTranslations: Vec3[], durationMs?: number): void {
+  moveBones(boneTranslations: Record<string, Vec3>, durationMs?: number): void {
     const state = this.tweenState
     const now = this.tweenTimeMs
     const dur = durationMs && durationMs > 0 ? durationMs : 0
@@ -541,15 +540,13 @@ export class Model {
       }
     }
 
-    for (let i = 0; i < names.length; i++) {
-      const name = names[i]
+    for (const [name, vmdRelativeTranslation] of Object.entries(boneTranslations)) {
       const idx = this.runtimeSkeleton.nameIndex[name] ?? -1
       if (idx < 0 || idx >= this.skeleton.bones.length) continue
 
       const bone = this.skeleton.bones[idx]
       const translations = this.runtimeSkeleton.localTranslations
       const localRot = this.runtimeSkeleton.localRotations
-      const vmdRelativeTranslation = relativeTranslations[i]
 
       // VMD translation is relative to bind pose world position
       // targetWorldPos = bindPoseWorldPos + vmdRelativeTranslation
@@ -773,6 +770,7 @@ export class Model {
    */
   async loadVmd(vmdUrl: string): Promise<void> {
     this.animationData = await VMDLoader.load(vmdUrl)
+    this.resetAllBones()
     this.processFrames()
     // Apply initial pose at time 0
     this.animationTime = 0
@@ -780,6 +778,24 @@ export class Model {
 
     if (this.physics) {
       this.computeWorldMatrices()
+      this.physics.reset(this.runtimeSkeleton.worldMatrices, this.skeleton.inverseBindMatrices)
+    }
+  }
+
+  /**
+   * Reset all bones to their default pose
+   */
+  public resetAllBones(): void {
+    for (let boneIdx = 0; boneIdx < this.skeleton.bones.length; boneIdx++) {
+      const localRot = this.runtimeSkeleton.localRotations[boneIdx]
+      const localTrans = this.runtimeSkeleton.localTranslations[boneIdx]
+
+      // Reset to default pose: identity rotation and zero translation (like initial PMX state)
+      localRot.set(Quat.identity())
+      localTrans.set(Vec3.zeros())
+    }
+    this.computeWorldMatrices()
+    if (this.physics) {
       this.physics.reset(this.runtimeSkeleton.worldMatrices, this.skeleton.inverseBindMatrices)
     }
   }

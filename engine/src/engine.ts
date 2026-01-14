@@ -1455,13 +1455,17 @@ export class Engine {
     await this.setupModelBuffers(model)
   }
 
-  public rotateBones(bones: string[], rotations: Quat[], durationMs?: number) {
-    this.currentModel?.rotateBones(bones, rotations, durationMs)
+  public rotateBones(boneRotations: Record<string, Quat>, durationMs?: number) {
+    this.currentModel?.rotateBones(boneRotations, durationMs)
   }
 
   // moveBones now takes relative translations (VMD-style) by default
-  public moveBones(bones: string[], relativeTranslations: Vec3[], durationMs?: number) {
-    this.currentModel?.moveBones(bones, relativeTranslations, durationMs)
+  public moveBones(boneTranslations: Record<string, Vec3>, durationMs?: number) {
+    this.currentModel?.moveBones(boneTranslations, durationMs)
+  }
+
+  public resetAllBones() {
+    this.currentModel?.resetAllBones()
   }
 
   public setMorphWeight(name: string, weight: number, durationMs?: number): void {
