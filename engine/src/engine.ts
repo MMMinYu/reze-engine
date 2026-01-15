@@ -348,6 +348,10 @@ export class Engine {
           _padding1: f32,
           rimColor: vec3f,
           isOverEyes: f32, // 1.0 if rendering over eyes, 0.0 otherwise
+          diffuseColor: vec3f,
+          _padding2: f32,
+          ambientColor: vec3f,
+          _padding3: f32,
         };
 
         struct VertexOutput {
@@ -408,9 +412,11 @@ export class Engine {
           }
           
           let n = normalize(input.normal);
-          let albedo = textureSample(diffuseTexture, diffuseSampler, input.uv).rgb;
+          let textureColor = textureSample(diffuseTexture, diffuseSampler, input.uv).rgb;
+          let albedo = textureColor * material.diffuseColor;
 
-          // Accumulate light contribution
+          // Accumulate light contribution, ignore material.ambientColor 
+          // var lightAccum = light.ambientColor.xyz * material.ambientColor;
           var lightAccum = light.ambientColor.xyz;
           for (var i = 0u; i < 4u; i++) {
             let intensity = light.lights[i].color.w;
@@ -1762,7 +1768,13 @@ export class Engine {
       const materialAlpha = mat.diffuse[3]
       const isTransparent = materialAlpha < 1.0 - 0.001
 
-      const materialUniformBuffer = this.createMaterialUniformBuffer(mat.name, materialAlpha, 0.0)
+      const materialUniformBuffer = this.createMaterialUniformBuffer(
+        mat.name,
+        materialAlpha,
+        0.0,
+        [mat.diffuse[0], mat.diffuse[1], mat.diffuse[2]],
+        mat.ambient
+      )
 
       // Create bind groups using the shared bind group layout - All pipelines (main, eye, hair multiply, hair opaque) use the same shader and layout
       const bindGroup = this.device.createBindGroup({
@@ -1793,7 +1805,9 @@ export class Engine {
             const buffer = this.createMaterialUniformBuffer(
               `${mat.name} (${isOverEyes ? "over eyes" : "over non-eyes"})`,
               materialAlpha,
-              isOverEyes ? 1.0 : 0.0
+              isOverEyes ? 1.0 : 0.0,
+              [mat.diffuse[0], mat.diffuse[1], mat.diffuse[2]],
+              mat.ambient
             )
 
             return this.device.createBindGroup({
@@ -1895,9 +1909,32 @@ export class Engine {
     }
   }
 
-  private createMaterialUniformBuffer(label: string, alpha: number, isOverEyes: number): GPUBuffer {
-    const data = new Float32Array(8)
-    data.set([alpha, 1.0, this.rimLightIntensity, 0.0, 1.0, 1.0, 1.0, isOverEyes])
+  private createMaterialUniformBuffer(
+    label: string,
+    alpha: number,
+    isOverEyes: number,
+    diffuseColor: [number, number, number],
+    ambientColor: [number, number, number]
+  ): GPUBuffer {
+    const data = new Float32Array(16)
+    data.set([
+      alpha,
+      1.0,
+      this.rimLightIntensity,
+      0.0, // alpha, alphaMultiplier, rimIntensity, _padding1
+      1.0,
+      1.0,
+      1.0,
+      isOverEyes, // rimColor (vec3), isOverEyes
+      diffuseColor[0],
+      diffuseColor[1],
+      diffuseColor[2],
+      0.0, // diffuseColor (vec3), _padding2
+      ambientColor[0],
+      ambientColor[1],
+      ambientColor[2],
+      0.0, // ambientColor (vec3), _padding3
+    ])
     return this.createUniformBuffer(`material uniform: ${label}`, data)
   }
 
