@@ -178,7 +178,7 @@ export default function Home() {
       // Initialize engine
       try {
         const engine = new Engine(canvasRef.current, {
-          ambientColor: new Vec3(0.85, 0.9, 0.99),
+          ambientColor: new Vec3(0.8, 0.85, 0.9),
           cameraDistance: 31.5,
           cameraTarget: new Vec3(0, 11.5, 0),
           onRaycast: (material: string | null, screenX: number, screenY: number) => {
@@ -216,6 +216,7 @@ export default function Home() {
         await engine.loadAnimation("/animations/IRIS OUT.vmd")
         const prog = engine.getAnimationProgress()
         setProgress(prog)
+        setEngineError(null)
       } catch (error) {
         setEngineError(error instanceof Error ? error.message : "Unknown error")
       }

@@ -7,6 +7,8 @@ export type RaycastCallback = (material: string | null, screenX: number, screenY
 
 export type EngineOptions = {
   ambientColor?: Vec3
+  directionalLightIntensity?: number
+  minSpecularIntensity?: number
   bloomIntensity?: number
   bloomThreshold?: number
   rimLightIntensity?: number
@@ -19,10 +21,12 @@ export type EngineOptions = {
 export type RequiredEngineOptions = Required<Omit<EngineOptions, "onRaycast">> & Pick<EngineOptions, "onRaycast">
 
 export const DEFAULT_ENGINE_OPTIONS: RequiredEngineOptions = {
-  ambientColor: new Vec3(0.85, 0.85, 0.85),
-  bloomIntensity: 0.12,
+  ambientColor: new Vec3(0.82, 0.82, 0.82),
+  directionalLightIntensity: 0.2,
+  minSpecularIntensity: 0.3,
+  bloomIntensity: 0.1,
   bloomThreshold: 0.5,
-  rimLightIntensity: 0.45,
+  rimLightIntensity: 0.4,
   cameraDistance: 26.6,
   cameraTarget: new Vec3(0, 12.5, 0),
   cameraFov: Math.PI / 4,
@@ -100,6 +104,8 @@ export class Engine {
 
   // Ambient light settings
   private ambientColor!: Vec3
+  private directionalLightIntensity!: number
+  private minSpecularIntensity!: number
   // Bloom post-processing textures
   private sceneRenderTexture!: GPUTexture
   private sceneRenderTextureView!: GPUTextureView // Cached view (recreated on resize)
@@ -170,6 +176,9 @@ export class Engine {
     this.canvas = canvas
     if (options) {
       this.ambientColor = options.ambientColor ?? DEFAULT_ENGINE_OPTIONS.ambientColor!
+      this.directionalLightIntensity =
+        options.directionalLightIntensity ?? DEFAULT_ENGINE_OPTIONS.directionalLightIntensity
+      this.minSpecularIntensity = options.minSpecularIntensity ?? DEFAULT_ENGINE_OPTIONS.minSpecularIntensity
       this.bloomIntensity = options.bloomIntensity ?? DEFAULT_ENGINE_OPTIONS.bloomIntensity
       this.bloomThreshold = options.bloomThreshold ?? DEFAULT_ENGINE_OPTIONS.bloomThreshold
       this.rimLightIntensity = options.rimLightIntensity ?? DEFAULT_ENGINE_OPTIONS.rimLightIntensity
@@ -345,13 +354,15 @@ export class Engine {
           alpha: f32,
           alphaMultiplier: f32,
           rimIntensity: f32,
-          _padding1: f32,
+          shininess: f32,
           rimColor: vec3f,
           isOverEyes: f32, // 1.0 if rendering over eyes, 0.0 otherwise
           diffuseColor: vec3f,
           _padding2: f32,
           ambientColor: vec3f,
           _padding3: f32,
+          specularColor: vec3f,
+          _padding4: f32,
         };
 
         struct VertexOutput {
@@ -413,28 +424,40 @@ export class Engine {
           
           let n = normalize(input.normal);
           let textureColor = textureSample(diffuseTexture, diffuseSampler, input.uv).rgb;
-          let albedo = textureColor * material.diffuseColor;
 
-          // Accumulate light contribution, ignore material.ambientColor 
-          // var lightAccum = light.ambientColor.xyz * material.ambientColor;
-          var lightAccum = light.ambientColor.xyz;
-          for (var i = 0u; i < 4u; i++) {
-            let intensity = light.lights[i].color.w;
-            if (intensity > 0.0) {
-              let l = -light.lights[i].direction.xyz;
-              let nDotL = max(dot(n, l), 0.0);
-              let radiance = light.lights[i].color.xyz * intensity;
-              lightAccum += radiance * nDotL;
-            }
-          }
+          // View direction for specular and rim
+          let viewDir = normalize(camera.viewPos - input.worldPos);
+
+          // Simple lighting: global ambient + diffuse lighting
+          let albedo = textureColor * material.diffuseColor;
+          
+          // Precompute material values
+          let minSpec = light.ambientColor.w;
+          let effectiveSpecular = max(material.specularColor, vec3f(minSpec));
+          let specPower = max(material.shininess, 1.0);
+          
+          // Single directional light
+          let l = -light.lights[0].direction.xyz;
+          let nDotL = max(dot(n, l), 0.0);
+          let intensity = light.lights[0].color.w;
+          let radiance = light.lights[0].color.xyz * intensity;
+          
+          let lightAccum = light.ambientColor.xyz + radiance * nDotL;
+
+          // Blinn-Phong specular
+          let h = normalize(l + viewDir);
+          let nDotH = max(dot(n, h), 0.0);
+          let specFactor = pow(nDotH, specPower);
+          let specularAccum = effectiveSpecular * radiance * specFactor * nDotL;
+          
+          let litColor = albedo * lightAccum;
 
           // Rim light calculation - proper Fresnel for edge-only highlights
-          let viewDir = normalize(camera.viewPos - input.worldPos);
           let fresnel = 1.0 - abs(dot(n, viewDir));
           let rimFactor = pow(fresnel, 4.0); // Higher power for sharper edge-only effect
           let rimLight = material.rimColor * material.rimIntensity * rimFactor;
 
-          let color = albedo * lightAccum + rimLight;
+          let color = litColor + specularAccum + rimLight;
           
           return vec4f(color, finalAlpha);
         }
@@ -573,17 +596,12 @@ export class Engine {
           let edgeFade = 1.0 - smoothstep(0.0, 1.0, t);
           finalColor *= edgeFade;
 
-          // Accumulate light contribution
-          var lightAccum = light.ambientColor.xyz;
-          for (var i = 0u; i < 4u; i++) {
-            let intensity = light.lights[i].color.w;
-            if (intensity > 0.0) {
-              let l = -light.lights[i].direction.xyz;
-              let nDotL = max(dot(n, l), 0.0);
-              let radiance = light.lights[i].color.xyz * intensity;
-              lightAccum += radiance * nDotL;
-            }
-          }
+          // Single directional light
+          let l = -light.lights[0].direction.xyz;
+          let nDotL = max(dot(n, l), 0.0);
+          let intensity = light.lights[0].color.w;
+          let radiance = light.lights[0].color.xyz * intensity;
+          let lightAccum = light.ambientColor.xyz + radiance * nDotL;
 
           // Apply lighting to the blended color
           let litColor = finalColor * lightAccum;
@@ -1292,9 +1310,7 @@ export class Engine {
     this.lightCount = 0
 
     this.setAmbientColor(this.ambientColor)
-    this.addLight(new Vec3(-0.3, -0.7, 0.6).normalize(), new Vec3(1.0, 0.9, 0.8), 0.08)
-    this.addLight(new Vec3(0.5, -0.6, 0.6).normalize(), new Vec3(0.9, 0.95, 1.0), 0.07)
-    this.addLight(new Vec3(0.0, -0.3, -1.0).normalize(), new Vec3(0.95, 0.95, 0.9), 0.06)
+    this.addLight(new Vec3(0.5, -1, 1).normalize(), new Vec3(1.0, 1.0, 1.0), this.directionalLightIntensity)
   }
 
   private setAmbientColor(color: Vec3) {
@@ -1302,7 +1318,7 @@ export class Engine {
     this.lightData[0] = color.x // ambientColor.x
     this.lightData[1] = color.y // ambientColor.y
     this.lightData[2] = color.z // ambientColor.z
-    this.lightData[3] = 1.0 // ambientColor.w
+    this.lightData[3] = this.minSpecularIntensity // ambientColor.w = minSpecularIntensity
     this.updateLightBuffer()
   }
 
@@ -1773,7 +1789,9 @@ export class Engine {
         materialAlpha,
         0.0,
         [mat.diffuse[0], mat.diffuse[1], mat.diffuse[2]],
-        mat.ambient
+        mat.ambient,
+        mat.specular,
+        mat.shininess
       )
 
       // Create bind groups using the shared bind group layout - All pipelines (main, eye, hair multiply, hair opaque) use the same shader and layout
@@ -1807,7 +1825,9 @@ export class Engine {
               materialAlpha,
               isOverEyes ? 1.0 : 0.0,
               [mat.diffuse[0], mat.diffuse[1], mat.diffuse[2]],
-              mat.ambient
+              mat.ambient,
+              mat.specular,
+              mat.shininess
             )
 
             return this.device.createBindGroup({
@@ -1914,14 +1934,16 @@ export class Engine {
     alpha: number,
     isOverEyes: number,
     diffuseColor: [number, number, number],
-    ambientColor: [number, number, number]
+    ambientColor: [number, number, number],
+    specularColor: [number, number, number],
+    shininess: number
   ): GPUBuffer {
-    const data = new Float32Array(16)
+    const data = new Float32Array(20)
     data.set([
       alpha,
       1.0,
       this.rimLightIntensity,
-      0.0, // alpha, alphaMultiplier, rimIntensity, _padding1
+      shininess, // alpha, alphaMultiplier, rimIntensity, shininess
       1.0,
       1.0,
       1.0,
@@ -1934,6 +1956,10 @@ export class Engine {
       ambientColor[1],
       ambientColor[2],
       0.0, // ambientColor (vec3), _padding3
+      specularColor[0],
+      specularColor[1],
+      specularColor[2],
+      0.0, // specularColor (vec3), _padding4
     ])
     return this.createUniformBuffer(`material uniform: ${label}`, data)
   }
