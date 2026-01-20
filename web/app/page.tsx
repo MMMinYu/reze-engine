@@ -178,12 +178,11 @@ export default function Home() {
       // Initialize engine
       try {
         const engine = new Engine(canvasRef.current, {
-          ambientColor: new Vec3(0.8, 0.84, 0.92),
+          ambientColor: new Vec3(0.88, 0.88, 0.95),
           cameraDistance: 31.5,
           cameraTarget: new Vec3(0, 11.5, 0),
           onRaycast: (material: string | null, screenX: number, screenY: number) => {
             if (material) {
-              console.log("material", material)
               setMousePosition({ x: screenX, y: screenY })
               setRippleId((prev) => prev + 1)
             }

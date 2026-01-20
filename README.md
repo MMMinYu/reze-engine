@@ -10,7 +10,6 @@ A lightweight engine built with WebGPU and TypeScript for real-time 3D anime cha
 - Alpha blending
 - Post alpha eye rendering (the see-through eyes)
 - Rim lighting
-- Bloom
 - Outlines
 - MSAA 4x anti-aliasing
 - Bone and morph API
@@ -63,8 +62,6 @@ const DEFAULT_ENGINE_OPTIONS: RequiredEngineOptions = {
   ambientColor: new Vec3(0.82, 0.82, 0.82),
   directionalLightIntensity: 0.2,
   minSpecularIntensity: 0.3,
-  bloomIntensity: 0.1,
-  bloomThreshold: 0.5,
   rimLightIntensity: 0.4,
   cameraDistance: 26.6,
   cameraTarget: new Vec3(0, 12.5, 0),

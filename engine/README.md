@@ -8,7 +8,6 @@ A lightweight engine built with WebGPU and TypeScript for real-time 3D anime cha
 - Alpha blending
 - Post alpha eye rendering
 - Rim lighting
-- Bloom
 - Outlines
 - MSAA 4x anti-aliasing
 - Bone and morph api

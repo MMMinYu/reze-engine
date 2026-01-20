@@ -616,7 +616,7 @@ fn vs(
             </p>
 
             <p className="leading-7">
-              This tutorial focused on WebGPU fundamentals. Advanced features like physics simulation, inverse kinematics, dynamic lighting, bloom, and post-processing build on these same concepts—they&apos;re application-level features, not new WebGPU primitives. You can explore these in the{" "}
+              This tutorial focused on WebGPU fundamentals. Advanced features like physics simulation, inverse kinematics, dynamic lighting, and post-processing build on these same concepts—they&apos;re application-level features, not new WebGPU primitives. You can explore these in the{" "}
               <Link href="/" className="text-blue-400">
                 Reze Engine
               </Link>{" "}

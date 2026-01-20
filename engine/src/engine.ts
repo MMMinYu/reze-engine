@@ -9,8 +9,6 @@ export type EngineOptions = {
   ambientColor?: Vec3
   directionalLightIntensity?: number
   minSpecularIntensity?: number
-  bloomIntensity?: number
-  bloomThreshold?: number
   rimLightIntensity?: number
   cameraDistance?: number
   cameraTarget?: Vec3
@@ -21,11 +19,9 @@ export type EngineOptions = {
 export type RequiredEngineOptions = Required<Omit<EngineOptions, "onRaycast">> & Pick<EngineOptions, "onRaycast">
 
 export const DEFAULT_ENGINE_OPTIONS: RequiredEngineOptions = {
-  ambientColor: new Vec3(0.82, 0.82, 0.82),
-  directionalLightIntensity: 0.2,
+  ambientColor: new Vec3(0.88, 0.88, 0.88),
+  directionalLightIntensity: 0.24,
   minSpecularIntensity: 0.3,
-  bloomIntensity: 0.1,
-  bloomThreshold: 0.5,
   rimLightIntensity: 0.4,
   cameraDistance: 26.6,
   cameraTarget: new Vec3(0, 12.5, 0),
@@ -100,34 +96,11 @@ export class Engine {
   private renderPassDescriptor!: GPURenderPassDescriptor
   // Constants
   private readonly STENCIL_EYE_VALUE = 1
-  private readonly BLOOM_DOWNSCALE_FACTOR = 2
 
   // Ambient light settings
   private ambientColor!: Vec3
   private directionalLightIntensity!: number
   private minSpecularIntensity!: number
-  // Bloom post-processing textures
-  private sceneRenderTexture!: GPUTexture
-  private sceneRenderTextureView!: GPUTextureView // Cached view (recreated on resize)
-  private bloomExtractTexture!: GPUTexture
-  private bloomBlurTexture1!: GPUTexture
-  private bloomBlurTexture2!: GPUTexture
-  // Post-processing pipelines
-  private bloomExtractPipeline!: GPURenderPipeline
-  private bloomBlurPipeline!: GPURenderPipeline
-  private bloomComposePipeline!: GPURenderPipeline
-  private blurDirectionBuffer!: GPUBuffer
-  private bloomIntensityBuffer!: GPUBuffer
-  private bloomThresholdBuffer!: GPUBuffer
-  private linearSampler!: GPUSampler
-  // Bloom bind groups (created once, reused every frame)
-  private bloomExtractBindGroup?: GPUBindGroup
-  private bloomBlurHBindGroup?: GPUBindGroup
-  private bloomBlurVBindGroup?: GPUBindGroup
-  private bloomComposeBindGroup?: GPUBindGroup
-  // Bloom settings
-  private bloomThreshold!: number
-  private bloomIntensity!: number
   // Rim light settings
   private rimLightIntensity!: number
 
@@ -179,8 +152,6 @@ export class Engine {
       this.directionalLightIntensity =
         options.directionalLightIntensity ?? DEFAULT_ENGINE_OPTIONS.directionalLightIntensity
       this.minSpecularIntensity = options.minSpecularIntensity ?? DEFAULT_ENGINE_OPTIONS.minSpecularIntensity
-      this.bloomIntensity = options.bloomIntensity ?? DEFAULT_ENGINE_OPTIONS.bloomIntensity
-      this.bloomThreshold = options.bloomThreshold ?? DEFAULT_ENGINE_OPTIONS.bloomThreshold
       this.rimLightIntensity = options.rimLightIntensity ?? DEFAULT_ENGINE_OPTIONS.rimLightIntensity
       this.cameraDistance = options.cameraDistance ?? DEFAULT_ENGINE_OPTIONS.cameraDistance
       this.cameraTarget = options.cameraTarget ?? DEFAULT_ENGINE_OPTIONS.cameraTarget
@@ -215,7 +186,6 @@ export class Engine {
     this.setupCamera()
     this.setupLighting()
     this.createPipelines()
-    this.createBloomPipelines()
     this.setupResize()
   }
 
@@ -893,304 +863,6 @@ export class Engine {
     this.hairPipelineOverNonEyes = createHairPipeline(false)
   }
 
-  // Create bloom post-processing pipelines
-  private createBloomPipelines() {
-    // Bloom extraction shader (extracts bright areas)
-    const bloomExtractShader = this.device.createShaderModule({
-      label: "bloom extract",
-      code: /* wgsl */ `
-        struct VertexOutput {
-          @builtin(position) position: vec4f,
-          @location(0) uv: vec2f,
-        };
-
-        @vertex fn vs(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
-          var output: VertexOutput;
-          // Generate fullscreen quad from vertex index
-          let x = f32((vertexIndex << 1u) & 2u) * 2.0 - 1.0;
-          let y = f32(vertexIndex & 2u) * 2.0 - 1.0;
-          output.position = vec4f(x, y, 0.0, 1.0);
-          output.uv = vec2f(x * 0.5 + 0.5, 1.0 - (y * 0.5 + 0.5));
-          return output;
-        }
-
-        struct BloomExtractUniforms {
-          threshold: f32,
-          _padding1: f32,
-          _padding2: f32,
-          _padding3: f32,
-          _padding4: f32,
-          _padding5: f32,
-          _padding6: f32,
-          _padding7: f32,
-        };
-
-        @group(0) @binding(0) var inputTexture: texture_2d<f32>;
-        @group(0) @binding(1) var inputSampler: sampler;
-        @group(0) @binding(2) var<uniform> extractUniforms: BloomExtractUniforms;
-
-        @fragment fn fs(input: VertexOutput) -> @location(0) vec4f {
-          let color = textureSample(inputTexture, inputSampler, input.uv);
-          // Extract bright areas above threshold
-          let threshold = extractUniforms.threshold;
-          let bloom = max(vec3f(0.0), color.rgb - vec3f(threshold)) / max(0.001, 1.0 - threshold);
-          return vec4f(bloom, color.a);
-        }
-      `,
-    })
-
-    // Bloom blur shader (gaussian blur - can be used for both horizontal and vertical)
-    const bloomBlurShader = this.device.createShaderModule({
-      label: "bloom blur",
-      code: /* wgsl */ `
-        struct VertexOutput {
-          @builtin(position) position: vec4f,
-          @location(0) uv: vec2f,
-        };
-
-        @vertex fn vs(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
-          var output: VertexOutput;
-          let x = f32((vertexIndex << 1u) & 2u) * 2.0 - 1.0;
-          let y = f32(vertexIndex & 2u) * 2.0 - 1.0;
-          output.position = vec4f(x, y, 0.0, 1.0);
-          output.uv = vec2f(x * 0.5 + 0.5, 1.0 - (y * 0.5 + 0.5));
-          return output;
-        }
-
-        struct BlurUniforms {
-          direction: vec2f,
-          _padding1: f32,
-          _padding2: f32,
-          _padding3: f32,
-          _padding4: f32,
-          _padding5: f32,
-          _padding6: f32,
-        };
-
-        @group(0) @binding(0) var inputTexture: texture_2d<f32>;
-        @group(0) @binding(1) var inputSampler: sampler;
-        @group(0) @binding(2) var<uniform> blurUniforms: BlurUniforms;
-
-        // 3-tap gaussian blur using bilinear filtering trick (40% fewer texture fetches!)
-        @fragment fn fs(input: VertexOutput) -> @location(0) vec4f {
-          let texelSize = 1.0 / vec2f(textureDimensions(inputTexture));
-          
-          // Bilinear optimization: leverage hardware filtering to sample between pixels
-          // Original 5-tap: weights [0.06136, 0.24477, 0.38774, 0.24477, 0.06136] at offsets [-2, -1, 0, 1, 2]
-          // Optimized 3-tap: combine adjacent samples using weighted offsets
-          let weight0 = 0.38774; // Center sample
-          let weight1 = 0.24477 + 0.06136; // Combined outer samples = 0.30613
-          let offset1 = (0.24477 * 1.0 + 0.06136 * 2.0) / weight1; // Weighted position = 1.2
-          
-          var result = textureSample(inputTexture, inputSampler, input.uv) * weight0;
-          let offsetVec = offset1 * texelSize * blurUniforms.direction;
-          result += textureSample(inputTexture, inputSampler, input.uv + offsetVec) * weight1;
-          result += textureSample(inputTexture, inputSampler, input.uv - offsetVec) * weight1;
-          
-          return result;
-        }
-      `,
-    })
-
-    // Bloom composition shader (combines original scene with bloom)
-    const bloomComposeShader = this.device.createShaderModule({
-      label: "bloom compose",
-      code: /* wgsl */ `
-        struct VertexOutput {
-          @builtin(position) position: vec4f,
-          @location(0) uv: vec2f,
-        };
-
-        @vertex fn vs(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
-          var output: VertexOutput;
-          let x = f32((vertexIndex << 1u) & 2u) * 2.0 - 1.0;
-          let y = f32(vertexIndex & 2u) * 2.0 - 1.0;
-          output.position = vec4f(x, y, 0.0, 1.0);
-          output.uv = vec2f(x * 0.5 + 0.5, 1.0 - (y * 0.5 + 0.5));
-          return output;
-        }
-
-        struct BloomComposeUniforms {
-          intensity: f32,
-          _padding1: f32,
-          _padding2: f32,
-          _padding3: f32,
-          _padding4: f32,
-          _padding5: f32,
-          _padding6: f32,
-          _padding7: f32,
-        };
-
-        @group(0) @binding(0) var sceneTexture: texture_2d<f32>;
-        @group(0) @binding(1) var sceneSampler: sampler;
-        @group(0) @binding(2) var bloomTexture: texture_2d<f32>;
-        @group(0) @binding(3) var bloomSampler: sampler;
-        @group(0) @binding(4) var<uniform> composeUniforms: BloomComposeUniforms;
-
-        @fragment fn fs(input: VertexOutput) -> @location(0) vec4f {
-          let scene = textureSample(sceneTexture, sceneSampler, input.uv);
-          let bloom = textureSample(bloomTexture, bloomSampler, input.uv);
-          // Additive blending with intensity control
-          let result = scene.rgb + bloom.rgb * composeUniforms.intensity;
-          return vec4f(result, scene.a);
-        }
-      `,
-    })
-
-    // Create uniform buffer for blur direction (minimum 32 bytes for WebGPU)
-    const blurDirectionBuffer = this.device.createBuffer({
-      label: "blur direction",
-      size: 32, // Minimum 32 bytes required for uniform buffers in WebGPU
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    })
-
-    // Create uniform buffer for bloom intensity (minimum 32 bytes for WebGPU)
-    const bloomIntensityBuffer = this.device.createBuffer({
-      label: "bloom intensity",
-      size: 32, // Minimum 32 bytes required for uniform buffers in WebGPU
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    })
-
-    // Create uniform buffer for bloom threshold (minimum 32 bytes for WebGPU)
-    const bloomThresholdBuffer = this.device.createBuffer({
-      label: "bloom threshold",
-      size: 32, // Minimum 32 bytes required for uniform buffers in WebGPU
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    })
-
-    // Set default bloom values
-    const intensityData = new Float32Array(8) // f32 + 7 padding floats = 8 floats = 32 bytes
-    intensityData[0] = this.bloomIntensity
-    this.device.queue.writeBuffer(bloomIntensityBuffer, 0, intensityData)
-
-    const thresholdData = new Float32Array(8) // f32 + 7 padding floats = 8 floats = 32 bytes
-    thresholdData[0] = this.bloomThreshold
-    this.device.queue.writeBuffer(bloomThresholdBuffer, 0, thresholdData)
-
-    // Create linear sampler for post-processing
-    const linearSampler = this.device.createSampler({
-      magFilter: "linear",
-      minFilter: "linear",
-      addressModeU: "clamp-to-edge",
-      addressModeV: "clamp-to-edge",
-    })
-
-    // Bloom extraction pipeline
-    this.bloomExtractPipeline = this.device.createRenderPipeline({
-      label: "bloom extract",
-      layout: "auto",
-      vertex: {
-        module: bloomExtractShader,
-        entryPoint: "vs",
-      },
-      fragment: {
-        module: bloomExtractShader,
-        entryPoint: "fs",
-        targets: [{ format: this.presentationFormat }],
-      },
-      primitive: { topology: "triangle-list" },
-    })
-
-    // Bloom blur pipeline
-    this.bloomBlurPipeline = this.device.createRenderPipeline({
-      label: "bloom blur",
-      layout: "auto",
-      vertex: {
-        module: bloomBlurShader,
-        entryPoint: "vs",
-      },
-      fragment: {
-        module: bloomBlurShader,
-        entryPoint: "fs",
-        targets: [{ format: this.presentationFormat }],
-      },
-      primitive: { topology: "triangle-list" },
-    })
-
-    // Bloom composition pipeline
-    this.bloomComposePipeline = this.device.createRenderPipeline({
-      label: "bloom compose",
-      layout: "auto",
-      vertex: {
-        module: bloomComposeShader,
-        entryPoint: "vs",
-      },
-      fragment: {
-        module: bloomComposeShader,
-        entryPoint: "fs",
-        targets: [{ format: this.presentationFormat }],
-      },
-      primitive: { topology: "triangle-list" },
-    })
-
-    // Store buffers and sampler for later use
-    this.blurDirectionBuffer = blurDirectionBuffer
-    this.bloomIntensityBuffer = bloomIntensityBuffer
-    this.bloomThresholdBuffer = bloomThresholdBuffer
-    this.linearSampler = linearSampler
-  }
-
-  private setupBloom(width: number, height: number) {
-    const bloomWidth = Math.floor(width / this.BLOOM_DOWNSCALE_FACTOR)
-    const bloomHeight = Math.floor(height / this.BLOOM_DOWNSCALE_FACTOR)
-    this.bloomExtractTexture = this.device.createTexture({
-      label: "bloom extract",
-      size: [bloomWidth, bloomHeight],
-      format: this.presentationFormat,
-      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-    })
-    this.bloomBlurTexture1 = this.device.createTexture({
-      label: "bloom blur 1",
-      size: [bloomWidth, bloomHeight],
-      format: this.presentationFormat,
-      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-    })
-    this.bloomBlurTexture2 = this.device.createTexture({
-      label: "bloom blur 2",
-      size: [bloomWidth, bloomHeight],
-      format: this.presentationFormat,
-      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-    })
-
-    // Create bloom bind groups
-    this.bloomExtractBindGroup = this.device.createBindGroup({
-      layout: this.bloomExtractPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: this.sceneRenderTexture.createView() },
-        { binding: 1, resource: this.linearSampler },
-        { binding: 2, resource: { buffer: this.bloomThresholdBuffer } },
-      ],
-    })
-
-    this.bloomBlurHBindGroup = this.device.createBindGroup({
-      layout: this.bloomBlurPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: this.bloomExtractTexture.createView() },
-        { binding: 1, resource: this.linearSampler },
-        { binding: 2, resource: { buffer: this.blurDirectionBuffer } },
-      ],
-    })
-
-    this.bloomBlurVBindGroup = this.device.createBindGroup({
-      layout: this.bloomBlurPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: this.bloomBlurTexture1.createView() },
-        { binding: 1, resource: this.linearSampler },
-        { binding: 2, resource: { buffer: this.blurDirectionBuffer } },
-      ],
-    })
-
-    this.bloomComposeBindGroup = this.device.createBindGroup({
-      layout: this.bloomComposePipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: this.sceneRenderTexture.createView() },
-        { binding: 1, resource: this.linearSampler },
-        { binding: 2, resource: this.bloomBlurTexture2.createView() },
-        { binding: 3, resource: this.linearSampler },
-        { binding: 4, resource: { buffer: this.bloomIntensityBuffer } },
-      ],
-    })
-  }
 
   // Step 3: Setup canvas resize handling
   private setupResize() {
@@ -1233,33 +905,20 @@ export class Engine {
         usage: GPUTextureUsage.RENDER_ATTACHMENT,
       })
 
-      // Create scene render texture (non-multisampled for post-processing)
-      this.sceneRenderTexture = this.device.createTexture({
-        label: "scene render texture",
-        size: [width, height],
-        format: this.presentationFormat,
-        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-      })
-
-      // Setup bloom textures and bind groups
-      this.setupBloom(width, height)
-
       const depthTextureView = this.depthTexture.createView()
-      // Cache the scene render texture view (only recreate on resize)
-      this.sceneRenderTextureView = this.sceneRenderTexture.createView()
 
-      // Render scene to texture instead of directly to canvas
+      // Render directly to canvas
       const colorAttachment: GPURenderPassColorAttachment =
         this.sampleCount > 1
           ? {
               view: this.multisampleTexture.createView(),
-              resolveTarget: this.sceneRenderTextureView,
+              resolveTarget: this.context.getCurrentTexture().createView(),
               clearValue: { r: 0, g: 0, b: 0, a: 0 },
               loadOp: "clear",
               storeOp: "store",
             }
           : {
-              view: this.sceneRenderTextureView,
+              view: this.context.getCurrentTexture().createView(),
               clearValue: { r: 0, g: 0, b: 0, a: 0 },
               loadOp: "clear",
               storeOp: "store",
@@ -2448,7 +2107,7 @@ export class Engine {
     }
   }
 
-  // Render strategy: 1) Opaque non-eye/hair 2) Eyes (stencil=1) 3) Hair (depth pre-pass + split by stencil) 4) Transparent 5) Bloom
+  // Render strategy: 1) Opaque non-eye/hair 2) Eyes (stencil=1) 3) Hair (depth pre-pass + split by stencil) 4) Transparent
   public render() {
     if (this.multisampleTexture && this.camera && this.device) {
       const currentTime = performance.now()
@@ -2523,110 +2182,10 @@ export class Engine {
       pass.end()
       this.device.queue.submit([encoder.finish()])
 
-      this.applyBloom()
-
       this.updateStats(performance.now() - currentTime)
     }
   }
 
-  private applyBloom() {
-    if (!this.sceneRenderTexture || !this.bloomExtractTexture) {
-      return
-    }
-
-    // Update bloom parameters
-    const thresholdData = new Float32Array(8)
-    thresholdData[0] = this.bloomThreshold
-    this.device.queue.writeBuffer(this.bloomThresholdBuffer, 0, thresholdData)
-
-    const intensityData = new Float32Array(8)
-    intensityData[0] = this.bloomIntensity
-    this.device.queue.writeBuffer(this.bloomIntensityBuffer, 0, intensityData)
-
-    const encoder = this.device.createCommandEncoder()
-
-    // Extract bright areas
-    const extractPass = encoder.beginRenderPass({
-      label: "bloom extract",
-      colorAttachments: [
-        {
-          view: this.bloomExtractTexture.createView(),
-          clearValue: { r: 0, g: 0, b: 0, a: 0 },
-          loadOp: "clear",
-          storeOp: "store",
-        },
-      ],
-    })
-
-    extractPass.setPipeline(this.bloomExtractPipeline)
-    extractPass.setBindGroup(0, this.bloomExtractBindGroup!)
-    extractPass.draw(6, 1, 0, 0)
-    extractPass.end()
-
-    // Horizontal blur
-    const hBlurData = new Float32Array(4)
-    hBlurData[0] = 1.0
-    hBlurData[1] = 0.0
-    this.device.queue.writeBuffer(this.blurDirectionBuffer, 0, hBlurData)
-    const blurHPass = encoder.beginRenderPass({
-      label: "bloom blur horizontal",
-      colorAttachments: [
-        {
-          view: this.bloomBlurTexture1.createView(),
-          clearValue: { r: 0, g: 0, b: 0, a: 0 },
-          loadOp: "clear",
-          storeOp: "store",
-        },
-      ],
-    })
-
-    blurHPass.setPipeline(this.bloomBlurPipeline)
-    blurHPass.setBindGroup(0, this.bloomBlurHBindGroup!)
-    blurHPass.draw(6, 1, 0, 0)
-    blurHPass.end()
-
-    // Vertical blur
-    const vBlurData = new Float32Array(4)
-    vBlurData[0] = 0.0
-    vBlurData[1] = 1.0
-    this.device.queue.writeBuffer(this.blurDirectionBuffer, 0, vBlurData)
-    const blurVPass = encoder.beginRenderPass({
-      label: "bloom blur vertical",
-      colorAttachments: [
-        {
-          view: this.bloomBlurTexture2.createView(),
-          clearValue: { r: 0, g: 0, b: 0, a: 0 },
-          loadOp: "clear",
-          storeOp: "store",
-        },
-      ],
-    })
-
-    blurVPass.setPipeline(this.bloomBlurPipeline)
-    blurVPass.setBindGroup(0, this.bloomBlurVBindGroup!)
-    blurVPass.draw(6, 1, 0, 0)
-    blurVPass.end()
-
-    // Compose to canvas
-    const composePass = encoder.beginRenderPass({
-      label: "bloom compose",
-      colorAttachments: [
-        {
-          view: this.context.getCurrentTexture().createView(),
-          clearValue: { r: 0, g: 0, b: 0, a: 0 },
-          loadOp: "clear",
-          storeOp: "store",
-        },
-      ],
-    })
-
-    composePass.setPipeline(this.bloomComposePipeline)
-    composePass.setBindGroup(0, this.bloomComposeBindGroup!)
-    composePass.draw(6, 1, 0, 0)
-    composePass.end()
-
-    this.device.queue.submit([encoder.finish()])
-  }
 
   private updateCameraUniforms() {
     const viewMatrix = this.camera.getViewMatrix()
@@ -2641,12 +2200,12 @@ export class Engine {
   }
 
   private updateRenderTarget() {
-    // Use cached view (only recreated on resize in handleResize)
+    // Update render target to use current canvas texture
     const colorAttachment = (this.renderPassDescriptor.colorAttachments as GPURenderPassColorAttachment[])[0]
     if (this.sampleCount > 1) {
-      colorAttachment.resolveTarget = this.sceneRenderTextureView
+      colorAttachment.resolveTarget = this.context.getCurrentTexture().createView()
     } else {
-      colorAttachment.view = this.sceneRenderTextureView
+      colorAttachment.view = this.context.getCurrentTexture().createView()
     }
   }
 
