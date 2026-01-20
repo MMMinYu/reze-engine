@@ -178,7 +178,7 @@ export default function Home() {
       // Initialize engine
       try {
         const engine = new Engine(canvasRef.current, {
-          ambientColor: new Vec3(0.8, 0.85, 0.9),
+          ambientColor: new Vec3(0.8, 0.84, 0.92),
           cameraDistance: 31.5,
           cameraTarget: new Vec3(0, 11.5, 0),
           onRaycast: (material: string | null, screenX: number, screenY: number) => {
