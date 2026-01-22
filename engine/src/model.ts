@@ -801,12 +801,12 @@ export class Model {
     }
   }
 
-  public resetAllMorphs(excluded: string[] = []): void {
+  public resetAllMorphs(): void {
     for (let morphIdx = 0; morphIdx < this.morphing.morphs.length; morphIdx++) {
       const morphName = this.morphing.morphs[morphIdx].name
-      if (excluded.includes(morphName)) continue
       this.setMorphWeight(morphName, 0)
     }
+    this.morphsDirty = true
     this.applyMorphs()
   }
 

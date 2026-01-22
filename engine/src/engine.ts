@@ -1149,8 +1149,8 @@ export class Engine {
     this.currentModel?.resetAllBones()
   }
 
-  public resetAllMorphs(excluded: string[] = []): void {
-    this.currentModel?.resetAllMorphs(excluded)
+  public resetAllMorphs(): void {
+    this.currentModel?.resetAllMorphs()
   }
 
   public setMorphWeight(name: string, weight: number, durationMs?: number): void {
