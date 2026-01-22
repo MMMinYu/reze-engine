@@ -771,6 +771,7 @@ export class Model {
   async loadVmd(vmdUrl: string): Promise<void> {
     this.animationData = await VMDLoader.load(vmdUrl)
     this.resetAllBones()
+    this.resetAllMorphs()
     this.processFrames()
     // Apply initial pose at time 0
     this.animationTime = 0
@@ -798,6 +799,15 @@ export class Model {
     if (this.physics) {
       this.physics.reset(this.runtimeSkeleton.worldMatrices, this.skeleton.inverseBindMatrices)
     }
+  }
+
+  public resetAllMorphs(excluded: string[] = []): void {
+    for (let morphIdx = 0; morphIdx < this.morphing.morphs.length; morphIdx++) {
+      const morphName = this.morphing.morphs[morphIdx].name
+      if (excluded.includes(morphName)) continue
+      this.setMorphWeight(morphName, 0)
+    }
+    this.applyMorphs()
   }
 
   /**
