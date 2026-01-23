@@ -191,7 +191,7 @@ export default function Home() {
         })
         engineRef.current = engine
         await engine.init()
-        await engine.loadModel("/models/reze/reze_smol.pmx")
+        await engine.loadModel("/models/reze/reze.pmx")
         engine.addGround({
           width: 160,
           height: 160,
