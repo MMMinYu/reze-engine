@@ -196,6 +196,10 @@ export class Model {
   // Physics runtime
   private physics: Physics | null = null
 
+  // IK and Physics enable flags
+  private ikEnabled = true
+  private physicsEnabled = true
+
   constructor(
     vertexData: Float32Array<ArrayBuffer>,
     indexData: Uint32Array<ArrayBuffer>,
@@ -811,6 +815,20 @@ export class Model {
   }
 
   /**
+   * Enable or disable IK solving
+   */
+  public setIKEnabled(enabled: boolean): void {
+    this.ikEnabled = enabled
+  }
+
+  /**
+   * Enable or disable physics simulation
+   */
+  public setPhysicsEnabled(enabled: boolean): void {
+    this.physicsEnabled = enabled
+  }
+
+  /**
    * Process frames into tracks
    */
   private processFrames(): void {
@@ -1100,12 +1118,13 @@ export class Model {
     this.computeWorldMatrices()
 
     // Solve IK chains (modifies localRotations with final IK rotations)
-    this.solveIKChains()
+    if (this.ikEnabled) {
+      this.solveIKChains()
+      // Recompute world matrices with final IK rotations applied to localRotations
+      this.computeWorldMatrices()
+    }
 
-    // Recompute world matrices with final IK rotations applied to localRotations
-    this.computeWorldMatrices()
-
-    if (this.physics) {
+    if (this.physicsEnabled && this.physics) {
       this.physics.step(deltaTime, this.runtimeSkeleton.worldMatrices, this.skeleton.inverseBindMatrices)
     }
 

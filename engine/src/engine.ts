@@ -14,6 +14,8 @@ export type EngineOptions = {
   cameraTarget?: Vec3
   cameraFov?: number
   onRaycast?: RaycastCallback
+  disableIK?: boolean
+  disablePhysics?: boolean
 }
 
 export type RequiredEngineOptions = Required<Omit<EngineOptions, "onRaycast">> & Pick<EngineOptions, "onRaycast">
@@ -27,6 +29,8 @@ export const DEFAULT_ENGINE_OPTIONS: RequiredEngineOptions = {
   cameraTarget: new Vec3(0, 12.5, 0),
   cameraFov: Math.PI / 4,
   onRaycast: undefined,
+  disableIK: false,
+  disablePhysics: false,
 }
 
 export interface EngineStats {
@@ -123,6 +127,10 @@ export class Engine {
   private lastTouchTime = 0
   private readonly DOUBLE_TAP_DELAY = 300 // ms
 
+  // IK and Physics flags
+  private _disableIK = false
+  private _disablePhysics = false
+
   private currentModel: Model | null = null
   private modelDir: string = ""
   private materialSampler!: GPUSampler
@@ -157,6 +165,8 @@ export class Engine {
       this.cameraTarget = options.cameraTarget ?? DEFAULT_ENGINE_OPTIONS.cameraTarget
       this.cameraFov = options.cameraFov ?? DEFAULT_ENGINE_OPTIONS.cameraFov
       this.onRaycast = options.onRaycast
+      this._disableIK = options.disableIK ?? DEFAULT_ENGINE_OPTIONS.disableIK
+      this._disablePhysics = options.disablePhysics ?? DEFAULT_ENGINE_OPTIONS.disablePhysics
     }
   }
 
@@ -1193,6 +1203,26 @@ export class Engine {
     return this.currentModel?.getMaterials().map((material) => material.name) ?? []
   }
 
+  // IK control
+  public get disableIK(): boolean {
+    return this._disableIK
+  }
+
+  public set disableIK(value: boolean) {
+    this._disableIK = value
+    this.currentModel?.setIKEnabled(!value)
+  }
+
+  // Physics control
+  public get disablePhysics(): boolean {
+    return this._disablePhysics
+  }
+
+  public set disablePhysics(value: boolean) {
+    this._disablePhysics = value
+    this.currentModel?.setPhysicsEnabled(!value)
+  }
+
   private updateVertexBuffer(): void {
     if (!this.currentModel || !this.vertexBuffer) return
     const vertices = this.currentModel.getVertices()
@@ -1203,6 +1233,11 @@ export class Engine {
   // Step 7: Create vertex, index, and joint buffers
   private async setupModelBuffers(model: Model) {
     this.currentModel = model
+
+    // Apply IK and Physics flags from engine options
+    model.setIKEnabled(!this._disableIK)
+    model.setPhysicsEnabled(!this._disablePhysics)
+
     const vertices = model.getVertices()
     const skinning = model.getSkinning()
     const skeleton = model.getSkeleton()
