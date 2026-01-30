@@ -531,62 +531,14 @@ export class Model {
     const now = this.tweenTimeMs
     const dur = durationMs && durationMs > 0 ? durationMs : 0
 
-    // Compute bind pose world positions for all bones
-    const skeleton = this.skeleton
-    const computeBindPoseWorldPosition = (idx: number): Vec3 => {
-      const bone = skeleton.bones[idx]
-      const bindPos = new Vec3(bone.bindTranslation[0], bone.bindTranslation[1], bone.bindTranslation[2])
-      if (bone.parentIndex >= 0 && bone.parentIndex < skeleton.bones.length) {
-        const parentWorldPos = computeBindPoseWorldPosition(bone.parentIndex)
-        return parentWorldPos.add(bindPos)
-      } else {
-        return bindPos
-      }
-    }
-
     for (const [name, vmdRelativeTranslation] of Object.entries(boneTranslations)) {
       const idx = this.runtimeSkeleton.nameIndex[name] ?? -1
       if (idx < 0 || idx >= this.skeleton.bones.length) continue
 
-      const bone = this.skeleton.bones[idx]
       const translations = this.runtimeSkeleton.localTranslations
-      const localRot = this.runtimeSkeleton.localRotations
 
-      // VMD translation is relative to bind pose world position
-      // targetWorldPos = bindPoseWorldPos + vmdRelativeTranslation
-      const bindPoseWorldPos = computeBindPoseWorldPosition(idx)
-      const targetWorldPos = bindPoseWorldPos.add(vmdRelativeTranslation)
-
-      // Convert target world position to local translation
-      // We need parent's bind pose world position to transform to parent space
-      let parentBindPoseWorldPos: Vec3
-      if (bone.parentIndex >= 0) {
-        parentBindPoseWorldPos = computeBindPoseWorldPosition(bone.parentIndex)
-      } else {
-        parentBindPoseWorldPos = Vec3.zeros()
-      }
-
-      // Transform target world position to parent's local space
-      // In bind pose, parent's world matrix is just a translation
-      const parentSpacePos = targetWorldPos.subtract(parentBindPoseWorldPos)
-
-      // Subtract bindTranslation to get position after bind translation
-      const afterBindTranslation = parentSpacePos.subtract(
-        new Vec3(bone.bindTranslation[0], bone.bindTranslation[1], bone.bindTranslation[2])
-      )
-
-      // Apply inverse rotation to get local translation
-      const localRotation = localRot[idx]
-      // Clone to avoid mutating, then conjugate and normalize
-      const invRotation = localRotation.clone().conjugate().normalize()
-      const rotationMat = Mat4.fromQuat(invRotation.x, invRotation.y, invRotation.z, invRotation.w)
-      const rm = rotationMat.values
-      const localTranslation = new Vec3(
-        rm[0] * afterBindTranslation.x + rm[4] * afterBindTranslation.y + rm[8] * afterBindTranslation.z,
-        rm[1] * afterBindTranslation.x + rm[5] * afterBindTranslation.y + rm[9] * afterBindTranslation.z,
-        rm[2] * afterBindTranslation.x + rm[6] * afterBindTranslation.y + rm[10] * afterBindTranslation.z
-      )
-
+      // Convert VMD relative translation to local translation
+      const localTranslation = this.convertVMDTranslationToLocal(idx, vmdRelativeTranslation)
       const [tx, ty, tz] = [localTranslation.x, localTranslation.y, localTranslation.z]
 
       if (dur === 0) {
@@ -624,6 +576,67 @@ export class Model {
       state.transDurationMs[idx] = dur
       state.transActive[idx] = 1
     }
+  }
+
+  /**
+   * Convert VMD-style relative translation (relative to bind pose world position) to local translation
+   * This helper is used by both moveBones and getPoseAtTime to ensure consistent translation handling
+   */
+  private convertVMDTranslationToLocal(boneIdx: number, vmdRelativeTranslation: Vec3): Vec3 {
+    const skeleton = this.skeleton
+    const bones = skeleton.bones
+    const localRot = this.runtimeSkeleton.localRotations
+
+    // Compute bind pose world positions for all bones
+    const computeBindPoseWorldPosition = (idx: number): Vec3 => {
+      const bone = bones[idx]
+      const bindPos = new Vec3(bone.bindTranslation[0], bone.bindTranslation[1], bone.bindTranslation[2])
+      if (bone.parentIndex >= 0 && bone.parentIndex < bones.length) {
+        const parentWorldPos = computeBindPoseWorldPosition(bone.parentIndex)
+        return parentWorldPos.add(bindPos)
+      } else {
+        return bindPos
+      }
+    }
+
+    const bone = bones[boneIdx]
+
+    // VMD translation is relative to bind pose world position
+    // targetWorldPos = bindPoseWorldPos + vmdRelativeTranslation
+    const bindPoseWorldPos = computeBindPoseWorldPosition(boneIdx)
+    const targetWorldPos = bindPoseWorldPos.add(vmdRelativeTranslation)
+
+    // Convert target world position to local translation
+    // We need parent's bind pose world position to transform to parent space
+    let parentBindPoseWorldPos: Vec3
+    if (bone.parentIndex >= 0) {
+      parentBindPoseWorldPos = computeBindPoseWorldPosition(bone.parentIndex)
+    } else {
+      parentBindPoseWorldPos = Vec3.zeros()
+    }
+
+    // Transform target world position to parent's local space
+    // In bind pose, parent's world matrix is just a translation
+    const parentSpacePos = targetWorldPos.subtract(parentBindPoseWorldPos)
+
+    // Subtract bindTranslation to get position after bind translation
+    const afterBindTranslation = parentSpacePos.subtract(
+      new Vec3(bone.bindTranslation[0], bone.bindTranslation[1], bone.bindTranslation[2])
+    )
+
+    // Apply inverse rotation to get local translation
+    const localRotation = localRot[boneIdx]
+    // Clone to avoid mutating, then conjugate and normalize
+    const invRotation = localRotation.clone().conjugate().normalize()
+    const rotationMat = Mat4.fromQuat(invRotation.x, invRotation.y, invRotation.z, invRotation.w)
+    const rm = rotationMat.values
+    const localTranslation = new Vec3(
+      rm[0] * afterBindTranslation.x + rm[4] * afterBindTranslation.y + rm[8] * afterBindTranslation.z,
+      rm[1] * afterBindTranslation.x + rm[5] * afterBindTranslation.y + rm[9] * afterBindTranslation.z,
+      rm[2] * afterBindTranslation.x + rm[6] * afterBindTranslation.y + rm[10] * afterBindTranslation.z
+    )
+
+    return localTranslation
   }
 
   getBoneWorldMatrices(): Float32Array {
@@ -1004,7 +1017,9 @@ export class Model {
       if (!frameB) {
         // No interpolation needed - direct assignment
         localRot.set(frameA.rotation)
-        localTrans.set(frameA.translation)
+        // Convert VMD relative translation to local translation
+        const localTranslation = this.convertVMDTranslationToLocal(boneIdx, frameA.translation)
+        localTrans.set(localTranslation)
       } else {
         const timeA = keyFrames[idx].time
         const timeB = keyFrames[idx + 1].time
@@ -1024,7 +1039,7 @@ export class Model {
         // Use Quat.slerp to interpolate rotation
         const rotation = Quat.slerp(frameA.rotation, frameB.rotation, rotT)
 
-        // Interpolate translation using bezier for each component
+        // Interpolate VMD translation using bezier for each component
         // Inline getWeight to avoid function call overhead
         const getWeight = (offset: number) =>
           bezierInterpolate(
@@ -1039,11 +1054,19 @@ export class Model {
         const tyWeight = getWeight(16)
         const tzWeight = getWeight(32)
 
+        // Interpolate VMD relative translations (relative to bind pose world position)
+        const interpolatedVMDTranslation = new Vec3(
+          frameA.translation.x + (frameB.translation.x - frameA.translation.x) * txWeight,
+          frameA.translation.y + (frameB.translation.y - frameA.translation.y) * tyWeight,
+          frameA.translation.z + (frameB.translation.z - frameA.translation.z) * tzWeight
+        )
+
+        // Convert interpolated VMD translation to local translation
+        const localTranslation = this.convertVMDTranslationToLocal(boneIdx, interpolatedVMDTranslation)
+
         // Direct property writes to avoid object allocation
         localRot.set(rotation)
-        localTrans.x = frameA.translation.x + (frameB.translation.x - frameA.translation.x) * txWeight
-        localTrans.y = frameA.translation.y + (frameB.translation.y - frameA.translation.y) * tyWeight
-        localTrans.z = frameA.translation.z + (frameB.translation.z - frameA.translation.z) * tzWeight
+        localTrans.set(localTranslation)
       }
     }
 
