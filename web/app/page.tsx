@@ -181,6 +181,7 @@ export default function Home() {
           ambientColor: new Vec3(0.88, 0.88, 0.95),
           cameraDistance: 31.5,
           cameraTarget: new Vec3(0, 11.5, 0),
+          // disableIK: true,
           onRaycast: (material: string | null, screenX: number, screenY: number) => {
             if (material) {
               setMousePosition({ x: screenX, y: screenY })
@@ -205,7 +206,6 @@ export default function Home() {
         engine.runRenderLoop(() => {
           setStats(engine.getStats())
         })
-        engine.setMorphWeight("抗穿模", 1.0)
         // console.log("materials", engine.getMaterials())
         // console.log("bones", engine.getBones())
         // console.log("morphs", engine.getMorphs())
@@ -213,6 +213,8 @@ export default function Home() {
         // engine.setMaterialVisible("GT Bow Button Blouse", false)
 
         await engine.loadAnimation("/animations/IRIS OUT.vmd")
+        engine.setMorphWeight("抗穿模", 1.0)
+
         const prog = engine.getAnimationProgress()
         setProgress(prog)
         setEngineError(null)
