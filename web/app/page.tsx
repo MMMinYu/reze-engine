@@ -213,7 +213,7 @@ export default function Home() {
         // engine.setMaterialVisible("GT Bow Button Blouse", false)
 
         await engine.loadAnimation("/animations/IRIS OUT.vmd")
-        engine.setMorphWeight("抗穿模", 1.0)
+        engine.setMorphWeight("抗穿模", 0.5)
 
         const prog = engine.getAnimationProgress()
         setProgress(prog)
