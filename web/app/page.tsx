@@ -212,7 +212,7 @@ export default function Home() {
         // engine.setMaterialVisible("材質1", false)
         // engine.setMaterialVisible("GT Bow Button Blouse", false)
 
-        await engine.loadAnimation("/animations/IRIS OUT.vmd")
+        await engine.loadAnimation("/animations/Pool.vmd")
         engine.setMorphWeight("抗穿模", 0.5)
 
         const prog = engine.getAnimationProgress()
