@@ -75,6 +75,7 @@ const DEFAULT_ENGINE_OPTIONS: RequiredEngineOptions = {
 - **[MiKaPo](https://mikapo.vercel.app)** - Online real-time motion capture for MMD using webcam and MediaPipe
 - **[Popo](https://popo.love)** - Fine-tuned LLM that generates MMD poses from natural language descriptions
 - **[MPL](https://mmd-mpl.vercel.app)** - Semantic motion programming language for scripting MMD animations with intuitive syntax
+- **[Mixamo-MMD](https://mixamo-mmd.vercel.app)** - Convert Mixamo FBX animation to VMD in one click
 
 ## Tutorial
 
