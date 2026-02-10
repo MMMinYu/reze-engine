@@ -7,6 +7,9 @@
 import { Mat4, Quat, Vec3 } from "./math"
 import { Bone, IKLink, IKSolver, IKChainInfo } from "./model"
 
+// Callback type for updating world matrix (provided by model to handle append transformations)
+export type UpdateWorldMatrixFn = (boneIndex: number, applyIK: boolean) => void
+
 const enum InternalEulerRotationOrder {
   YXZ = 0,
   ZYX = 1,
@@ -89,10 +92,11 @@ export class IKSolverSystem {
     localRotations: Quat[],
     localTranslations: Vec3[],
     worldMatrices: Mat4[],
-    ikChainInfo: IKChainInfo[]
+    ikChainInfo: IKChainInfo[],
+    updateWorldMatrix?: UpdateWorldMatrixFn
   ): void {
     for (const solver of ikSolvers) {
-      this.solveIK(solver, bones, localRotations, localTranslations, worldMatrices, ikChainInfo)
+      this.solveIK(solver, bones, localRotations, localTranslations, worldMatrices, ikChainInfo, updateWorldMatrix)
     }
   }
 
@@ -102,7 +106,8 @@ export class IKSolverSystem {
     localRotations: Quat[],
     localTranslations: Vec3[],
     worldMatrices: Mat4[],
-    ikChainInfo: IKChainInfo[]
+    ikChainInfo: IKChainInfo[],
+    updateWorldMatrix?: UpdateWorldMatrixFn
   ): void {
     if (solver.links.length === 0) return
 
@@ -126,10 +131,17 @@ export class IKSolverSystem {
     }
 
     // Update chain bones and target bone world matrices (initial state, no IK yet)
-    for (let i = chains.length - 1; i >= 0; i--) {
-      this.updateWorldMatrix(chains[i].boneIndex, bones, localRotations, localTranslations, worldMatrices, undefined)
+    if (updateWorldMatrix) {
+      for (let i = chains.length - 1; i >= 0; i--) {
+        updateWorldMatrix(chains[i].boneIndex, false)
+      }
+      updateWorldMatrix(targetBoneIndex, false)
+    } else {
+      for (let i = chains.length - 1; i >= 0; i--) {
+        this.updateWorldMatrix(chains[i].boneIndex, bones, localRotations, localTranslations, worldMatrices, undefined)
+      }
+      this.updateWorldMatrix(targetBoneIndex, bones, localRotations, localTranslations, worldMatrices, undefined)
     }
-    this.updateWorldMatrix(targetBoneIndex, bones, localRotations, localTranslations, worldMatrices, undefined)
 
     if (this.getDistance(ikBoneIndex, targetBoneIndex, worldMatrices) < this.EPSILON) return
 
@@ -152,7 +164,8 @@ export class IKSolverSystem {
             localTranslations,
             worldMatrices,
             ikChainInfo,
-            i < halfIteration
+            i < halfIteration,
+            updateWorldMatrix
           )
         }
       }
@@ -182,7 +195,8 @@ export class IKSolverSystem {
     localTranslations: Vec3[],
     worldMatrices: Mat4[],
     ikChainInfo: IKChainInfo[],
-    useAxis: boolean
+    useAxis: boolean,
+    updateWorldMatrix?: UpdateWorldMatrixFn
   ): void {
     const chainBoneIndex = chain.boneIndex
     const chainPosition = this.getWorldTranslation(chainBoneIndex, worldMatrices)
@@ -254,13 +268,21 @@ export class IKSolverSystem {
       }
     }
 
-    // Update world matrices for affected bones (using IK-modified rotations)
-    for (let i = chainIndex; i >= 0; i--) {
-      const link = solver.links[i]
-      this.updateWorldMatrix(link.boneIndex, bones, localRotations, localTranslations, worldMatrices, ikChainInfo)
+    // Update world matrices for affected bones (using callback - handles append correctly)
+    if (updateWorldMatrix) {
+      for (let i = chainIndex; i >= 0; i--) {
+        const link = solver.links[i]
+        updateWorldMatrix(link.boneIndex, true)  // applyIK = true
+      }
+      updateWorldMatrix(targetBoneIndex, false)
+    } else {
+      for (let i = chainIndex; i >= 0; i--) {
+        const link = solver.links[i]
+        this.updateWorldMatrix(link.boneIndex, bones, localRotations, localTranslations, worldMatrices, ikChainInfo)
+      }
+      this.updateWorldMatrix(ikBoneIndex, bones, localRotations, localTranslations, worldMatrices, undefined)
+      this.updateWorldMatrix(targetBoneIndex, bones, localRotations, localTranslations, worldMatrices, undefined)
     }
-    this.updateWorldMatrix(ikBoneIndex, bones, localRotations, localTranslations, worldMatrices, undefined)
-    this.updateWorldMatrix(targetBoneIndex, bones, localRotations, localTranslations, worldMatrices, undefined)
   }
 
   private static limitAngle(angle: number, min: number, max: number, useAxis: boolean): number {
@@ -410,3 +432,4 @@ export class IKSolverSystem {
     }
   }
 }
+

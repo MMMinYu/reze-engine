@@ -581,8 +581,12 @@ export class Model {
   /**
    * Convert VMD-style relative translation (relative to bind pose world position) to local translation
    * This helper is used by both moveBones and getPoseAtTime to ensure consistent translation handling
+   * @param boneIdx - Bone index
+   * @param vmdRelativeTranslation - VMD relative translation
+   * @param rotation - Optional rotation to use for conversion. If not provided, uses current localRotation.
+   *                   Use animation rotation (from frame) to avoid conflicts when IK modifies rotation.
    */
-  private convertVMDTranslationToLocal(boneIdx: number, vmdRelativeTranslation: Vec3): Vec3 {
+  private convertVMDTranslationToLocal(boneIdx: number, vmdRelativeTranslation: Vec3, rotation?: Quat): Vec3 {
     const skeleton = this.skeleton
     const bones = skeleton.bones
     const localRot = this.runtimeSkeleton.localRotations
@@ -625,7 +629,9 @@ export class Model {
     )
 
     // Apply inverse rotation to get local translation
-    const localRotation = localRot[boneIdx]
+    // Use provided rotation (animation rotation) or fall back to current localRotation
+    // Using animation rotation prevents conflicts when IK modifies the rotation
+    const localRotation = rotation ?? localRot[boneIdx]
     // Clone to avoid mutating, then conjugate and normalize
     const invRotation = localRotation.clone().conjugate().normalize()
     const rotationMat = Mat4.fromQuat(invRotation.x, invRotation.y, invRotation.z, invRotation.w)
@@ -1016,9 +1022,12 @@ export class Model {
 
       if (!frameB) {
         // No interpolation needed - direct assignment
-        localRot.set(frameA.rotation)
-        // Convert VMD relative translation to local translation
-        const localTranslation = this.convertVMDTranslationToLocal(boneIdx, frameA.translation)
+        // Use animation frame's rotation for translation conversion to ensure consistency
+        // This prevents conflicts when IK later modifies the rotation
+        const frameRotation = frameA.rotation
+        localRot.set(frameRotation)
+        // Convert VMD relative translation to local translation using animation rotation
+        const localTranslation = this.convertVMDTranslationToLocal(boneIdx, frameA.translation, frameRotation)
         localTrans.set(localTranslation)
       } else {
         const timeA = keyFrames[idx].time
@@ -1061,8 +1070,10 @@ export class Model {
           frameA.translation.z + (frameB.translation.z - frameA.translation.z) * tzWeight
         )
 
-        // Convert interpolated VMD translation to local translation
-        const localTranslation = this.convertVMDTranslationToLocal(boneIdx, interpolatedVMDTranslation)
+        // Convert interpolated VMD translation to local translation using animation rotation
+        // This ensures translation is computed for the animation rotation, not the runtime rotation
+        // that will be modified by IK, preventing conflicts
+        const localTranslation = this.convertVMDTranslationToLocal(boneIdx, interpolatedVMDTranslation, rotation)
 
         // Direct property writes to avoid object allocation
         localRot.set(rotation)
@@ -1161,14 +1172,136 @@ export class Model {
     const ikChainInfo = this.runtimeSkeleton.ikChainInfo
     if (!ikChainInfo) return
 
-    IKSolverSystem.solve(
-      ikSolvers,
-      this.skeleton.bones,
-      this.runtimeSkeleton.localRotations,
-      this.runtimeSkeleton.localTranslations,
-      this.runtimeSkeleton.worldMatrices,
-      ikChainInfo
-    )
+    // Solve each IK solver sequentially, ensuring consistent state between solvers
+    for (const solver of ikSolvers) {
+      // Recompute ALL world matrices before each solver starts
+      // This ensures each solver sees the effects of previous solvers on localRotations
+      this.computeWorldMatrices()
+      
+      // Clear computed set for this solver's pass
+      this.ikComputedSet.clear()
+
+      // Solve this IK chain
+      // Pass callback that uses model's world matrix computation (handles append correctly)
+      IKSolverSystem.solve(
+        [solver], // Solve one at a time
+        this.skeleton.bones,
+        this.runtimeSkeleton.localRotations,
+        this.runtimeSkeleton.localTranslations,
+        this.runtimeSkeleton.worldMatrices,
+        ikChainInfo,
+        (boneIndex, applyIK) => {
+          // Clear computed set for each bone update to allow recomputation in same iteration
+          this.ikComputedSet.delete(boneIndex)
+          this.computeSingleBoneWorldMatrix(boneIndex, applyIK)
+        }
+      )
+    }
+  }
+
+  // Cached set to track which bones are being computed in current IK pass (to avoid infinite recursion)
+  private ikComputedSet: Set<number> = new Set()
+
+  // Add this new method to compute a single bone's world matrix
+  // Recursively ensures parents are computed first to avoid using stale parent matrices
+  private computeSingleBoneWorldMatrix(boneIndex: number, applyIK: boolean): void {
+    const bones = this.skeleton.bones
+    const localRot = this.runtimeSkeleton.localRotations
+    const localTrans = this.runtimeSkeleton.localTranslations
+    const worldMats = this.runtimeSkeleton.worldMatrices
+    const ikChainInfo = this.runtimeSkeleton.ikChainInfo
+
+    const b = bones[boneIndex]
+
+    // Prevent infinite recursion: if this bone is already being computed in this call chain, skip
+    if (this.ikComputedSet.has(boneIndex)) {
+      return
+    }
+
+    // Mark this bone as being computed to prevent infinite recursion
+    this.ikComputedSet.add(boneIndex)
+
+    // Recursively compute parent first if it exists (ensures parent matrix is up-to-date)
+    if (b.parentIndex >= 0) {
+      this.computeSingleBoneWorldMatrix(b.parentIndex, applyIK)
+    }
+
+    // Get base rotation
+    let boneRot = localRot[boneIndex]
+
+    // Apply IK rotation if requested
+    if (applyIK && ikChainInfo) {
+      const chainInfo = ikChainInfo[boneIndex]
+      if (chainInfo?.ikRotation) {
+        boneRot = chainInfo.ikRotation.multiply(boneRot).normalize()
+      }
+    }
+
+    let rotateM = Mat4.fromQuat(boneRot.x, boneRot.y, boneRot.z, boneRot.w)
+    let addLocalTx = 0, addLocalTy = 0, addLocalTz = 0
+
+    // Handle append transformations (same logic as computeWorldMatrices)
+    const appendParentIdx = b.appendParentIndex
+    const hasAppend = b.appendRotate && 
+      appendParentIdx !== undefined && 
+      appendParentIdx >= 0 && 
+      appendParentIdx < bones.length
+
+    if (hasAppend) {
+      const ratio = b.appendRatio === undefined ? 1 : Math.max(-1, Math.min(1, b.appendRatio))
+      const hasRatio = Math.abs(ratio) > 1e-6
+
+      if (hasRatio) {
+        if (b.appendRotate) {
+          // Get append parent's rotation
+          // During IK solving, use only base local rotation (not IK rotations) to avoid
+          // conflicts with IK rotations that are still being computed incrementally
+          // IK rotations will be applied to localRotations after IK solving completes
+          if (appendParentIdx >= 0) {
+            // Compute append parent's world matrix for dependency order, but use base rotation for append
+            this.computeSingleBoneWorldMatrix(appendParentIdx, applyIK)
+          }
+          
+          // Use append parent's base local rotation only (IK rotations are applied after solving)
+          let appendRot = localRot[appendParentIdx]
+
+          let ax = appendRot.x, ay = appendRot.y, az = appendRot.z
+          const aw = appendRot.w
+          const absRatio = ratio < 0 ? -ratio : ratio
+          if (ratio < 0) { ax = -ax; ay = -ay; az = -az }
+          
+          const appendQuat = new Quat(ax, ay, az, aw)
+          const result = Quat.slerp(Quat.identity(), appendQuat, absRatio)
+          rotateM = Mat4.fromQuat(result.x, result.y, result.z, result.w).multiply(rotateM)
+        }
+
+        if (b.appendMove) {
+          const appendTrans = localTrans[appendParentIdx]
+          addLocalTx = appendTrans.x * ratio
+          addLocalTy = appendTrans.y * ratio
+          addLocalTz = appendTrans.z * ratio
+        }
+      }
+    }
+
+    const boneTrans = localTrans[boneIndex]
+    const localTx = boneTrans.x + addLocalTx
+    const localTy = boneTrans.y + addLocalTy
+    const localTz = boneTrans.z + addLocalTz
+
+    this.cachedIdentityMat1
+      .setIdentity()
+      .translateInPlace(b.bindTranslation[0], b.bindTranslation[1], b.bindTranslation[2])
+    this.cachedIdentityMat2.setIdentity().translateInPlace(localTx, localTy, localTz)
+    const localM = this.cachedIdentityMat1.multiply(rotateM).multiply(this.cachedIdentityMat2)
+
+    const worldMat = worldMats[boneIndex]
+    if (b.parentIndex >= 0) {
+      const parentMat = worldMats[b.parentIndex]
+      Mat4.multiplyArrays(parentMat.values, 0, localM.values, 0, worldMat.values, 0)
+    } else {
+      worldMat.values.set(localM.values)
+    }
   }
 
   private computeWorldMatrices(): void {
