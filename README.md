@@ -27,10 +27,10 @@ export default function Scene() {
   const initEngine = useCallback(async () => {
     if (canvasRef.current) {
       try {
-        const engine = new Engine(canvasRef.current)
+        const engine = new Engine(canvasRef.current, {})
         engineRef.current = engine
         await engine.init()
-        await engine.loadModel("/models/塞尔凯特/塞尔凯特.pmx")
+        await engine.loadModel("/models/reze/reze.pmx")
 
         engine.runRenderLoop(() => {})
       } catch (error) {
@@ -75,7 +75,6 @@ const DEFAULT_ENGINE_OPTIONS: RequiredEngineOptions = {
 - **[MiKaPo](https://mikapo.vercel.app)** - Online real-time motion capture for MMD using webcam and MediaPipe
 - **[Popo](https://popo.love)** - Fine-tuned LLM that generates MMD poses from natural language descriptions
 - **[MPL](https://mmd-mpl.vercel.app)** - Semantic motion programming language for scripting MMD animations with intuitive syntax
-- **[Mixamo-MMD](https://mixamo-mmd.vercel.app)** - Convert Mixamo FBX animation to VMD in one click
 
 ## Tutorial
 

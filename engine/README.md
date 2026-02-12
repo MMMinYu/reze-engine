@@ -2,17 +2,20 @@
 
 A lightweight engine built with WebGPU and TypeScript for real-time 3D anime character MMD model rendering.
 
+![screenshot](./screenshot.png)
+
 ## Features
 
-- Physics
+- Blinn-Phong lighting
 - Alpha blending
-- Post alpha eye rendering
+- Post alpha eye rendering (the see-through eyes)
 - Rim lighting
 - Outlines
 - MSAA 4x anti-aliasing
-- Bone and morph api
+- Bone and morph API
 - VMD animation
-- Ik solver
+- IK solver
+- Ammo/Bullet physics
 
 ## Usage
 
@@ -24,10 +27,10 @@ export default function Scene() {
   const initEngine = useCallback(async () => {
     if (canvasRef.current) {
       try {
-        const engine = new Engine(canvasRef.current)
+        const engine = new Engine(canvasRef.current, {})
         engineRef.current = engine
         await engine.init()
-        await engine.loadModel("/models/塞尔凯特/塞尔凯特.pmx")
+        await engine.loadModel("/models/reze/reze.pmx")
 
         engine.runRenderLoop(() => {})
       } catch (error) {
@@ -49,6 +52,21 @@ export default function Scene() {
   }, [initEngine])
 
   return <canvas ref={canvasRef} className="w-full h-full" />
+}
+```
+
+Engine options
+
+```javascript
+const DEFAULT_ENGINE_OPTIONS: RequiredEngineOptions = {
+  ambientColor: new Vec3(0.82, 0.82, 0.82),
+  directionalLightIntensity: 0.2,
+  minSpecularIntensity: 0.3,
+  rimLightIntensity: 0.4,
+  cameraDistance: 26.6,
+  cameraTarget: new Vec3(0, 12.5, 0),
+  cameraFov: Math.PI / 4,
+  onRaycast: undefined,
 }
 ```
 
