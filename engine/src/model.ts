@@ -723,6 +723,57 @@ export class Model {
     this.applyMorphs()
   }
 
+  /**
+   * Atomic pose setter for external animation editors.
+   * Sets bone rotations, translations, and morph weights in a single pass,
+   * identical to how getPoseAtTime applies VMD poses during playback.
+   * Cancels any active tweens on affected bones/morphs.
+   */
+  setPose(
+    rotations?: Record<string, Quat>,
+    translations?: Record<string, Vec3>,
+    morphs?: Record<string, number>
+  ): void {
+    const state = this.tweenState
+
+    if (rotations) {
+      for (const [name, quat] of Object.entries(rotations)) {
+        const idx = this.runtimeSkeleton.nameIndex[name] ?? -1
+        if (idx < 0 || idx >= this.skeleton.bones.length) continue
+
+        this.runtimeSkeleton.localRotations[idx].set(quat.clone().normalize())
+        state.rotActive[idx] = 0
+      }
+    }
+
+    if (translations) {
+      for (const [name, vec] of Object.entries(translations)) {
+        const idx = this.runtimeSkeleton.nameIndex[name] ?? -1
+        if (idx < 0 || idx >= this.skeleton.bones.length) continue
+
+        const rotation = rotations?.[name]?.clone().normalize()
+        const localTranslation = this.convertVMDTranslationToLocal(idx, vec, rotation)
+        this.runtimeSkeleton.localTranslations[idx].set(localTranslation)
+        state.transActive[idx] = 0
+      }
+    }
+
+    if (morphs) {
+      let morphChanged = false
+      for (const [name, weight] of Object.entries(morphs)) {
+        const idx = this.runtimeMorph.nameIndex[name] ?? -1
+        if (idx < 0 || idx >= this.runtimeMorph.weights.length) continue
+
+        this.runtimeMorph.weights[idx] = Math.max(0, Math.min(1, weight))
+        state.morphActive[idx] = 0
+        morphChanged = true
+      }
+      if (morphChanged) {
+        this.applyMorphs()
+      }
+    }
+  }
+
   private applyMorphs(): void {
     // Reset vertex data to base positions
     this.vertexData.set(this.baseVertexData)

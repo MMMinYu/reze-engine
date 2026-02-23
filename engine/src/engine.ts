@@ -1155,6 +1155,14 @@ export class Engine {
     this.currentModel?.moveBones(boneTranslations, durationMs)
   }
 
+  public setPose(
+    rotations?: Record<string, Quat>,
+    translations?: Record<string, Vec3>,
+    morphs?: Record<string, number>
+  ): void {
+    this.currentModel?.setPose(rotations, translations, morphs)
+  }
+
   public resetAllBones() {
     this.currentModel?.resetAllBones()
   }

@@ -1,7 +1,7 @@
 "use client"
 
 import Header from "@/components/header"
-import { Engine, EngineStats, Vec3 } from "reze-engine"
+import { Engine, EngineStats, Quat, Vec3 } from "reze-engine"
 import { useCallback, useEffect, useRef, useState } from "react"
 import Loading from "@/components/loading"
 import { Button } from "@/components/ui/button"
@@ -178,7 +178,7 @@ export default function Home() {
       // Initialize engine
       try {
         const engine = new Engine(canvasRef.current, {
-          ambientColor: new Vec3(0.88, 0.88, 0.95),
+          ambientColor: new Vec3(0.88, 0.92, 0.99),
           cameraDistance: 31.5,
           cameraTarget: new Vec3(0, 11.5, 0),
           // disableIK: true,

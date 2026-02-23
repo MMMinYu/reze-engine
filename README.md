@@ -70,11 +70,61 @@ const DEFAULT_ENGINE_OPTIONS: RequiredEngineOptions = {
 }
 ```
 
+## API
+
+### Animation Playback
+
+Load and play VMD animation files.
+
+```javascript
+await engine.loadAnimation("/animations/dance.vmd")
+engine.playAnimation()
+engine.pauseAnimation()
+engine.stopAnimation()
+engine.seekAnimation(2.5) // seek to 2.5 seconds
+
+const { current, duration, percentage } = engine.getAnimationProgress()
+```
+
+### Bone and Morph Tweening
+
+Rotate and move bones with optional tween duration. Translations are VMD-style (relative to bind pose world position).
+
+```javascript
+engine.rotateBones({ "首": neckQuat, "頭": headQuat }, 300)
+engine.moveBones({ "センター": centerVec }, 300)
+engine.setMorphWeight("まばたき", 1.0, 300)
+
+engine.resetAllBones()
+engine.resetAllMorphs()
+```
+
+### Atomic Pose Setting
+
+Set rotations, translations, and morphs in a single atomic pass — for animation editors, motion capture, or any use case that needs precise, immediate pose updates matching the quality of internal VMD playback.
+
+```javascript
+engine.setPose(
+  { "首": neckQuat, "頭": headQuat, "左腕": leftArmQuat },
+  { "センター": centerVec },
+  { "まばたき": 0.5, "あ": 0.3 }
+)
+```
+
+All three parameters are optional. Pass only what you need:
+
+```javascript
+engine.setPose(rotations)                      // rotations only
+engine.setPose(undefined, translations)        // translations only
+engine.setPose(undefined, undefined, morphs)   // morphs only
+```
+
 ## Projects Using This Engine
 
 - **[MiKaPo](https://mikapo.vercel.app)** - Online real-time motion capture for MMD using webcam and MediaPipe
 - **[Popo](https://popo.love)** - Fine-tuned LLM that generates MMD poses from natural language descriptions
 - **[MPL](https://mmd-mpl.vercel.app)** - Semantic motion programming language for scripting MMD animations with intuitive syntax
+- **[Mixamo-MMD](https://mixamo-mmd.vercel.app)** - Retarget Mixamo FBX animation to VMD in one click
 
 ## Tutorial
 
