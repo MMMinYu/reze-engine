@@ -86,6 +86,35 @@ engine.seekAnimation(2.5) // seek to 2.5 seconds
 const { current, duration, percentage } = engine.getAnimationProgress()
 ```
 
+### Structured Animation Data
+
+Load animation from structured keyframe data directly — for animation editors or programmatic animation creation. The engine handles interpolation and playback natively.
+
+```typescript
+import type { AnimationData } from "reze-engine"
+
+const data: AnimationData = {
+  boneTracks: {
+    "首": [
+      { frame: 0, rotation: new Quat(0, 0, 0, 1), translation: new Vec3(0, 0, 0), interpolation: new Uint8Array(64) },
+      { frame: 30, rotation: neckQuat, translation: new Vec3(0, 0, 0), interpolation: new Uint8Array(64) },
+    ],
+  },
+  morphTracks: {
+    "まばたき": [
+      { frame: 0, weight: 0 },
+      { frame: 15, weight: 1 },
+      { frame: 30, weight: 0 },
+    ],
+  },
+}
+
+engine.loadAnimationData(data)
+engine.playAnimation()
+
+const data = engine.getAnimationData() // retrieve current animation data
+```
+
 ### Bone and Morph Tweening
 
 Rotate and move bones with optional tween duration. Translations are VMD-style (relative to bind pose world position).
@@ -97,26 +126,6 @@ engine.setMorphWeight("まばたき", 1.0, 300)
 
 engine.resetAllBones()
 engine.resetAllMorphs()
-```
-
-### Atomic Pose Setting
-
-Set rotations, translations, and morphs in a single atomic pass — for animation editors, motion capture, or any use case that needs precise, immediate pose updates matching the quality of internal VMD playback.
-
-```javascript
-engine.setPose(
-  { "首": neckQuat, "頭": headQuat, "左腕": leftArmQuat },
-  { "センター": centerVec },
-  { "まばたき": 0.5, "あ": 0.3 }
-)
-```
-
-All three parameters are optional. Pass only what you need:
-
-```javascript
-engine.setPose(rotations)                      // rotations only
-engine.setPose(undefined, translations)        // translations only
-engine.setPose(undefined, undefined, morphs)   // morphs only
 ```
 
 ## Projects Using This Engine

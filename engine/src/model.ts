@@ -1,8 +1,10 @@
-import { Mat4, Quat, Vec3, bezierInterpolate } from "./math"
+import { Mat4, Quat, Vec3 } from "./math"
 import { Rigidbody, Joint, Physics } from "./physics"
 import { IKSolverSystem } from "./ik-solver"
-import { VMDKeyFrame, VMDLoader, BoneFrame, MorphFrame } from "./vmd-loader"
+import { VMDLoader } from "./vmd-loader"
+import { AnimationData, BoneKeyframe, MorphKeyframe, BoneInterpolation, interpolateControlPoints, rawInterpolationToBoneInterpolation } from "./animation"
 
+const VMD_FPS = 30
 const VERTEX_STRIDE = 8
 
 export interface Texture {
@@ -181,9 +183,10 @@ export class Model {
   private tweenTimeMs: number = 0 // Time tracking for tweens (milliseconds)
 
   // Animation runtime
-  private animationData: VMDKeyFrame[] | null = null
-  private boneTracks: Map<string, Array<{ boneFrame: BoneFrame; time: number }>> = new Map()
-  private morphTracks: Map<string, Array<{ morphFrame: MorphFrame; time: number }>> = new Map()
+  private _hasAnimation: boolean = false
+  private _animationData: AnimationData | null = null
+  private boneTracks: Map<string, Array<{ boneName: string; frame: number; rotation: Quat; translation: Vec3; interpolation: BoneInterpolation; time: number }>> = new Map()
+  private morphTracks: Map<string, Array<{ morphName: string; frame: number; weight: number; time: number }>> = new Map()
   private animationDuration: number = 0
   private isPlaying: boolean = false
   private isPaused: boolean = false
@@ -723,57 +726,6 @@ export class Model {
     this.applyMorphs()
   }
 
-  /**
-   * Atomic pose setter for external animation editors.
-   * Sets bone rotations, translations, and morph weights in a single pass,
-   * identical to how getPoseAtTime applies VMD poses during playback.
-   * Cancels any active tweens on affected bones/morphs.
-   */
-  setPose(
-    rotations?: Record<string, Quat>,
-    translations?: Record<string, Vec3>,
-    morphs?: Record<string, number>
-  ): void {
-    const state = this.tweenState
-
-    if (rotations) {
-      for (const [name, quat] of Object.entries(rotations)) {
-        const idx = this.runtimeSkeleton.nameIndex[name] ?? -1
-        if (idx < 0 || idx >= this.skeleton.bones.length) continue
-
-        this.runtimeSkeleton.localRotations[idx].set(quat.clone().normalize())
-        state.rotActive[idx] = 0
-      }
-    }
-
-    if (translations) {
-      for (const [name, vec] of Object.entries(translations)) {
-        const idx = this.runtimeSkeleton.nameIndex[name] ?? -1
-        if (idx < 0 || idx >= this.skeleton.bones.length) continue
-
-        const rotation = rotations?.[name]?.clone().normalize()
-        const localTranslation = this.convertVMDTranslationToLocal(idx, vec, rotation)
-        this.runtimeSkeleton.localTranslations[idx].set(localTranslation)
-        state.transActive[idx] = 0
-      }
-    }
-
-    if (morphs) {
-      let morphChanged = false
-      for (const [name, weight] of Object.entries(morphs)) {
-        const idx = this.runtimeMorph.nameIndex[name] ?? -1
-        if (idx < 0 || idx >= this.runtimeMorph.weights.length) continue
-
-        this.runtimeMorph.weights[idx] = Math.max(0, Math.min(1, weight))
-        state.morphActive[idx] = 0
-        morphChanged = true
-      }
-      if (morphChanged) {
-        this.applyMorphs()
-      }
-    }
-  }
-
   private applyMorphs(): void {
     // Reset vertex data to base positions
     this.vertexData.set(this.baseVertexData)
@@ -843,11 +795,89 @@ export class Model {
    * Load VMD animation file
    */
   async loadVmd(vmdUrl: string): Promise<void> {
-    this.animationData = await VMDLoader.load(vmdUrl)
+    const vmdKeyFrames = await VMDLoader.load(vmdUrl)
+
+    // Convert VMDKeyFrame[] to AnimationData
+    const boneTracks: Record<string, BoneKeyframe[]> = {}
+    const morphTracks: Record<string, MorphKeyframe[]> = {}
+
+    for (const keyFrame of vmdKeyFrames) {
+      for (const bf of keyFrame.boneFrames) {
+        if (!boneTracks[bf.boneName]) boneTracks[bf.boneName] = []
+        boneTracks[bf.boneName].push({
+          frame: bf.frame,
+          rotation: bf.rotation,
+          translation: bf.translation,
+          interpolation: rawInterpolationToBoneInterpolation(bf.interpolation),
+        })
+      }
+      for (const mf of keyFrame.morphFrames) {
+        if (!morphTracks[mf.morphName]) morphTracks[mf.morphName] = []
+        morphTracks[mf.morphName].push({
+          frame: mf.frame,
+          weight: mf.weight,
+        })
+      }
+    }
+
+    this.loadAnimationData({ boneTracks, morphTracks })
+  }
+
+  /**
+   * Load animation from structured keyframe data.
+   * This is the primary way to set animation data — loadVmd delegates to this.
+   */
+  loadAnimationData(data: AnimationData): void {
+    this._animationData = data
     this.resetAllBones()
     this.resetAllMorphs()
-    this.processFrames()
-    // Apply initial pose at time 0
+
+    this.boneTracks = new Map()
+    for (const name in data.boneTracks) {
+      const keyframes = data.boneTracks[name]
+      const sorted = [...keyframes].sort((a, b) => a.frame - b.frame)
+      this.boneTracks.set(
+        name,
+        sorted.map((kf) => ({
+          boneName: name,
+          frame: kf.frame,
+          rotation: kf.rotation,
+          translation: kf.translation,
+          interpolation: kf.interpolation,
+          time: kf.frame / VMD_FPS,
+        }))
+      )
+    }
+
+    this.morphTracks = new Map()
+    for (const name in data.morphTracks) {
+      const keyframes = data.morphTracks[name]
+      const sorted = [...keyframes].sort((a, b) => a.frame - b.frame)
+      this.morphTracks.set(
+        name,
+        sorted.map((kf) => ({
+          morphName: name,
+          frame: kf.frame,
+          weight: kf.weight,
+          time: kf.frame / VMD_FPS,
+        }))
+      )
+    }
+
+    this.boneTrackIndices.clear()
+    this.morphTrackIndices.clear()
+
+    // Calculate duration
+    let maxTime = 0
+    for (const frames of this.boneTracks.values()) {
+      if (frames.length > 0) maxTime = Math.max(maxTime, frames[frames.length - 1].time)
+    }
+    for (const frames of this.morphTracks.values()) {
+      if (frames.length > 0) maxTime = Math.max(maxTime, frames[frames.length - 1].time)
+    }
+    this.animationDuration = maxTime
+
+    this._hasAnimation = true
     this.animationTime = 0
     this.getPoseAtTime(0)
 
@@ -898,71 +928,8 @@ export class Model {
     this.physicsEnabled = enabled
   }
 
-  /**
-   * Process frames into tracks
-   */
-  private processFrames(): void {
-    if (!this.animationData) return
-
-    // Helper to group frames by name and sort by time
-    const groupFrames = <T>(
-      items: Array<{ item: T; name: string; time: number }>
-    ): Map<string, Array<{ item: T; time: number }>> => {
-      const tracks = new Map<string, Array<{ item: T; time: number }>>()
-      for (const { item, name, time } of items) {
-        if (!tracks.has(name)) tracks.set(name, [])
-        tracks.get(name)!.push({ item, time })
-      }
-      for (const keyFrames of tracks.values()) {
-        keyFrames.sort((a, b) => a.time - b.time)
-      }
-      return tracks
-    }
-
-    // Collect all bone and morph frames
-    const boneItems: Array<{ item: BoneFrame; name: string; time: number }> = []
-    const morphItems: Array<{ item: MorphFrame; name: string; time: number }> = []
-
-    for (const keyFrame of this.animationData) {
-      for (const boneFrame of keyFrame.boneFrames) {
-        boneItems.push({ item: boneFrame, name: boneFrame.boneName, time: keyFrame.time })
-      }
-      for (const morphFrame of keyFrame.morphFrames) {
-        morphItems.push({ item: morphFrame, name: morphFrame.morphName, time: keyFrame.time })
-      }
-    }
-
-    // Transform to expected format
-    this.boneTracks = new Map()
-    for (const [name, frames] of groupFrames(boneItems).entries()) {
-      this.boneTracks.set(
-        name,
-        frames.map((f) => ({ boneFrame: f.item, time: f.time }))
-      )
-    }
-
-    this.morphTracks = new Map()
-    for (const [name, frames] of groupFrames(morphItems).entries()) {
-      this.morphTracks.set(
-        name,
-        frames.map((f) => ({ morphFrame: f.item, time: f.time }))
-      )
-    }
-
-    // Reset cached indices when tracks change
-    this.boneTrackIndices.clear()
-    this.morphTrackIndices.clear()
-
-    // Calculate duration from all tracks
-    const allTracks = [...this.boneTracks.values(), ...this.morphTracks.values()]
-    this.animationDuration = allTracks.reduce((max, keyFrames) => {
-      const lastTime = keyFrames[keyFrames.length - 1]?.time ?? 0
-      return Math.max(max, lastTime)
-    }, 0)
-  }
-
   playAnimation(): void {
-    if (!this.animationData) return
+    if (!this._hasAnimation) return
 
     this.isPaused = false
     this.isPlaying = true
@@ -985,7 +952,7 @@ export class Model {
   }
 
   seekAnimation(time: number): void {
-    if (!this.animationData) return
+    if (!this._hasAnimation) return
     const clampedTime = Math.max(0, Math.min(time, this.animationDuration))
     this.animationTime = clampedTime
   }
@@ -993,6 +960,10 @@ export class Model {
   /**
    * Get current animation progress
    */
+  getAnimationData(): AnimationData | null {
+    return this._animationData
+  }
+
   getAnimationProgress(): { current: number; duration: number; percentage: number } {
     const duration = this.animationDuration
     const percentage = duration > 0 ? (this.animationTime / duration) * 100 : 0
@@ -1045,9 +1016,7 @@ export class Model {
    * Optimized for per-frame performance
    */
   private getPoseAtTime(time: number): void {
-    if (!this.animationData) return
-
-    const INV_127 = 1 / 127 // Pre-compute division constant
+    if (!this._hasAnimation) return
 
     // Process bone tracks
     for (const [boneName, keyFrames] of this.boneTracks.entries()) {
@@ -1059,11 +1028,10 @@ export class Model {
 
       if (idx < 0) continue
 
-      // Update cache
       this.boneTrackIndices.set(boneName, idx)
 
-      const frameA = keyFrames[idx].boneFrame
-      const frameB = keyFrames[idx + 1]?.boneFrame
+      const frameA = keyFrames[idx]
+      const frameB = keyFrames[idx + 1]
 
       const boneIdx = this.runtimeSkeleton.nameIndex[boneName]
       if (boneIdx === undefined) continue
@@ -1072,61 +1040,30 @@ export class Model {
       const localTrans = this.runtimeSkeleton.localTranslations[boneIdx]
 
       if (!frameB) {
-        // No interpolation needed - direct assignment
-        // Use animation frame's rotation for translation conversion to ensure consistency
-        // This prevents conflicts when IK later modifies the rotation
         const frameRotation = frameA.rotation
         localRot.set(frameRotation)
-        // Convert VMD relative translation to local translation using animation rotation
         const localTranslation = this.convertVMDTranslationToLocal(boneIdx, frameA.translation, frameRotation)
         localTrans.set(localTranslation)
       } else {
-        const timeA = keyFrames[idx].time
-        const timeB = keyFrames[idx + 1].time
-        const timeDelta = timeB - timeA
-        const gradient = (clampedTime - timeA) / timeDelta
+        const timeDelta = frameB.time - frameA.time
+        const gradient = (clampedTime - frameA.time) / timeDelta
         const interp = frameB.interpolation
 
-        // Pre-normalize interpolation values (avoid division in bezierInterpolate)
-        const rotT = bezierInterpolate(
-          interp[0] * INV_127,
-          interp[1] * INV_127,
-          interp[2] * INV_127,
-          interp[3] * INV_127,
-          gradient
-        )
-
-        // Use Quat.slerp to interpolate rotation
+        const rotT = interpolateControlPoints(interp.rotation, gradient)
         const rotation = Quat.slerp(frameA.rotation, frameB.rotation, rotT)
 
-        // Interpolate VMD translation using bezier for each component
-        // Inline getWeight to avoid function call overhead
-        const getWeight = (offset: number) =>
-          bezierInterpolate(
-            interp[offset] * INV_127,
-            interp[offset + 8] * INV_127,
-            interp[offset + 4] * INV_127,
-            interp[offset + 12] * INV_127,
-            gradient
-          )
+        const txWeight = interpolateControlPoints(interp.translationX, gradient)
+        const tyWeight = interpolateControlPoints(interp.translationY, gradient)
+        const tzWeight = interpolateControlPoints(interp.translationZ, gradient)
 
-        const txWeight = getWeight(0)
-        const tyWeight = getWeight(16)
-        const tzWeight = getWeight(32)
-
-        // Interpolate VMD relative translations (relative to bind pose world position)
         const interpolatedVMDTranslation = new Vec3(
           frameA.translation.x + (frameB.translation.x - frameA.translation.x) * txWeight,
           frameA.translation.y + (frameB.translation.y - frameA.translation.y) * tyWeight,
           frameA.translation.z + (frameB.translation.z - frameA.translation.z) * tzWeight
         )
 
-        // Convert interpolated VMD translation to local translation using animation rotation
-        // This ensures translation is computed for the animation rotation, not the runtime rotation
-        // that will be modified by IK, preventing conflicts
         const localTranslation = this.convertVMDTranslationToLocal(boneIdx, interpolatedVMDTranslation, rotation)
 
-        // Direct property writes to avoid object allocation
         localRot.set(rotation)
         localTrans.set(localTranslation)
       }
@@ -1142,19 +1079,18 @@ export class Model {
 
       if (idx < 0) continue
 
-      // Update cache
       this.morphTrackIndices.set(morphName, idx)
 
-      const frameA = keyFrames[idx].morphFrame
-      const frameB = keyFrames[idx + 1]?.morphFrame
+      const frameA = keyFrames[idx]
+      const frameB = keyFrames[idx + 1]
 
       const morphIdx = this.runtimeMorph.nameIndex[morphName]
       if (morphIdx === undefined) continue
 
       const weight = frameB
         ? frameA.weight +
-          (frameB.weight - frameA.weight) *
-            ((clampedTime - keyFrames[idx].time) / (keyFrames[idx + 1].time - keyFrames[idx].time))
+        (frameB.weight - frameA.weight) *
+        ((clampedTime - keyFrames[idx].time) / (keyFrames[idx + 1].time - keyFrames[idx].time))
         : frameA.weight
 
       this.runtimeMorph.weights[morphIdx] = weight
@@ -1176,7 +1112,7 @@ export class Model {
     const tweensChangedMorphs = this.updateTweens()
 
     // Apply animation if playing or paused (always apply pose if animation data exists and we have a time set)
-    if (this.animationData) {
+    if (this._hasAnimation) {
       if (this.isPlaying && !this.isPaused) {
         this.animationTime += deltaTime
 
@@ -1228,7 +1164,7 @@ export class Model {
       // Recompute ALL world matrices before each solver starts
       // This ensures each solver sees the effects of previous solvers on localRotations
       this.computeWorldMatrices()
-      
+
       // Clear computed set for this solver's pass
       this.ikComputedSet.clear()
 
@@ -1293,9 +1229,9 @@ export class Model {
 
     // Handle append transformations (same logic as computeWorldMatrices)
     const appendParentIdx = b.appendParentIndex
-    const hasAppend = b.appendRotate && 
-      appendParentIdx !== undefined && 
-      appendParentIdx >= 0 && 
+    const hasAppend = b.appendRotate &&
+      appendParentIdx !== undefined &&
+      appendParentIdx >= 0 &&
       appendParentIdx < bones.length
 
     if (hasAppend) {
@@ -1312,7 +1248,7 @@ export class Model {
             // Compute append parent's world matrix for dependency order, but use base rotation for append
             this.computeSingleBoneWorldMatrix(appendParentIdx, applyIK)
           }
-          
+
           // Use append parent's base local rotation only (IK rotations are applied after solving)
           let appendRot = localRot[appendParentIdx]
 
@@ -1320,7 +1256,7 @@ export class Model {
           const aw = appendRot.w
           const absRatio = ratio < 0 ? -ratio : ratio
           if (ratio < 0) { ax = -ax; ay = -ay; az = -az }
-          
+
           const appendQuat = new Quat(ax, ay, az, aw)
           const result = Quat.slerp(Quat.identity(), appendQuat, absRatio)
           rotateM = Mat4.fromQuat(result.x, result.y, result.z, result.w).multiply(rotateM)

@@ -1,6 +1,7 @@
 import { Camera } from "./camera"
 import { Mat4, Quat, Vec3 } from "./math"
 import { Model } from "./model"
+import type { AnimationData } from "./animation"
 import { PmxLoader } from "./pmx-loader"
 
 export type RaycastCallback = (material: string | null, screenX: number, screenY: number) => void
@@ -1065,6 +1066,14 @@ export class Engine {
     await this.currentModel.loadVmd(url)
   }
 
+  public loadAnimationData(data: AnimationData) {
+    this.currentModel?.loadAnimationData(data)
+  }
+
+  public getAnimationData(): AnimationData | null {
+    return this.currentModel?.getAnimationData() ?? null
+  }
+
   public playAnimation() {
     this.currentModel?.playAnimation()
   }
@@ -1155,13 +1164,6 @@ export class Engine {
     this.currentModel?.moveBones(boneTranslations, durationMs)
   }
 
-  public setPose(
-    rotations?: Record<string, Quat>,
-    translations?: Record<string, Vec3>,
-    morphs?: Record<string, number>
-  ): void {
-    this.currentModel?.setPose(rotations, translations, morphs)
-  }
 
   public resetAllBones() {
     this.currentModel?.resetAllBones()
