@@ -3,6 +3,7 @@ import type { NextConfig } from "next"
 
 const nextConfig: NextConfig = {
   // outputFileTracingRoot: join(__dirname, ".."),
+  devIndicators: false,
 }
 
 export default nextConfig

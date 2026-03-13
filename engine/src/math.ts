@@ -295,6 +295,33 @@ export class Mat4 {
     )
   }
 
+  // LH ortho, NDC depth 0=near 1=far
+  static orthographicLh(left: number, right: number, bottom: number, top: number, near: number, far: number): Mat4 {
+    const rl = 1 / (right - left)
+    const tb = 1 / (top - bottom)
+    const fn = 1 / (far - near)
+    return new Mat4(
+      new Float32Array([
+        2 * rl,
+        0,
+        0,
+        0,
+        0,
+        2 * tb,
+        0,
+        0,
+        0,
+        0,
+        fn,
+        0,
+        -(right + left) * rl,
+        -(top + bottom) * tb,
+        -near * fn,
+        1,
+      ])
+    )
+  }
+
   multiply(other: Mat4): Mat4 {
     // Column-major multiplication (matches WGSL/GLSL convention):
     // result = a * b

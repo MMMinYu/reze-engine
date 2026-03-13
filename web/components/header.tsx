@@ -23,7 +23,7 @@ export default function Header({ stats }: { stats: EngineStats | null }) {
       </div>
 
       {stats && (
-        <div className="ml-auto flex items-center gap-3 text-xs text-white/90 pointer-events-none bg-black h-7 px-3 md:py-2 md:px-4 rounded-full font-mono font-medium  hidden md:flex">
+        <div className="ml-auto flex items-center gap-3 text-xs text-white/90 pointer-events-none bg-black/30 backdrop-blur-sm h-7 px-3 md:py-2 md:px-4 rounded-full font-mono font-medium  hidden md:flex">
           <div className="flex items-center gap-4 tabular-nums">
             <div>
               FPS: <span>{stats.fps}</span>
@@ -32,7 +32,7 @@ export default function Header({ stats }: { stats: EngineStats | null }) {
         </div>
       )}
 
-      <div className="pointer-events-auto flex flex-row items-center gap-0 px-1 bg-black rounded-full h-7 ">
+      <div className="pointer-events-auto flex flex-row items-center gap-0 px-1 bg-black/30 backdrop-blur-sm rounded-full h-7 ">
         <Button variant="ghost" size="icon" asChild className="hover:bg-black hover:text-white rounded-full">
           <Link href="/tutorial">
             <BookOpenText />

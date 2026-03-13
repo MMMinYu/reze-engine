@@ -1,5 +1,3 @@
-import { Quat, Vec3 } from "./math"
-
 export interface ControlPoint {
   x: number
   y: number
@@ -12,34 +10,7 @@ export interface BoneInterpolation {
   translationZ: ControlPoint[]
 }
 
-export const LINEAR_INTERPOLATION: BoneInterpolation = {
-  rotation: [{ x: 20, y: 20 }, { x: 107, y: 107 }],
-  translationX: [{ x: 20, y: 20 }, { x: 107, y: 107 }],
-  translationY: [{ x: 20, y: 20 }, { x: 107, y: 107 }],
-  translationZ: [{ x: 20, y: 20 }, { x: 107, y: 107 }],
-}
-
-export interface BoneKeyframe {
-  frame: number
-  rotation: Quat
-  translation: Vec3
-  interpolation: BoneInterpolation
-}
-
-export interface MorphKeyframe {
-  frame: number
-  weight: number
-}
-
-export interface AnimationData {
-  boneTracks: Record<string, BoneKeyframe[]>
-  morphTracks: Record<string, MorphKeyframe[]>
-}
-
-/**
- * Cubic bezier interpolation using binary search.
- * Control points define the curve shape in 0-1 normalized space.
- */
+// Cubic bezier in normalized 0–1 space (binary search on x)
 export function bezierInterpolate(x1: number, x2: number, y1: number, y2: number, t: number): number {
   t = Math.max(0, Math.min(1, t))
 
@@ -70,9 +41,7 @@ export function bezierInterpolate(x1: number, x2: number, y1: number, y2: number
 
 const INV_127 = 1 / 127
 
-/**
- * Convert raw VMD interpolation bytes (64-byte Uint8Array) to structured BoneInterpolation.
- */
+// VMD 64-byte interpolation blob → BoneInterpolation
 export function rawInterpolationToBoneInterpolation(raw: Uint8Array): BoneInterpolation {
   return {
     rotation: [
@@ -94,10 +63,7 @@ export function rawInterpolationToBoneInterpolation(raw: Uint8Array): BoneInterp
   }
 }
 
-/**
- * Compute bezier-interpolated weight for a pair of control points.
- * Control point values are in 0-127 range.
- */
+// Control points are 0–127 VMD bytes
 export function interpolateControlPoints(cp: ControlPoint[], t: number): number {
   return bezierInterpolate(
     cp[0].x * INV_127,

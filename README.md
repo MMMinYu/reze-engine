@@ -20,6 +20,8 @@ A lightweight engine built with WebGPU and TypeScript for real-time 3D anime cha
 ## Usage
 
 ```javascript
+import { Engine, Model } from "reze-engine"
+
 export default function Scene() {
   const canvasRef = useRef < HTMLCanvasElement > null
   const engineRef = useRef < Engine > null
@@ -30,7 +32,8 @@ export default function Scene() {
         const engine = new Engine(canvasRef.current, {})
         engineRef.current = engine
         await engine.init()
-        await engine.loadModel("/models/reze/reze.pmx")
+        // Registers with the engine automatically (one scene / one active model)
+        const model = await Model.loadPmx("/models/reze/reze.pmx")
 
         engine.runRenderLoop(() => {})
       } catch (error) {
@@ -72,60 +75,41 @@ const DEFAULT_ENGINE_OPTIONS: RequiredEngineOptions = {
 
 ## API
 
+One WebGPU **Engine** per page (set as singleton when `init()` finishes). Load PMX via **`Model.loadPmx(url)`**—that parses the file and registers the model for rendering.
+
 ### Animation Playback
 
-Load and play VMD animation files.
+On the **model** instance returned from `Model.loadPmx`:
 
 ```javascript
-await engine.loadAnimation("/animations/dance.vmd")
-engine.playAnimation()
-engine.pauseAnimation()
-engine.stopAnimation()
-engine.seekAnimation(2.5) // seek to 2.5 seconds
+const model = await Model.loadPmx("/models/char.pmx")
+await model.loadVmd("/animations/dance.vmd")
+model.playAnimation()
+model.pauseAnimation()
+model.stopAnimation()
+model.seekAnimation(2.5) // seconds
 
-const { current, duration, percentage } = engine.getAnimationProgress()
-```
-
-### Structured Animation Data
-
-Load animation from structured keyframe data directly — for animation editors or programmatic animation creation. The engine handles interpolation and playback natively.
-
-```typescript
-import type { AnimationData } from "reze-engine"
-
-const data: AnimationData = {
-  boneTracks: {
-    "首": [
-      { frame: 0, rotation: new Quat(0, 0, 0, 1), translation: new Vec3(0, 0, 0), interpolation: new Uint8Array(64) },
-      { frame: 30, rotation: neckQuat, translation: new Vec3(0, 0, 0), interpolation: new Uint8Array(64) },
-    ],
-  },
-  morphTracks: {
-    "まばたき": [
-      { frame: 0, weight: 0 },
-      { frame: 15, weight: 1 },
-      { frame: 30, weight: 0 },
-    ],
-  },
-}
-
-engine.loadAnimationData(data)
-engine.playAnimation()
-
-const data = engine.getAnimationData() // retrieve current animation data
+const { current, duration, percentage } = model.getAnimationProgress()
 ```
 
 ### Bone and Morph Tweening
 
-Rotate and move bones with optional tween duration. Translations are VMD-style (relative to bind pose world position).
+```javascript
+model.rotateBones({ 首: neckQuat, 頭: headQuat }, 300)
+model.moveBones({ センター: centerVec }, 300)
+model.setMorphWeight("まばたき", 1.0, 300)
+
+model.resetAllBones()
+model.resetAllMorphs()
+```
+
+### Engine (scene / render loop)
 
 ```javascript
-engine.rotateBones({ "首": neckQuat, "頭": headQuat }, 300)
-engine.moveBones({ "センター": centerVec }, 300)
-engine.setMorphWeight("まばたき", 1.0, 300)
-
-engine.resetAllBones()
-engine.resetAllMorphs()
+engine.runRenderLoop(() => {})
+engine.setMaterialVisible("材質1", false)
+engine.addGround({ mode: "reflection", ... })  // mirror + reflection pass
+engine.addGround({ mode: "shadow", ... })      // floor + character shadow (no mirror)
 ```
 
 ## Projects Using This Engine

@@ -22,7 +22,7 @@ export default function Loading({ loading }: { loading: boolean }) {
   }, [loading])
 
   return (
-    <div className="absolute inset-0 w-screen h-screen flex items-center justify-center text-white p-6 z-50 bg-black">
+    <div className="absolute inset-0 w-screen h-screen flex items-center justify-center text-white p-6 z-50">
       <Progress value={progress} className="rounded-none w-full z-50 w-xs" />
     </div>
   )

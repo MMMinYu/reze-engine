@@ -1,8 +1,6 @@
 import { Camera } from "./camera"
 import { Mat4, Quat, Vec3 } from "./math"
 import { Model } from "./model"
-import type { AnimationData } from "./animation"
-import { PmxLoader } from "./pmx-loader"
 
 export type RaycastCallback = (material: string | null, screenX: number, screenY: number) => void
 
@@ -17,6 +15,8 @@ export type EngineOptions = {
   onRaycast?: RaycastCallback
   disableIK?: boolean
   disablePhysics?: boolean
+  // multisampleCount: 1 | 4 (default 4)
+  multisampleCount?: 1 | 4
 }
 
 export type RequiredEngineOptions = Required<Omit<EngineOptions, "onRaycast">> & Pick<EngineOptions, "onRaycast">
@@ -32,6 +32,7 @@ export const DEFAULT_ENGINE_OPTIONS: RequiredEngineOptions = {
   onRaycast: undefined,
   disableIK: false,
   disablePhysics: false,
+  multisampleCount: 4,
 }
 
 export interface EngineStats {
@@ -60,6 +61,15 @@ interface DrawCall {
 }
 
 export class Engine {
+  private static instance: Engine | null = null
+
+  public static getInstance(): Engine {
+    if (!Engine.instance) {
+      throw new Error("Engine not ready: create Engine, await init(), then load models via Model.loadPmx().")
+    }
+    return Engine.instance
+  }
+
   private canvas: HTMLCanvasElement
   private device!: GPUDevice
   private context!: GPUCanvasContext
@@ -97,7 +107,7 @@ export class Engine {
   private skinMatrixBuffer?: GPUBuffer
   private inverseBindMatrixBuffer?: GPUBuffer
   private multisampleTexture!: GPUTexture
-  private readonly sampleCount = 4
+  private sampleCount: 1 | 4 = 4
   private renderPassDescriptor!: GPURenderPassDescriptor
   // Constants
   private readonly STENCIL_EYE_VALUE = 1
@@ -118,6 +128,22 @@ export class Engine {
   private groundReflectionBindGroup?: GPUBindGroup
   private groundMaterialUniformBuffer?: GPUBuffer
   private groundHasReflections = false
+  private groundMode: "reflection" | "shadow" = "reflection"
+  private shadowMapTexture?: GPUTexture
+  private shadowMapDepthView?: GPUTextureView
+  private shadowDepthPipeline!: GPURenderPipeline
+  private shadowBindGroup?: GPUBindGroup
+  private shadowLightVPBuffer!: GPUBuffer
+  private shadowLightVPMatrix = new Float32Array(16)
+  private groundShadowPipeline!: GPURenderPipeline
+  private groundShadowBindGroupLayout!: GPUBindGroupLayout
+  private groundShadowBindGroup?: GPUBindGroup
+  private shadowComparisonSampler!: GPUSampler
+  private groundShadowMaterialBuffer?: GPUBuffer
+  private shadowDrawCalls: DrawCall[] = []
+  private shadowVPLightX = Number.NaN
+  private shadowVPLightY = Number.NaN
+  private shadowVPLightZ = Number.NaN
 
   // Raycasting
   private onRaycast?: RaycastCallback
@@ -156,6 +182,7 @@ export class Engine {
 
   constructor(canvas: HTMLCanvasElement, options?: EngineOptions) {
     this.canvas = canvas
+    this.sampleCount = options?.multisampleCount ?? DEFAULT_ENGINE_OPTIONS.multisampleCount
     if (options) {
       this.ambientColor = options.ambientColor ?? DEFAULT_ENGINE_OPTIONS.ambientColor!
       this.directionalLightIntensity =
@@ -198,6 +225,7 @@ export class Engine {
     this.setupLighting()
     this.createPipelines()
     this.setupResize()
+    Engine.instance = this
   }
 
   private createRenderPipeline(config: {
@@ -477,121 +505,61 @@ export class Engine {
       },
     })
 
-    // Create ground/reflection pipeline with reflection texture support
     this.groundBindGroupLayout = this.device.createBindGroupLayout({
       label: "ground bind group layout",
       entries: [
-        { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } }, // camera
-        { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } }, // light
-        { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: {} }, // reflectionTexture
-        { binding: 3, visibility: GPUShaderStage.FRAGMENT, sampler: {} }, // reflectionSampler
-        { binding: 4, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } }, // groundMaterial
+        { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+        { binding: 4, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
       ],
     })
-
     const groundPipelineLayout = this.device.createPipelineLayout({
       label: "ground pipeline layout",
       bindGroupLayouts: [this.groundBindGroupLayout],
     })
-
     const groundShaderModule = this.device.createShaderModule({
       label: "ground shaders",
       code: /* wgsl */ `
-        struct CameraUniforms {
-          view: mat4x4f,
-          projection: mat4x4f,
-          viewPos: vec3f,
-          _padding: f32,
-        };
-
-        struct LightUniforms {
-          ambientColor: vec4f,
-          lights: array<Light, 4>,
-        };
-
-        struct Light {
-          direction: vec4f,
-          color: vec4f,
-        };
-
-        struct GroundMaterialUniforms {
-          diffuseColor: vec3f,
-          reflectionLevel: f32,
-          fadeStart: f32,
-          fadeEnd: f32,
-          _padding1: f32,
-          _padding2: f32,
-        };
-
+        struct CameraUniforms { view: mat4x4f, projection: mat4x4f, viewPos: vec3f, _p: f32, };
+        struct Light { direction: vec4f, color: vec4f, };
+        struct LightUniforms { ambientColor: vec4f, lights: array<Light, 4>, };
+        struct GroundMaterialUniforms { diffuseColor: vec3f, reflectionLevel: f32, fadeStart: f32, fadeEnd: f32, _a: f32, _b: f32, };
         @group(0) @binding(0) var<uniform> camera: CameraUniforms;
         @group(0) @binding(1) var<uniform> light: LightUniforms;
         @group(0) @binding(2) var reflectionTexture: texture_2d<f32>;
         @group(0) @binding(3) var reflectionSampler: sampler;
         @group(0) @binding(4) var<uniform> material: GroundMaterialUniforms;
-
         struct VertexOutput {
-          @builtin(position) position: vec4f,
-          @location(0) normal: vec3f,
-          @location(1) uv: vec2f,
-          @location(2) worldPos: vec3f,
+          @builtin(position) position: vec4f, @location(0) normal: vec3f, @location(1) uv: vec2f, @location(2) worldPos: vec3f,
         };
-
-        @vertex fn vs(
-          @location(0) position: vec3f,
-          @location(1) normal: vec3f,
-          @location(2) uv: vec2f,
-        ) -> VertexOutput {
-          var output: VertexOutput;
-          let worldPos = position;
-          output.position = camera.projection * camera.view * vec4f(worldPos, 1.0);
-          output.normal = normal;
-          output.uv = uv;
-          output.worldPos = worldPos;
-          return output;
+        @vertex fn vs(@location(0) position: vec3f, @location(1) normal: vec3f, @location(2) uv: vec2f) -> VertexOutput {
+          var o: VertexOutput;
+          o.worldPos = position;
+          o.position = camera.projection * camera.view * vec4f(position, 1.0);
+          o.normal = normal; o.uv = uv; return o;
         }
-
         @fragment fn fs(input: VertexOutput) -> @location(0) vec4f {
           let n = normalize(input.normal);
-
+          let centerDist = length(input.worldPos.xz);
+          let t = clamp((centerDist - material.fadeStart) / max(material.fadeEnd - material.fadeStart, 0.001), 0.0, 1.0);
+          let edgeFade = 1.0 - smoothstep(0.0, 1.0, t);
           let clipPos = camera.projection * camera.view * vec4f(input.worldPos, 1.0);
           let ndcPos = clipPos.xyz / clipPos.w;
-          var reflectionUV = vec2f(ndcPos.x * 0.5 + 0.5, 0.5 - ndcPos.y * 0.5);
-
+          let reflectionUV = vec2f(ndcPos.x * 0.5 + 0.5, 0.5 - ndcPos.y * 0.5);
           let sampledReflectionColor = textureSample(reflectionTexture, reflectionSampler, reflectionUV).rgb;
-          let isValidReflection = clipPos.w > 0.0 &&
-                                  all(reflectionUV >= vec2f(0.0)) && all(reflectionUV <= vec2f(1.0));
-          var reflectionColor = select(vec3f(1.0, 1.0, 1.0), sampledReflectionColor, isValidReflection);
-
-          let distanceFromCamera = length(input.worldPos - camera.viewPos);
-          let fadeFactor = clamp((distanceFromCamera - 15.0) / 20.0, 0.0, 1.0);
-          reflectionColor *= (1.0 - fadeFactor * 0.3);
-
-          let diffuseColor = material.diffuseColor;
-          var finalColor = mix(diffuseColor, reflectionColor, material.reflectionLevel);
-
-          // Ground edge fade effect - smooth fade out at edges based on distance from center
-          let centerDist = length(input.worldPos.xz); // Distance from ground center in XZ plane
-
-          // Smoothstep for much smoother gradient transition
-          let t = clamp((centerDist - material.fadeStart) / (material.fadeEnd - material.fadeStart), 0.0, 1.0);
-          let edgeFade = 1.0 - smoothstep(0.0, 1.0, t);
-          finalColor *= edgeFade;
-
-          // Single directional light
+          let isValidReflection = clipPos.w > 0.0 && all(reflectionUV >= vec2f(0.0)) && all(reflectionUV <= vec2f(1.0));
+          let reflectionColor = select(vec3f(1.0, 1.0, 1.0), sampledReflectionColor, isValidReflection);
+          let fadeFactor = clamp((length(input.worldPos - camera.viewPos) - 15.0) / 20.0, 0.0, 1.0);
+          let refl = reflectionColor * (1.0 - fadeFactor * 0.3);
+          var finalColor = mix(material.diffuseColor, refl, material.reflectionLevel) * edgeFade;
           let l = -light.lights[0].direction.xyz;
-          let nDotL = max(dot(n, l), 0.0);
-          let intensity = light.lights[0].color.w;
-          let radiance = light.lights[0].color.xyz * intensity;
-          let lightAccum = light.ambientColor.xyz + radiance * nDotL;
-
-          // Apply lighting to the blended color
-          let litColor = finalColor * lightAccum;
-
-          return vec4f(litColor, edgeFade);
+          let lightAccum = light.ambientColor.xyz + light.lights[0].color.xyz * light.lights[0].color.w * max(dot(n, l), 0.0);
+          return vec4f(finalColor * lightAccum, edgeFade);
         }
       `,
     })
-
     this.groundPipeline = this.createRenderPipeline({
       label: "ground pipeline",
       layout: groundPipelineLayout,
@@ -599,11 +567,123 @@ export class Engine {
       vertexBuffers: fullVertexBuffers,
       fragmentTarget: standardBlend,
       cullMode: "back",
+      depthStencil: { format: "depth24plus-stencil8", depthWriteEnabled: true, depthCompare: "less-equal" },
+    })
+
+    this.shadowLightVPBuffer = this.device.createBuffer({
+      size: 64,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    })
+    const shadowBindGroupLayout = this.device.createBindGroupLayout({
+      label: "shadow depth bind layout",
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "uniform" } },
+        { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } },
+      ],
+    })
+    const shadowShader = this.device.createShaderModule({
+      label: "shadow depth",
+      code: /* wgsl */ `
+        struct LightVP { viewProj: mat4x4f, };
+        @group(0) @binding(0) var<uniform> lp: LightVP;
+        @group(0) @binding(1) var<storage, read> skinMats: array<mat4x4f>;
+        @vertex fn vs(@location(0) position: vec3f, @location(1) normal: vec3f, @location(2) uv: vec2f,
+          @location(3) joints0: vec4<u32>, @location(4) weights0: vec4<f32>) -> @builtin(position) vec4f {
+          let pos4 = vec4f(position, 1.0);
+          let ws = weights0.x + weights0.y + weights0.z + weights0.w;
+          let inv = select(1.0, 1.0 / ws, ws > 0.0001);
+          let nw = select(vec4f(1.0,0.0,0.0,0.0), weights0 * inv, ws > 0.0001);
+          var sp = vec4f(0.0);
+          for (var i = 0u; i < 4u; i++) { sp += (skinMats[joints0[i]] * pos4) * nw[i]; }
+          return lp.viewProj * vec4f(sp.xyz, 1.0);
+        }
+      `,
+    })
+    this.shadowDepthPipeline = this.device.createRenderPipeline({
+      label: "shadow depth pipeline",
+      layout: this.device.createPipelineLayout({ bindGroupLayouts: [shadowBindGroupLayout] }),
+      vertex: { module: shadowShader, entryPoint: "vs", buffers: fullVertexBuffers as GPUVertexBufferLayout[] },
+      primitive: { cullMode: "none" },
       depthStencil: {
-        format: "depth24plus-stencil8",
+        format: "depth32float",
         depthWriteEnabled: true,
         depthCompare: "less-equal",
+        depthBias: 2,
+        depthBiasSlopeScale: 1.5,
+        depthBiasClamp: 0,
       },
+    })
+    this.shadowComparisonSampler = this.device.createSampler({
+      compare: "less",
+      magFilter: "linear",
+      minFilter: "linear",
+    })
+    this.groundShadowBindGroupLayout = this.device.createBindGroupLayout({
+      label: "ground shadow layout",
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "depth" } },
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "comparison" } },
+        { binding: 4, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+        { binding: 5, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+      ],
+    })
+    const groundShadowShader = this.device.createShaderModule({
+      label: "ground shadow",
+      code: /* wgsl */ `
+        struct CameraUniforms { view: mat4x4f, projection: mat4x4f, viewPos: vec3f, _p: f32, };
+        struct Light { direction: vec4f, color: vec4f, };
+        struct LightUniforms { ambientColor: vec4f, lights: array<Light, 4>, };
+        struct GroundShadowMat { diffuseColor: vec3f, fadeStart: f32, fadeEnd: f32, shadowStrength: f32, pcfTexel: f32, _y: f32, };
+        struct LightVP { viewProj: mat4x4f, };
+        @group(0) @binding(0) var<uniform> camera: CameraUniforms;
+        @group(0) @binding(1) var<uniform> light: LightUniforms;
+        @group(0) @binding(2) var shadowMap: texture_depth_2d;
+        @group(0) @binding(3) var shadowSampler: sampler_comparison;
+        @group(0) @binding(4) var<uniform> material: GroundShadowMat;
+        @group(0) @binding(5) var<uniform> lightVP: LightVP;
+        struct VO { @builtin(position) position: vec4f, @location(0) worldPos: vec3f, @location(1) normal: vec3f, };
+        @vertex fn vs(@location(0) position: vec3f, @location(1) normal: vec3f, @location(2) uv: vec2f) -> VO {
+          var o: VO; o.worldPos = position; o.normal = normal;
+          o.position = camera.projection * camera.view * vec4f(position, 1.0); return o;
+        }
+        @fragment fn fs(i: VO) -> @location(0) vec4f {
+          let n = normalize(i.normal);
+          let centerDist = length(i.worldPos.xz);
+          let edgeFade = 1.0 - smoothstep(0.0, 1.0, clamp((centerDist - material.fadeStart) / max(material.fadeEnd - material.fadeStart, 0.001), 0.0, 1.0));
+          let lclip = lightVP.viewProj * vec4f(i.worldPos, 1.0);
+          let ndc = lclip.xyz / max(lclip.w, 1e-6);
+          let suv = vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+          let suv_c = clamp(suv, vec2f(0.02), vec2f(0.98));
+          let st = material.pcfTexel;
+          let compareZ = ndc.z - 0.0035;
+          var vis = 0.0;
+          vis += textureSampleCompare(shadowMap, shadowSampler, suv_c + vec2f(-st, -st), compareZ);
+          vis += textureSampleCompare(shadowMap, shadowSampler, suv_c + vec2f(0.0, -st), compareZ);
+          vis += textureSampleCompare(shadowMap, shadowSampler, suv_c + vec2f(st, -st), compareZ);
+          vis += textureSampleCompare(shadowMap, shadowSampler, suv_c + vec2f(-st, 0.0), compareZ);
+          vis += textureSampleCompare(shadowMap, shadowSampler, suv_c, compareZ);
+          vis += textureSampleCompare(shadowMap, shadowSampler, suv_c + vec2f(st, 0.0), compareZ);
+          vis += textureSampleCompare(shadowMap, shadowSampler, suv_c + vec2f(-st, st), compareZ);
+          vis += textureSampleCompare(shadowMap, shadowSampler, suv_c + vec2f(0.0, st), compareZ);
+          vis += textureSampleCompare(shadowMap, shadowSampler, suv_c + vec2f(st, st), compareZ);
+          vis *= 0.1111111;
+          let sun = light.ambientColor.xyz + light.lights[0].color.xyz * light.lights[0].color.w * max(dot(n, -light.lights[0].direction.xyz), 0.0);
+          let dark = (1.0 - vis) * material.shadowStrength;
+          let lit = material.diffuseColor * sun * (1.0 - dark * 0.65);
+          return vec4f(lit * edgeFade, edgeFade);
+        }
+      `,
+    })
+    this.groundShadowPipeline = this.createRenderPipeline({
+      label: "ground shadow pipeline",
+      layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.groundShadowBindGroupLayout] }),
+      shaderModule: groundShadowShader,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTarget: standardBlend,
+      cullMode: "back",
+      depthStencil: { format: "depth24plus-stencil8", depthWriteEnabled: true, depthCompare: "less-equal" },
     })
 
     // Create reflection pipeline (multisampled version for higher quality)
@@ -1029,6 +1109,9 @@ export class Engine {
     reflectionTextureSize?: number
     fadeStart?: number
     fadeEnd?: number
+    mode?: "reflection" | "shadow"
+    shadowMapSize?: number
+    shadowStrength?: number
   }): void {
     const opts = {
       width: 100,
@@ -1038,60 +1121,32 @@ export class Engine {
       reflectionTextureSize: 1024,
       fadeStart: 5.0,
       fadeEnd: 60.0,
+      mode: "reflection" as const,
+      shadowMapSize: 4096,
+      shadowStrength: 1.0,
       ...options,
     }
-
-    // Create ground geometry
+    this.groundMode = opts.mode
+    this.drawCalls = this.drawCalls.filter((d) => d.type !== "ground")
     this.createGroundGeometry(opts.width, opts.height)
-
-    this.createGroundMaterialBuffer(opts.diffuseColor, opts.reflectionLevel, opts.fadeStart, opts.fadeEnd)
-    this.createReflectionTexture(opts.reflectionTextureSize)
+    if (opts.mode === "reflection") {
+      this.createGroundMaterialBuffer(opts.diffuseColor, opts.reflectionLevel, opts.fadeStart, opts.fadeEnd)
+      this.createReflectionTexture(opts.reflectionTextureSize)
+    } else {
+      this.createShadowGroundResources(opts.shadowMapSize, opts.diffuseColor, opts.fadeStart, opts.fadeEnd, opts.shadowStrength)
+    }
     this.groundHasReflections = true
-
     this.drawCalls.push({
       type: "ground",
-      count: 6, // 2 triangles, 3 indices each
+      count: 6,
       firstIndex: 0,
-      bindGroup: this.groundReflectionBindGroup!,
+      bindGroup: (opts.mode === "reflection" ? this.groundReflectionBindGroup : this.groundShadowBindGroup)!,
       materialName: "Ground",
     })
   }
 
   private updateLightBuffer() {
     this.device.queue.writeBuffer(this.lightUniformBuffer, 0, this.lightData)
-  }
-
-  public async loadAnimation(url: string) {
-    if (!this.currentModel) return
-    await this.currentModel.loadVmd(url)
-  }
-
-  public loadAnimationData(data: AnimationData) {
-    this.currentModel?.loadAnimationData(data)
-  }
-
-  public getAnimationData(): AnimationData | null {
-    return this.currentModel?.getAnimationData() ?? null
-  }
-
-  public playAnimation() {
-    this.currentModel?.playAnimation()
-  }
-
-  public stopAnimation() {
-    this.currentModel?.stopAnimation()
-  }
-
-  public pauseAnimation() {
-    this.currentModel?.pauseAnimation()
-  }
-
-  public seekAnimation(time: number) {
-    this.currentModel?.seekAnimation(time)
-  }
-
-  public getAnimationProgress() {
-    return this.currentModel?.getAnimationProgress() ?? { current: 0, duration: 0, percentage: 0 }
   }
 
   public getStats(): EngineStats {
@@ -1124,7 +1179,8 @@ export class Engine {
 
   public dispose() {
     this.stopRenderLoop()
-    this.stopAnimation()
+    this.currentModel?.stopAnimation()
+    if (Engine.instance === this) Engine.instance = null
     if (this.camera) this.camera.detachControl()
 
     // Remove raycasting event listeners
@@ -1139,46 +1195,19 @@ export class Engine {
     }
   }
 
-  // Step 6: Load PMX model file
-  public async loadModel(path: string) {
-    const pathParts = path.split("/")
+  // Single active model; prefer Model.loadPmx() so load + register stay paired
+  public async registerModel(model: Model, pmxPath: string): Promise<void> {
+    const pathParts = pmxPath.split("/")
     pathParts.pop()
-    const dir = pathParts.join("/") + "/"
-    this.modelDir = dir
-
-    const model = await PmxLoader.load(path)
-
-    // Clear cached skinned vertices when loading a new model
+    this.modelDir = pathParts.join("/") + "/"
     this.cachedSkinnedVertices = undefined
     this.cachedSkinMatricesVersion = -1
-
     await this.setupModelBuffers(model)
   }
 
-  public rotateBones(boneRotations: Record<string, Quat>, durationMs?: number) {
-    this.currentModel?.rotateBones(boneRotations, durationMs)
-  }
-
-  // moveBones now takes relative translations (VMD-style) by default
-  public moveBones(boneTranslations: Record<string, Vec3>, durationMs?: number) {
-    this.currentModel?.moveBones(boneTranslations, durationMs)
-  }
-
-
-  public resetAllBones() {
-    this.currentModel?.resetAllBones()
-  }
-
-  public resetAllMorphs(): void {
-    this.currentModel?.resetAllMorphs()
-  }
-
-  public setMorphWeight(name: string, weight: number, durationMs?: number): void {
-    if (!this.currentModel) return
-    this.currentModel.setMorphWeight(name, weight, durationMs)
-    if (!durationMs || durationMs === 0) {
-      this.vertexBufferNeedsUpdate = true
-    }
+  // After morph/vertex edits, queues GPU vertex upload on next frame
+  public markVertexBufferDirty(): void {
+    this.vertexBufferNeedsUpdate = true
   }
 
   public setMaterialVisible(name: string, visible: boolean): void {
@@ -1199,18 +1228,6 @@ export class Engine {
 
   public isMaterialVisible(name: string): boolean {
     return !this.hiddenMaterials.has(name)
-  }
-
-  public getBones(): string[] {
-    return this.currentModel?.getSkeleton().bones.map((bone) => bone.name) ?? []
-  }
-
-  public getMorphs(): string[] {
-    return this.currentModel?.getMorphing().morphs.map((morph) => morph.name) ?? []
-  }
-
-  public getMaterials(): string[] {
-    return this.currentModel?.getMaterials().map((material) => material.name) ?? []
   }
 
   // IK control
@@ -1396,34 +1413,25 @@ export class Engine {
     this.device.queue.writeBuffer(this.groundIndexBuffer, 0, indices)
   }
 
-  private createGroundMaterialBuffer(
-    diffuseColor: Vec3 = new Vec3(1, 1, 1),
-    reflectionLevel: number = 0.5,
-    fadeStart: number = 5.0,
-    fadeEnd: number = 60.0
-  ) {
-    const materialData = new Float32Array([
-      diffuseColor.x,
-      diffuseColor.y,
-      diffuseColor.z, // diffuseColor (12 bytes)
-      reflectionLevel, // reflectionLevel (4 bytes)
-      fadeStart, // fadeStart (4 bytes)
-      fadeEnd, // fadeEnd (4 bytes)
-      0, // padding (4 bytes)
-      0, // padding (4 bytes)
-      0, // padding (4 bytes)
-      0, // padding (4 bytes)
-    ])
-
+  private createGroundMaterialBuffer(diffuseColor: Vec3, reflectionLevel: number, fadeStart: number, fadeEnd: number) {
+    const u = new Float32Array(8)
+    u[0] = diffuseColor.x
+    u[1] = diffuseColor.y
+    u[2] = diffuseColor.z
+    u[3] = reflectionLevel
+    u[4] = fadeStart
+    u[5] = fadeEnd
+    u[6] = 0
+    u[7] = 0
     this.groundMaterialUniformBuffer = this.device.createBuffer({
       label: "ground material uniform buffer",
-      size: materialData.byteLength,
+      size: 64,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     })
-    this.device.queue.writeBuffer(this.groundMaterialUniformBuffer, 0, materialData)
+    this.device.queue.writeBuffer(this.groundMaterialUniformBuffer, 0, u)
   }
 
-  private createReflectionTexture(size: number = 1024) {
+  private createReflectionTexture(size: number) {
     this.groundReflectionTexture = this.device.createTexture({
       label: "ground reflection texture",
       size: [size, size],
@@ -1431,14 +1439,12 @@ export class Engine {
       format: this.presentationFormat,
       usage: GPUTextureUsage.RENDER_ATTACHMENT,
     })
-
     this.groundReflectionResolveTexture = this.device.createTexture({
       label: "ground reflection resolve texture",
       size: [size, size],
       format: this.presentationFormat,
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
     })
-
     this.groundReflectionDepthTexture = this.device.createTexture({
       label: "ground reflection depth texture",
       size: [size, size],
@@ -1446,19 +1452,87 @@ export class Engine {
       format: "depth24plus-stencil8",
       usage: GPUTextureUsage.RENDER_ATTACHMENT,
     })
-
-    // Create a bind group for the reflection texture that can be used in the ground material
     this.groundReflectionBindGroup = this.device.createBindGroup({
       label: "ground reflection bind group",
       layout: this.groundBindGroupLayout,
       entries: [
         { binding: 0, resource: { buffer: this.cameraUniformBuffer } },
         { binding: 1, resource: { buffer: this.lightUniformBuffer } },
-        { binding: 2, resource: this.groundReflectionResolveTexture!.createView() }, // Use resolve texture for sampling
+        { binding: 2, resource: this.groundReflectionResolveTexture.createView() },
         { binding: 3, resource: this.materialSampler },
         { binding: 4, resource: { buffer: this.groundMaterialUniformBuffer! } },
       ],
     })
+  }
+
+  private createShadowGroundResources(
+    shadowMapSize: number,
+    diffuseColor: Vec3,
+    fadeStart: number,
+    fadeEnd: number,
+    shadowStrength: number
+  ) {
+    this.shadowMapTexture = this.device.createTexture({
+      label: "shadow map",
+      size: [shadowMapSize, shadowMapSize],
+      format: "depth32float",
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+    })
+    this.shadowMapDepthView = this.shadowMapTexture.createView()
+    const gb = new Float32Array(8)
+    gb[0] = diffuseColor.x
+    gb[1] = diffuseColor.y
+    gb[2] = diffuseColor.z
+    gb[3] = fadeStart
+    gb[4] = fadeEnd
+    gb[5] = shadowStrength
+    gb[6] = 1.2 / shadowMapSize
+    gb[7] = 0
+    this.groundShadowMaterialBuffer = this.device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
+    this.device.queue.writeBuffer(this.groundShadowMaterialBuffer, 0, gb)
+    this.shadowBindGroup = this.device.createBindGroup({
+      label: "shadow bind",
+      layout: this.shadowDepthPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: this.shadowLightVPBuffer } },
+        { binding: 1, resource: { buffer: this.skinMatrixBuffer! } },
+      ],
+    })
+    this.groundShadowBindGroup = this.device.createBindGroup({
+      label: "ground shadow bind",
+      layout: this.groundShadowBindGroupLayout,
+      entries: [
+        { binding: 0, resource: { buffer: this.cameraUniformBuffer } },
+        { binding: 1, resource: { buffer: this.lightUniformBuffer } },
+        { binding: 2, resource: this.shadowMapDepthView },
+        { binding: 3, resource: this.shadowComparisonSampler },
+        { binding: 4, resource: { buffer: this.groundShadowMaterialBuffer } },
+        { binding: 5, resource: { buffer: this.shadowLightVPBuffer } },
+      ],
+    })
+  }
+
+  private updateShadowLightVP() {
+    const lx = this.lightData[4]
+    const ly = this.lightData[5]
+    const lz = this.lightData[6]
+    if (lx === this.shadowVPLightX && ly === this.shadowVPLightY && lz === this.shadowVPLightZ) return
+    this.shadowVPLightX = lx
+    this.shadowVPLightY = ly
+    this.shadowVPLightZ = lz
+    const dir = new Vec3(lx, ly, lz)
+    if (dir.length() < 1e-6) {
+      dir.x = 0.35
+      dir.y = -1
+      dir.z = 0.2
+    } else dir.normalize()
+    const target = new Vec3(0, 11, 0)
+    const eye = new Vec3(target.x - dir.x * 72, target.y - dir.y * 72, target.z - dir.z * 72)
+    const view = Mat4.lookAt(eye, target, new Vec3(0, 1, 0))
+    const proj = Mat4.orthographicLh(-72, 72, -72, 72, 1, 140)
+    const vp = proj.multiply(view)
+    this.shadowLightVPMatrix.set(vp.values)
+    this.device.queue.writeBuffer(this.shadowLightVPBuffer, 0, this.shadowLightVPMatrix)
   }
 
   private async setupMaterials(model: Model) {
@@ -1635,6 +1709,11 @@ export class Engine {
 
       currentIndexOffset += indexCount
     }
+    this.shadowDrawCalls.length = 0
+    for (const d of this.drawCalls) {
+      if (d.type === "opaque" || d.type === "hair-over-eyes" || d.type === "hair-over-non-eyes")
+        this.shadowDrawCalls.push(d)
+    }
   }
 
   private createMaterialUniformBuffer(
@@ -1744,26 +1823,17 @@ export class Engine {
   }
 
   private renderGround(pass: GPURenderPassEncoder) {
-    if (!this.groundHasReflections || !this.groundVertexBuffer || !this.groundIndexBuffer) {
-      return
-    }
-
-    if (this.groundReflectionTexture) {
-      this.renderReflectionTexture()
-    }
-    pass.setPipeline(this.groundPipeline)
+    if (!this.groundHasReflections || !this.groundVertexBuffer || !this.groundIndexBuffer) return
+    if (this.groundMode === "reflection" && this.groundReflectionTexture) this.renderReflectionTexture()
+    pass.setPipeline(this.groundMode === "reflection" ? this.groundPipeline : this.groundShadowPipeline)
     pass.setVertexBuffer(0, this.groundVertexBuffer)
     pass.setIndexBuffer(this.groundIndexBuffer, "uint16")
-
     for (const draw of this.drawCalls) {
       if (draw.type === "ground" && this.shouldRenderDrawCall(draw)) {
         pass.setBindGroup(0, draw.bindGroup)
         pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
       }
     }
-
-    // // Restore model index buffer for subsequent rendering
-    // pass.setIndexBuffer(this.indexBuffer!, "uint32")
   }
 
   private renderReflectionTexture() {
@@ -2180,11 +2250,37 @@ export class Engine {
         this.vertexBufferNeedsUpdate = false
       }
 
-      // Update skin matrices buffer
       this.updateSkinMatrices()
+      if (this.groundMode === "shadow") this.updateShadowLightVP()
 
-      // Use single encoder for render
       const encoder = this.device.createCommandEncoder()
+      if (
+        this.groundMode === "shadow" &&
+        this.currentModel &&
+        this.shadowMapDepthView &&
+        this.shadowBindGroup
+      ) {
+        const sp = encoder.beginRenderPass({
+          colorAttachments: [],
+          depthStencilAttachment: {
+            view: this.shadowMapDepthView,
+            depthClearValue: 1.0,
+            depthLoadOp: "clear",
+            depthStoreOp: "store",
+          },
+        })
+        sp.setPipeline(this.shadowDepthPipeline)
+        sp.setBindGroup(0, this.shadowBindGroup)
+        sp.setVertexBuffer(0, this.vertexBuffer)
+        sp.setVertexBuffer(1, this.jointsBuffer)
+        sp.setVertexBuffer(2, this.weightsBuffer)
+        sp.setIndexBuffer(this.indexBuffer!, "uint32")
+        for (const draw of this.shadowDrawCalls) {
+          if (this.shouldRenderDrawCall(draw))
+            sp.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
+        }
+        sp.end()
+      }
 
       const pass = encoder.beginRenderPass(this.renderPassDescriptor)
 
@@ -2223,7 +2319,6 @@ export class Engine {
         this.drawOutlines(pass, true)
       }
 
-      // Pass 4: Ground (with reflections)
       if (this.groundHasReflections) {
         this.renderGround(pass)
       }

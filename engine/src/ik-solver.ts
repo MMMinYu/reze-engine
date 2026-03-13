@@ -1,8 +1,4 @@
-/**
- * IK Solver implementation
- * Based on reference from babylon-mmd and Saba MMD library
- * https://github.com/benikabocha/saba/blob/master/src/Saba/Model/MMD/MMDIkSolver.cpp
- */
+// IK solver (MMD-style; see Saba MMDIkSolver.cpp)
 
 import { Mat4, Quat, Vec3 } from "./math"
 import { Bone, IKLink, IKSolver, IKChainInfo } from "./model"
@@ -76,16 +72,10 @@ class IKChain {
   }
 }
 
-/**
- * Solve IK chains for a model
- */
 export class IKSolverSystem {
   private static readonly EPSILON = 1.0e-8
   private static readonly THRESHOLD = (88 * Math.PI) / 180
 
-  /**
-   * Solve all IK chains
-   */
   public static solve(
     ikSolvers: IKSolver[],
     bones: Bone[],

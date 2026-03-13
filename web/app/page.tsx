@@ -1,7 +1,7 @@
 "use client"
 
 import Header from "@/components/header"
-import { Engine, EngineStats, Quat, Vec3 } from "reze-engine"
+import { Engine, EngineStats, Model, Vec3 } from "reze-engine"
 import { useCallback, useEffect, useRef, useState } from "react"
 import Loading from "@/components/loading"
 import { Button } from "@/components/ui/button"
@@ -27,6 +27,7 @@ function formatRemainingTime(current: number, duration: number): string {
 export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const engineRef = useRef<Engine | null>(null)
+  const modelRef = useRef<Model | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const [engineError, setEngineError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -43,11 +44,9 @@ export default function Home() {
     let rafId: number | null = null
 
     const updateProgress = () => {
-      if (engineRef.current && isPlaying && !isPaused) {
-        const prog = engineRef.current.getAnimationProgress()
+      if (modelRef.current && isPlaying && !isPaused) {
+        const prog = modelRef.current.getAnimationProgress()
         setProgress(prog)
-
-        // Auto-pause when animation ends
         if (prog.percentage >= 100) {
           setIsPlaying(false)
           setIsPaused(false)
@@ -120,14 +119,14 @@ export default function Home() {
 
       // If animation has ended (at 100%), restart from beginning
       if (progress.percentage >= 100) {
-        engineRef.current.seekAnimation(0)
+        modelRef.current?.seekAnimation(0)
         if (audioRef.current) {
           audioRef.current.currentTime = 0
         }
         setProgress({ ...progress, current: 0, percentage: 0 })
         await new Promise((resolve) => requestAnimationFrame(resolve))
       }
-      engineRef.current.playAnimation()
+      modelRef.current?.playAnimation()
       setIsPlaying(true)
       setIsPaused(false)
     }
@@ -136,7 +135,7 @@ export default function Home() {
   // Pause animation
   const handlePause = useCallback(() => {
     if (engineRef.current) {
-      engineRef.current.pauseAnimation()
+      modelRef.current?.pauseAnimation()
       if (audioRef.current) {
         audioRef.current.pause()
       }
@@ -153,7 +152,7 @@ export default function Home() {
           // Silent fail
         })
       }
-      engineRef.current.playAnimation()
+      modelRef.current?.playAnimation()
       setIsPaused(false)
     }
   }, [])
@@ -163,7 +162,7 @@ export default function Home() {
     (value: number[]) => {
       if (engineRef.current && progress.duration > 0) {
         const seekTime = (value[0] / 100) * progress.duration
-        engineRef.current.seekAnimation(seekTime)
+        modelRef.current?.seekAnimation(seekTime)
         if (audioRef.current) {
           audioRef.current.currentTime = seekTime
         }
@@ -192,13 +191,15 @@ export default function Home() {
         })
         engineRef.current = engine
         await engine.init()
-        await engine.loadModel("/models/reze/reze.pmx")
+        const model = await Model.loadPmx("/models/reze/reze.pmx")
+        modelRef.current = model
         engine.addGround({
           width: 160,
           height: 160,
           fadeStart: 10.0,
           fadeEnd: 80.0,
           diffuseColor: new Vec3(0.8, 0.1, 1.0),
+          mode: "shadow",
         })
 
         setLoading(false)
@@ -212,10 +213,10 @@ export default function Home() {
         // engine.setMaterialVisible("材質1", false)
         // engine.setMaterialVisible("GT Bow Button Blouse", false)
 
-        await engine.loadAnimation("/animations/IRIS OUT.vmd")
-        engine.setMorphWeight("抗穿模", 0.5)
+        await model.loadVmd("/animations/IRIS OUT.vmd")
+        model.setMorphWeight("抗穿模", 0.5)
 
-        const prog = engine.getAnimationProgress()
+        const prog = model.getAnimationProgress()
         setProgress(prog)
         setEngineError(null)
       } catch (error) {
@@ -305,7 +306,7 @@ export default function Home() {
         </div>
       )}
 
-      <canvas ref={canvasRef} className="absolute inset-0 w-full h-full touch-none z-1 bg-indigo-950" />
+      <canvas ref={canvasRef} className="absolute inset-0 w-full h-full touch-none z-1" />
 
       {/* Player Controls */}
       {!loading && !engineError && (

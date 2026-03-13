@@ -1,6 +1,6 @@
 import { Mat4, Vec3 } from "./math"
 
-const FAR = 1000
+const FAR = 2000
 
 export class Camera {
   alpha: number
@@ -29,7 +29,7 @@ export class Camera {
   panSensitivity: number = 0.0002 // Sensitivity for right-click panning
   wheelPrecision: number = 0.01
   pinchPrecision: number = 0.05
-  minZ: number = 0.1
+  minZ: number = 0.05
   maxZ: number = FAR
   lowerBetaLimit: number = 0.001
   upperBetaLimit: number = Math.PI - 0.001
