@@ -2,110 +2,32 @@
 
 A lightweight engine built with WebGPU and TypeScript for real-time 3D anime character MMD model rendering.
 
-![screenshot](./screenshot.png)
-
 ## Features
 
-- Blinn-Phong lighting
-- Alpha blending
-- Post alpha eye rendering (the see-through eyes)
-- Rim lighting
-- Outlines
-- MSAA 4x anti-aliasing
-- Bone and morph API
-- VMD animation
-- IK solver
-- Ammo/Bullet physics
+- Blinn-Phong lighting, alpha blending, rim lighting, outlines, MSAA 4x
+- Post alpha eye rendering (see-through eyes)
+- Bone and morph API, VMD animation (multiple named, non-interruptible), IK solver, Ammo/Bullet physics
+- Multi-model (per-model materials, IK, physics)
 
 ## Usage
 
 ```javascript
 import { Engine, Model } from "reze-engine"
 
-export default function Scene() {
-  const canvasRef = useRef < HTMLCanvasElement > null
-  const engineRef = useRef < Engine > null
-
-  const initEngine = useCallback(async () => {
-    if (canvasRef.current) {
-      try {
-        const engine = new Engine(canvasRef.current, {})
-        engineRef.current = engine
-        await engine.init()
-        await Model.loadPmx("/models/reze/reze.pmx")
-
-        engine.runRenderLoop(() => {})
-      } catch (error) {
-        console.error(error)
-      }
-    }
-  }, [])
-
-  useEffect(() => {
-    void (async () => {
-      initEngine()
-    })()
-
-    return () => {
-      if (engineRef.current) {
-        engineRef.current.dispose()
-      }
-    }
-  }, [initEngine])
-
-  return <canvas ref={canvasRef} className="w-full h-full" />
-}
-```
-
-Engine options
-
-```javascript
-const DEFAULT_ENGINE_OPTIONS: RequiredEngineOptions = {
-  ambientColor: new Vec3(0.82, 0.82, 0.82),
-  directionalLightIntensity: 0.2,
-  minSpecularIntensity: 0.3,
-  rimLightIntensity: 0.4,
-  cameraDistance: 26.6,
-  cameraTarget: new Vec3(0, 12.5, 0),
-  cameraFov: Math.PI / 4,
-  onRaycast: undefined,
-}
-```
-
-## API
-
-Use **`Model.loadPmx(path)`** after **`await engine.init()`**—the model is registered on the engine automatically.
-
-### Animation (model instance)
-
-```javascript
-const model = await Model.loadPmx("/models/char.pmx")
+const engine = new Engine(canvas, {})
+await engine.init()
+const model = await Model.loadPmx("/models/reze/reze.pmx")
 await model.loadVmd("/animations/dance.vmd")
 model.playAnimation()
-model.pauseAnimation()
-model.stopAnimation()
-model.seekAnimation(2.5)
-
-const { current, duration, percentage } = model.getAnimationProgress()
-```
-
-### Bones / morphs (model)
-
-```javascript
-model.rotateBones({ 首: neckQuat, 頭: headQuat }, 300)
-model.moveBones({ センター: centerVec }, 300)
-model.setMorphWeight("まばたき", 1.0, 300)
-model.resetAllBones()
-model.resetAllMorphs()
-```
-
-### Engine
-
-```javascript
 engine.runRenderLoop(() => {})
-engine.setMaterialVisible("材質1", false)
-engine.addGround({ mode: "shadow", shadowMapSize: 1024 })
 ```
+
+## API (summary)
+
+- **Multi-model:** `engine.addModel(model, pmxPath, name?)`, `getModel(name)`, `getModelNames()`, `removeModel(name)`, `setMaterialVisible(modelName, materialName, visible)`, `setModelIKEnabled(modelName, enabled)`, `setModelPhysicsEnabled(modelName, enabled)`, `resetPhysics()`, `markVertexBufferDirty(modelName?)`
+- **Animation:** `model.loadVmd(url)` (loads "default", no auto-play); `model.loadAnimation(name, vmdUrl)`; `model.show(name)`; `model.play()` / `model.play(name)`; `model.pause()`; `model.stop()`; `model.seek(t)`; `model.getAnimationProgress()`. Animations are non-interruptible (next is queued).
+- **Bones / morphs:** `model.rotateBones()`, `model.moveBones()`, `model.setMorphWeight()`, `model.resetAllBones()`, `model.resetAllMorphs()`
+- **Engine:** `runRenderLoop()`, `addGround({ mode: "reflection" | "shadow", ... })`, `onRaycast: (modelName, material, screenX, screenY) => {}`
 
 ## Projects Using This Engine
 

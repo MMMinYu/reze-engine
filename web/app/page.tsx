@@ -24,6 +24,13 @@ function formatRemainingTime(current: number, duration: number): string {
   return `-${mins}:${secs.toString().padStart(2, "0")}`
 }
 
+type AnimationProgress = {
+  current: number
+  duration: number
+  percentage: number
+  animationName: string | null
+}
+
 export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const engineRef = useRef<Engine | null>(null)
@@ -34,19 +41,29 @@ export default function Home() {
   const [stats, setStats] = useState<EngineStats | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const [isPaused, setIsPaused] = useState(false)
-  const [progress, setProgress] = useState({ current: 0, duration: 0, percentage: 0 })
+  const [progress, setProgress] = useState<AnimationProgress>({
+    current: 0,
+    duration: 0,
+    percentage: 0,
+    animationName: null,
+  })
   const [selectedMaterial, setSelectedMaterial] = useState<string | null>(null)
   const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 })
   const [rippleId, setRippleId] = useState(0)
 
-  // Update progress using requestAnimationFrame for smooth updates
+  // Sync progress from model (current animation time, duration, name)
   useEffect(() => {
     let rafId: number | null = null
 
     const updateProgress = () => {
       if (modelRef.current && isPlaying && !isPaused) {
-        const prog = modelRef.current.getAnimationProgress()
-        setProgress(prog)
+        const prog: AnimationProgress = modelRef.current.getAnimationProgress()
+        setProgress({
+          current: prog.current,
+          duration: prog.duration,
+          percentage: prog.percentage,
+          animationName: prog.animationName ?? null,
+        })
         if (prog.percentage >= 100) {
           setIsPlaying(false)
           setIsPaused(false)
@@ -119,14 +136,14 @@ export default function Home() {
 
       // If animation has ended (at 100%), restart from beginning
       if (progress.percentage >= 100) {
-        modelRef.current?.seekAnimation(0)
+        modelRef.current?.seek(0)
         if (audioRef.current) {
           audioRef.current.currentTime = 0
         }
-        setProgress({ ...progress, current: 0, percentage: 0 })
+        setProgress((p) => ({ ...p, current: 0, percentage: 0 }))
         await new Promise((resolve) => requestAnimationFrame(resolve))
       }
-      modelRef.current?.playAnimation()
+      modelRef.current?.play()
       setIsPlaying(true)
       setIsPaused(false)
     }
@@ -135,7 +152,7 @@ export default function Home() {
   // Pause animation
   const handlePause = useCallback(() => {
     if (engineRef.current) {
-      modelRef.current?.pauseAnimation()
+      modelRef.current?.pause()
       if (audioRef.current) {
         audioRef.current.pause()
       }
@@ -152,7 +169,7 @@ export default function Home() {
           // Silent fail
         })
       }
-      modelRef.current?.playAnimation()
+      modelRef.current?.play()
       setIsPaused(false)
     }
   }, [])
@@ -162,14 +179,14 @@ export default function Home() {
     (value: number[]) => {
       if (engineRef.current && progress.duration > 0) {
         const seekTime = (value[0] / 100) * progress.duration
-        modelRef.current?.seekAnimation(seekTime)
+        modelRef.current?.seek(seekTime)
         if (audioRef.current) {
           audioRef.current.currentTime = seekTime
         }
-        setProgress({ ...progress, current: seekTime, percentage: value[0] })
+        setProgress((p) => ({ ...p, current: seekTime, percentage: value[0] }))
       }
     },
-    [progress]
+    [progress.duration]
   )
 
   const initEngine = useCallback(async () => {
@@ -181,7 +198,7 @@ export default function Home() {
           cameraDistance: 31.5,
           cameraTarget: new Vec3(0, 11.5, 0),
           // disableIK: true,
-          onRaycast: (material: string | null, screenX: number, screenY: number) => {
+          onRaycast: (modelName: string, material: string | null, screenX: number, screenY: number) => {
             if (material) {
               setMousePosition({ x: screenX, y: screenY })
               setRippleId((prev) => prev + 1)
@@ -191,8 +208,10 @@ export default function Home() {
         })
         engineRef.current = engine
         await engine.init()
-        const model = await Model.loadPmx("/models/reze/reze.pmx")
-        modelRef.current = model
+        const m1 = await Model.loadPmx("/models/reze/reze.pmx")
+
+        modelRef.current = m1
+
         engine.addGround({
           width: 160,
           height: 160,
@@ -213,11 +232,16 @@ export default function Home() {
         // engine.setMaterialVisible("材質1", false)
         // engine.setMaterialVisible("GT Bow Button Blouse", false)
 
-        await model.loadVmd("/animations/IRIS OUT.vmd")
-        model.setMorphWeight("抗穿模", 0.5)
+        await m1.loadVmd("/animations/IRIS OUT.vmd")
+        m1.setMorphWeight("抗穿模", 0.5)
 
-        const prog = model.getAnimationProgress()
-        setProgress(prog)
+        const prog: AnimationProgress = m1.getAnimationProgress()
+        setProgress({
+          current: prog.current,
+          duration: prog.duration,
+          percentage: prog.percentage,
+          animationName: prog.animationName ?? null,
+        })
         setEngineError(null)
       } catch (error) {
         setEngineError(error instanceof Error ? error.message : "Unknown error")

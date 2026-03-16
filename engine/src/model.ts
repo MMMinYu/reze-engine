@@ -3,8 +3,16 @@ import { Engine } from "./engine"
 import { PmxLoader } from "./pmx-loader"
 import { Rigidbody, Joint } from "./physics"
 import { IKSolverSystem } from "./ik-solver"
-import { VMDLoader } from "./vmd-loader"
-import { BoneInterpolation, interpolateControlPoints, rawInterpolationToBoneInterpolation } from "./animation"
+import { VMDLoader, type VMDKeyFrame } from "./vmd-loader"
+import {
+  AnimationClip,
+  AnimationState,
+  BoneInterpolation,
+  BoneKeyframe,
+  MorphKeyframe,
+  interpolateControlPoints,
+  rawInterpolationToBoneInterpolation,
+} from "./animation"
 
 const VMD_FPS = 30
 const VERTEX_STRIDE = 8
@@ -206,18 +214,11 @@ export class Model {
   private tweenState!: TweenState
   private tweenTimeMs: number = 0 // Time tracking for tweens (milliseconds)
 
-  // Animation runtime
-  private _hasAnimation: boolean = false
-  private boneTracks: Map<string, Array<{ boneName: string; frame: number; rotation: Quat; translation: Vec3; interpolation: BoneInterpolation; time: number }>> = new Map()
-  private morphTracks: Map<string, Array<{ morphName: string; frame: number; weight: number; time: number }>> = new Map()
-  private animationDuration: number = 0
-  private isPlaying: boolean = false
-  private isPaused: boolean = false
-  private animationTime: number = 0 // Current time in animation (seconds)
-
-  // Cached keyframe indices for faster lookup (per track)
+  // Animation: state and multiple slots (idle, walk, attack, etc.); commit/rollback for action-game style
+  private readonly animationState = new AnimationState()
   private boneTrackIndices: Map<string, number> = new Map()
   private morphTrackIndices: Map<string, number> = new Map()
+  private lastAppliedClip: AnimationClip | null = null
 
   // IK and Physics enable flags
   private ikEnabled = true
@@ -815,13 +816,8 @@ export class Model {
     }
   }
 
-  async loadVmd(vmdUrl: string): Promise<void> {
-    const vmdKeyFrames = await VMDLoader.load(vmdUrl)
-
-    this.resetAllBones()
-    this.resetAllMorphs()
-
-    // Build bone tracks: Map<boneName, Array<{boneName, frame, rotation, translation, interpolation, time}>>
+  /** Build an AnimationClip from VMD keyframes (used by loadVmd and loadAnimation). */
+  private buildClipFromVmdKeyFrames(vmdKeyFrames: VMDKeyFrame[]): AnimationClip {
     const boneTracksByBone: Record<string, Array<{ frame: number; rotation: Quat; translation: Vec3; interpolation: BoneInterpolation }>> = {}
     for (const keyFrame of vmdKeyFrames) {
       for (const bf of keyFrame.boneFrames) {
@@ -834,12 +830,11 @@ export class Model {
         })
       }
     }
-
-    this.boneTracks = new Map()
+    const boneTracks = new Map<string, BoneKeyframe[]>()
     for (const name in boneTracksByBone) {
       const keyframes = boneTracksByBone[name]
       const sorted = [...keyframes].sort((a, b) => a.frame - b.frame)
-      this.boneTracks.set(
+      boneTracks.set(
         name,
         sorted.map((kf) => ({
           boneName: name,
@@ -851,8 +846,6 @@ export class Model {
         }))
       )
     }
-
-    // Build morph tracks: Map<morphName, Array<{morphName, frame, weight, time}>>
     const morphTracksByMorph: Record<string, Array<{ frame: number; weight: number }>> = {}
     for (const keyFrame of vmdKeyFrames) {
       for (const mf of keyFrame.morphFrames) {
@@ -860,12 +853,11 @@ export class Model {
         morphTracksByMorph[mf.morphName].push({ frame: mf.frame, weight: mf.weight })
       }
     }
-
-    this.morphTracks = new Map()
+    const morphTracks = new Map<string, MorphKeyframe[]>()
     for (const name in morphTracksByMorph) {
       const keyframes = morphTracksByMorph[name]
       const sorted = [...keyframes].sort((a, b) => a.frame - b.frame)
-      this.morphTracks.set(
+      morphTracks.set(
         name,
         sorted.map((kf) => ({
           morphName: name,
@@ -875,24 +867,32 @@ export class Model {
         }))
       )
     }
-
-    this.boneTrackIndices.clear()
-    this.morphTrackIndices.clear()
-
-    // Calculate duration
     let maxTime = 0
-    for (const frames of this.boneTracks.values()) {
+    for (const frames of boneTracks.values()) {
       if (frames.length > 0) maxTime = Math.max(maxTime, frames[frames.length - 1].time)
     }
-    for (const frames of this.morphTracks.values()) {
+    for (const frames of morphTracks.values()) {
       if (frames.length > 0) maxTime = Math.max(maxTime, frames[frames.length - 1].time)
     }
-    this.animationDuration = maxTime
+    return { boneTracks, morphTracks, duration: maxTime }
+  }
 
-    this._hasAnimation = true
-    this.animationTime = 0
-    this.getPoseAtTime(0)
+  /** Load one VMD as the "default" animation and show first frame. Does not auto-play; call playAnimation() when needed. */
+  async loadVmd(vmdUrl: string): Promise<void> {
+    const vmdKeyFrames = await VMDLoader.load(vmdUrl)
+    this.resetAllBones()
+    this.resetAllMorphs()
+    const clip = this.buildClipFromVmdKeyFrames(vmdKeyFrames)
+    this.animationState.loadAnimation("default", clip)
+    this.animationState.show("default")
+    this.applyPoseFromClip(this.animationState.getCurrentClip(), 0)
+  }
 
+  /** Load a VMD as a named animation (e.g. "idle", "walk", "attack"). Does not start playback. */
+  async loadAnimation(animationName: string, vmdUrl: string): Promise<void> {
+    const vmdKeyFrames = await VMDLoader.load(vmdUrl)
+    const clip = this.buildClipFromVmdKeyFrames(vmdKeyFrames)
+    this.animationState.loadAnimation(animationName, clip)
   }
 
   public resetAllBones(): void {
@@ -928,39 +928,63 @@ export class Model {
     return this.physicsEnabled
   }
 
-  playAnimation(): void {
-    if (!this._hasAnimation) return
-
-    this.isPaused = false
-    this.isPlaying = true
-
+  /** Low-level access to animation state when needed. Prefer model.play(), model.show(), etc. */
+  getAnimationState(): AnimationState {
+    return this.animationState
   }
 
-  pauseAnimation(): void {
-    if (!this.isPlaying || this.isPaused) return
-    this.isPaused = true
-  }
-
-  stopAnimation(): void {
-    this.isPlaying = false
-    this.isPaused = false
-    this.animationTime = 0
-  }
-
-  seekAnimation(time: number): void {
-    if (!this._hasAnimation) return
-    const clampedTime = Math.max(0, Math.min(time, this.animationDuration))
-    this.animationTime = clampedTime
-  }
-
-  getAnimationProgress(): { current: number; duration: number; percentage: number } {
-    const duration = this.animationDuration
-    const percentage = duration > 0 ? (this.animationTime / duration) * 100 : 0
-    return {
-      current: this.animationTime,
-      duration,
-      percentage,
+  /** Resume current animation (no-op if none). */
+  play(): void
+  /** Play named animation; if one is already playing, it is queued. Returns false if name not loaded. */
+  play(name: string): boolean
+  play(name?: string): void | boolean {
+    if (name === undefined) {
+      this.animationState.play()
+      return
     }
+    return this.animationState.play(name)
+  }
+
+  /** Show named animation at time 0 without playing. Use after load when you want to play later. */
+  show(name: string): void {
+    this.animationState.show(name)
+  }
+
+  /** @deprecated Use model.play() */
+  playAnimation(): void {
+    this.animationState.play()
+  }
+
+  pause(): void {
+    this.animationState.pause()
+  }
+
+  /** @deprecated Use model.pause() */
+  pauseAnimation(): void {
+    this.animationState.pause()
+  }
+
+  stop(): void {
+    this.animationState.stop()
+  }
+
+  /** @deprecated Use model.stop() */
+  stopAnimation(): void {
+    this.animationState.stop()
+  }
+
+  seek(time: number): void {
+    this.animationState.seek(time)
+  }
+
+  /** @deprecated Use model.seek() */
+  seekAnimation(time: number): void {
+    this.animationState.seek(time)
+  }
+
+  getAnimationProgress(): { current: number; duration: number; percentage: number; animationName: string | null } {
+    const p = this.animationState.getProgress()
+    return { current: p.current, duration: p.duration, percentage: p.percentage, animationName: p.animationName }
   }
 
   private static upperBound<T extends { time: number }>(time: number, keyFrames: T[], startIdx: number = 0): number {
@@ -993,11 +1017,16 @@ export class Model {
     return idx
   }
 
-  private getPoseAtTime(time: number): void {
-    if (!this._hasAnimation) return
+  /** Apply pose from a clip at the given time. No-op if clip is null. */
+  private applyPoseFromClip(clip: AnimationClip | null, time: number): void {
+    if (!clip) return
+    if (clip !== this.lastAppliedClip) {
+      this.boneTrackIndices.clear()
+      this.morphTrackIndices.clear()
+      this.lastAppliedClip = clip
+    }
 
-    // Process bone tracks
-    for (const [boneName, keyFrames] of this.boneTracks.entries()) {
+    for (const [boneName, keyFrames] of clip.boneTracks.entries()) {
       if (keyFrames.length === 0) continue
 
       const cachedIdx = this.boneTrackIndices.get(boneName) ?? -1
@@ -1047,8 +1076,7 @@ export class Model {
       }
     }
 
-    // Process morph tracks
-    for (const [morphName, keyFrames] of this.morphTracks.entries()) {
+    for (const [morphName, keyFrames] of clip.morphTracks.entries()) {
       if (keyFrames.length === 0) continue
 
       const cachedIdx = this.morphTrackIndices.get(morphName) ?? -1
@@ -1084,21 +1112,11 @@ export class Model {
     // Update all active tweens (rotations, translations, morphs)
     const tweensChangedMorphs = this.updateTweens()
 
-    // Apply animation if playing or paused (always apply pose if animation data exists and we have a time set)
-    if (this._hasAnimation) {
-      if (this.isPlaying && !this.isPaused) {
-        this.animationTime += deltaTime
-
-        if (this.animationTime >= this.animationDuration) {
-          this.animationTime = this.animationDuration
-          this.pauseAnimation() // Auto-pause at end
-        }
-
-        this.getPoseAtTime(this.animationTime)
-      } else if (this.isPaused || (!this.isPlaying && this.animationTime >= 0)) {
-        // Apply pose at paused time or if we have a seeked time but not playing
-        this.getPoseAtTime(this.animationTime)
-      }
+    this.animationState.update(deltaTime)
+    const clip = this.animationState.getCurrentClip()
+    const time = this.animationState.getCurrentTime()
+    if (clip !== null) {
+      this.applyPoseFromClip(clip, time)
     }
 
     // Apply morphs if tweens changed morphs or animation changed morphs
