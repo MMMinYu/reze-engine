@@ -163,10 +163,14 @@ export class Model {
     return "model_" + Model._nextId++
   }
 
-  static async loadPmx(path: string, name?: string): Promise<Model> {
-    const model = await PmxLoader.load(path)
-    model.setName(name ?? Model.nextDefaultName())
-    await Engine.getInstance().registerModel(model, path)
+  static async loadFrom(path: string): Promise<Model>
+  static async loadFrom(name: string, path: string): Promise<Model>
+  static async loadFrom(nameOrPath: string, path?: string): Promise<Model> {
+    const name = path === undefined ? Model.nextDefaultName() : nameOrPath
+    const pmxPath = path === undefined ? nameOrPath : path
+    const model = await PmxLoader.load(pmxPath)
+    model.setName(name)
+    await Engine.getInstance().registerModel(model, pmxPath)
     return model
   }
 
@@ -721,7 +725,7 @@ export class Model {
       try {
         Engine.getInstance().markVertexBufferDirty(this)
       } catch {
-        /* not registered yet */
+        // not registered yet
       }
       return
     }
@@ -816,7 +820,6 @@ export class Model {
     }
   }
 
-  /** Build an AnimationClip from VMD keyframes (used by loadVmd and loadAnimation). */
   private buildClipFromVmdKeyFrames(vmdKeyFrames: VMDKeyFrame[]): AnimationClip {
     const boneTracksByBone: Record<string, Array<{ frame: number; rotation: Quat; translation: Vec3; interpolation: BoneInterpolation }>> = {}
     for (const keyFrame of vmdKeyFrames) {
@@ -877,18 +880,6 @@ export class Model {
     return { boneTracks, morphTracks, duration: maxTime }
   }
 
-  /** Load one VMD as the "default" animation and show first frame. Does not auto-play; call playAnimation() when needed. */
-  async loadVmd(vmdUrl: string): Promise<void> {
-    const vmdKeyFrames = await VMDLoader.load(vmdUrl)
-    this.resetAllBones()
-    this.resetAllMorphs()
-    const clip = this.buildClipFromVmdKeyFrames(vmdKeyFrames)
-    this.animationState.loadAnimation("default", clip)
-    this.animationState.show("default")
-    this.applyPoseFromClip(this.animationState.getCurrentClip(), 0)
-  }
-
-  /** Load a VMD as a named animation (e.g. "idle", "walk", "attack"). Does not start playback. */
   async loadAnimation(animationName: string, vmdUrl: string): Promise<void> {
     const vmdKeyFrames = await VMDLoader.load(vmdUrl)
     const clip = this.buildClipFromVmdKeyFrames(vmdKeyFrames)
@@ -900,7 +891,6 @@ export class Model {
       const localRot = this.runtimeSkeleton.localRotations[boneIdx]
       const localTrans = this.runtimeSkeleton.localTranslations[boneIdx]
 
-      // Reset to default pose: identity rotation and zero translation (like initial PMX state)
       localRot.set(Quat.identity())
       localTrans.set(Vec3.zeros())
     }
@@ -928,14 +918,11 @@ export class Model {
     return this.physicsEnabled
   }
 
-  /** Low-level access to animation state when needed. Prefer model.play(), model.show(), etc. */
   getAnimationState(): AnimationState {
     return this.animationState
   }
 
-  /** Resume current animation (no-op if none). */
   play(): void
-  /** Play named animation; if one is already playing, it is queued. Returns false if name not loaded. */
   play(name: string): boolean
   play(name?: string): void | boolean {
     if (name === undefined) {
@@ -945,12 +932,11 @@ export class Model {
     return this.animationState.play(name)
   }
 
-  /** Show named animation at time 0 without playing. Use after load when you want to play later. */
   show(name: string): void {
     this.animationState.show(name)
   }
 
-  /** @deprecated Use model.play() */
+  // @deprecated Use model.play()
   playAnimation(): void {
     this.animationState.play()
   }
@@ -959,7 +945,7 @@ export class Model {
     this.animationState.pause()
   }
 
-  /** @deprecated Use model.pause() */
+  // @deprecated Use model.pause()
   pauseAnimation(): void {
     this.animationState.pause()
   }
@@ -968,7 +954,7 @@ export class Model {
     this.animationState.stop()
   }
 
-  /** @deprecated Use model.stop() */
+  // @deprecated Use model.stop()
   stopAnimation(): void {
     this.animationState.stop()
   }
@@ -977,7 +963,7 @@ export class Model {
     this.animationState.seek(time)
   }
 
-  /** @deprecated Use model.seek() */
+  // @deprecated Use model.seek()
   seekAnimation(time: number): void {
     this.animationState.seek(time)
   }
@@ -1001,23 +987,17 @@ export class Model {
   private findKeyframeIndex<T extends { time: number }>(time: number, keyFrames: T[], cachedIdx: number): number {
     if (keyFrames.length === 0) return -1
 
-    // Check if cached index is still valid (time is within the cached frame range)
     if (cachedIdx >= 0 && cachedIdx < keyFrames.length) {
       const frameTime = keyFrames[cachedIdx].time
       const nextFrameTime = cachedIdx + 1 < keyFrames.length ? keyFrames[cachedIdx + 1].time : Infinity
-
-      // If time is within [frameTime, nextFrameTime), use cached index
       if (time >= frameTime && time < nextFrameTime) {
         return cachedIdx
       }
     }
-
-    // Fall back to binary search
     const idx = Model.upperBound(time, keyFrames, 0) - 1
     return idx
   }
 
-  /** Apply pose from a clip at the given time. No-op if clip is null. */
   private applyPoseFromClip(clip: AnimationClip | null, time: number): void {
     if (!clip) return
     if (clip !== this.lastAppliedClip) {

@@ -16,8 +16,9 @@ import { Engine, Model } from "reze-engine"
 
 const engine = new Engine(canvas, {})
 await engine.init()
-const model = await Model.loadPmx("/models/reze/reze.pmx")
-await model.loadVmd("/animations/dance.vmd")
+const model = await Model.loadFrom("/models/reze/reze.pmx")
+await model.loadAnimation("default", "/animations/dance.vmd")
+model.show("default")
 model.playAnimation()
 engine.runRenderLoop(() => {})
 ```
@@ -25,7 +26,7 @@ engine.runRenderLoop(() => {})
 ## API (summary)
 
 - **Multi-model:** `engine.addModel(model, pmxPath, name?)`, `getModel(name)`, `getModelNames()`, `removeModel(name)`, `setMaterialVisible(modelName, materialName, visible)`, `setModelIKEnabled(modelName, enabled)`, `setModelPhysicsEnabled(modelName, enabled)`, `resetPhysics()`, `markVertexBufferDirty(modelName?)`
-- **Animation:** `model.loadVmd(url)` (loads "default", no auto-play); `model.loadAnimation(name, vmdUrl)`; `model.show(name)`; `model.play()` / `model.play(name)`; `model.pause()`; `model.stop()`; `model.seek(t)`; `model.getAnimationProgress()`. Animations are non-interruptible (next is queued).
+- **Animation:** `model.loadAnimation(name, vmdUrl)`; `model.show(name)`; `model.play()` / `model.play(name)`; `model.pause()`; `model.stop()`; `model.seek(t)`; `model.getAnimationProgress()`. Animations are non-interruptible (next is queued).
 - **Bones / morphs:** `model.rotateBones()`, `model.moveBones()`, `model.setMorphWeight()`, `model.resetAllBones()`, `model.resetAllMorphs()`
 - **Engine:** `runRenderLoop()`, `addGround({ mode: "reflection" | "shadow", ... })`, `onRaycast: (modelName, material, screenX, screenY) => {}`
 

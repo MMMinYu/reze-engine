@@ -78,7 +78,7 @@ export class Engine {
 
   public static getInstance(): Engine {
     if (!Engine.instance) {
-      throw new Error("Engine not ready: create Engine, await init(), then load models via Model.loadPmx().")
+      throw new Error("Engine not ready: create Engine, await init(), then load models via Model.loadFrom().")
     }
     return Engine.instance
   }
@@ -159,7 +159,6 @@ export class Engine {
   private modelInstances = new Map<string, ModelInstance>()
   private materialSampler!: GPUSampler
   private textureCache = new Map<string, GPUTexture>()
-  /** Reusable buffer for raycast skinning to avoid per-instance allocations (Three.js/Babylon.js style). */
   private raycastVertexBuffer: Float32Array | null = null
 
   private lastFpsUpdate = performance.now()

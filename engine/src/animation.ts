@@ -12,7 +12,6 @@ export interface BoneInterpolation {
   translationZ: ControlPoint[]
 }
 
-// Keyframe types for animation clips (used by Model and AnimationState)
 export interface BoneKeyframe {
   boneName: string
   frame: number
@@ -29,35 +28,27 @@ export interface MorphKeyframe {
   time: number
 }
 
-/** Immutable clip data for one animation (e.g. one VMD). */
 export interface AnimationClip {
   boneTracks: Map<string, BoneKeyframe[]>
   morphTracks: Map<string, MorphKeyframe[]>
   duration: number
-  /** When true, clip loops at end. When false, playback stops and onEnd fires. Default false. */
   loop?: boolean
 }
 
-/**
- * Per-model animation state: multiple animations, non-interruptible playback.
- * While one is playing, play(name) queues it to start when the current one finishes.
- */
+// Non-interruptible playback; play(name) while playing queues one next.
 export class AnimationState {
   private animations = new Map<string, AnimationClip>()
   private currentAnimationName: string | null = null
   private currentTime = 0
   private isPlaying = false
   private isPaused = false
-  /** When current (non-loop) ends, play this next. Cleared when started. */
   private nextAnimationName: string | null = null
   private onEnd: ((animationName: string) => void) | null = null
 
-  /** Add or replace an animation by name. Does not start playback. */
   loadAnimation(name: string, clip: AnimationClip): void {
     this.animations.set(name, clip)
   }
 
-  /** Remove an animation. If it was current, state is cleared. */
   removeAnimation(name: string): void {
     this.animations.delete(name)
     if (this.currentAnimationName === name) {
@@ -70,12 +61,7 @@ export class AnimationState {
     }
   }
 
-  /**
-   * Start playing an animation by name. Non-interruptible: if one is already playing,
-   * this animation is queued to start when the current one finishes.
-   */
   play(name: string): boolean
-  /** Resume current animation (no-op if none). */
   play(): void
   play(name?: string): boolean | void {
     if (name === undefined) {
@@ -98,7 +84,6 @@ export class AnimationState {
     return true
   }
 
-  /** Advance time. When a non-loop clip ends, starts nextAnimationName if set. */
   update(deltaTime: number): { ended: boolean; animationName: string | null } {
     if (!this.isPlaying || this.isPaused || this.currentAnimationName === null) {
       return { ended: false, animationName: this.currentAnimationName }
@@ -166,7 +151,6 @@ export class AnimationState {
     return clip ? clip.duration : 0
   }
 
-  /** Progress of the current animation (time, duration, percentage). */
   getProgress(): { animationName: string | null; current: number; duration: number; percentage: number } {
     const clip = this.getCurrentClip()
     const duration = clip ? clip.duration : 0
@@ -187,7 +171,6 @@ export class AnimationState {
     return this.animations.has(name)
   }
 
-  /** Show animation at time 0 without playing. Use after load when you want to play later (e.g. dance visualization). */
   show(name: string): void {
     if (!this.animations.has(name)) return
     this.currentAnimationName = name
@@ -210,7 +193,6 @@ export class AnimationState {
   }
 }
 
-// Cubic bezier in normalized 0–1 space (binary search on x)
 export function bezierInterpolate(x1: number, x2: number, y1: number, y2: number, t: number): number {
   t = Math.max(0, Math.min(1, t))
 
@@ -241,7 +223,6 @@ export function bezierInterpolate(x1: number, x2: number, y1: number, y2: number
 
 const INV_127 = 1 / 127
 
-// VMD 64-byte interpolation blob → BoneInterpolation
 export function rawInterpolationToBoneInterpolation(raw: Uint8Array): BoneInterpolation {
   return {
     rotation: [
@@ -263,7 +244,6 @@ export function rawInterpolationToBoneInterpolation(raw: Uint8Array): BoneInterp
   }
 }
 
-// Control points are 0–127 VMD bytes
 export function interpolateControlPoints(cp: ControlPoint[], t: number): number {
   return bezierInterpolate(
     cp[0].x * INV_127,

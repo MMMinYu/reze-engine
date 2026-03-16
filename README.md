@@ -34,9 +34,12 @@ export default function Scene() {
         engineRef.current = engine
         await engine.init()
         // Loads PMX and registers with the engine (returns model; engine assigns a name)
-        const model = await Model.loadPmx("/models/reze/reze.pmx")
-        await model.loadVmd("/animations/dance.vmd")  // loads "default", does not auto-play
-        model.play()  // start when ready
+        const model = await Model.loadFrom("/models/reze/reze.pmx")
+        await model.loadAnimation("default", "/animations/dance.vmd")
+        model.resetAllBones()
+        model.resetAllMorphs()
+        model.show("default")
+        model.play()
 
         engine.runRenderLoop(() => {})
       } catch (error) {
@@ -72,7 +75,7 @@ export default function Scene() {
 
 ## API
 
-One WebGPU **Engine** per page (singleton after `init()`). Load PMX with **`Model.loadPmx(path, name?)`**; the model is registered on the engine. Use **`engine.addModel(model, pmxPath, name?)`** for additional models (returns the instance name used).
+One WebGPU **Engine** per page (singleton after `init()`). Load a model with **`Model.loadFrom(path)`** or **`Model.loadFrom(name, path)`**; it is registered on the engine. Use **`engine.addModel(model, pmxPath, name?)`** for additional models (returns the instance name used).
 
 ### Multi-model
 
@@ -94,11 +97,14 @@ engine.markVertexBufferDirty("hero")  // or pass Model
 Animations are **non-interruptible**: the next one starts only when the current one finishes (or is queued).
 
 ```javascript
-const model = engine.getModel("hero")  // or the model from loadPmx
+const model = engine.getModel("hero")  // or the model from loadFrom
 
 // Single animation (e.g. dance): load, then play when needed
-await model.loadVmd("/animations/dance.vmd")   // loads as "default", shows first frame, does not play
-model.play()                                    // start playback
+await model.loadAnimation("default", "/animations/dance.vmd")
+model.resetAllBones()
+model.resetAllMorphs()
+model.show("default")
+model.play()
 const { current, duration, percentage } = model.getAnimationProgress()
 
 // Multiple named animations

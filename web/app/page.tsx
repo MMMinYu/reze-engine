@@ -197,7 +197,6 @@ export default function Home() {
           ambientColor: new Vec3(0.88, 0.92, 0.99),
           cameraDistance: 31.5,
           cameraTarget: new Vec3(0, 11.5, 0),
-          // disableIK: true,
           onRaycast: (modelName: string, material: string | null, screenX: number, screenY: number) => {
             if (material) {
               setMousePosition({ x: screenX, y: screenY })
@@ -208,7 +207,9 @@ export default function Home() {
         })
         engineRef.current = engine
         await engine.init()
-        const m1 = await Model.loadPmx("/models/reze/reze.pmx")
+        const m1 = await Model.loadFrom("reze", "/models/reze/reze.pmx")
+        // engine.setModelIKEnabled("reze", false)
+
 
         modelRef.current = m1
 
@@ -232,7 +233,12 @@ export default function Home() {
         // engine.setMaterialVisible("材質1", false)
         // engine.setMaterialVisible("GT Bow Button Blouse", false)
 
-        await m1.loadVmd("/animations/IRIS OUT.vmd")
+        await m1.loadAnimation("IRIS OUT", "/animations/IRIS OUT.vmd")
+        m1.show("IRIS OUT")
+        // await m1.loadAnimation("run", "/animations/run.vmd")
+
+        m1.resetAllBones()
+        m1.resetAllMorphs()
         m1.setMorphWeight("抗穿模", 0.5)
 
         const prog: AnimationProgress = m1.getAnimationProgress()
