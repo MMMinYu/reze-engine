@@ -1,7 +1,7 @@
 import { Mat4, Quat, Vec3 } from "./math"
 import { Engine } from "./engine"
 import { PmxLoader } from "./pmx-loader"
-import { Rigidbody, Joint, Physics } from "./physics"
+import { Rigidbody, Joint } from "./physics"
 import { IKSolverSystem } from "./ik-solver"
 import { VMDLoader } from "./vmd-loader"
 import { BoneInterpolation, interpolateControlPoints, rawInterpolationToBoneInterpolation } from "./animation"
@@ -150,11 +150,26 @@ interface TweenState {
 }
 
 export class Model {
-  // loadPmx: fetch PMX + register with Engine.getInstance() (init engine first)
-  static async loadPmx(path: string): Promise<Model> {
+  private static _nextId = 0
+  private static nextDefaultName(): string {
+    return "model_" + Model._nextId++
+  }
+
+  static async loadPmx(path: string, name?: string): Promise<Model> {
     const model = await PmxLoader.load(path)
+    model.setName(name ?? Model.nextDefaultName())
     await Engine.getInstance().registerModel(model, path)
     return model
+  }
+
+  private _name: string = ""
+
+  get name(): string {
+    return this._name
+  }
+
+  setName(value: string): void {
+    this._name = value
   }
 
   private vertexData: Float32Array<ArrayBuffer>
@@ -204,9 +219,6 @@ export class Model {
   private boneTrackIndices: Map<string, number> = new Map()
   private morphTrackIndices: Map<string, number> = new Map()
 
-  // Physics runtime
-  private physics: Physics | null = null
-
   // IK and Physics enable flags
   private ikEnabled = true
   private physicsEnabled = true
@@ -243,11 +255,6 @@ export class Model {
     this.initializeRuntimeMorph()
     this.initializeTweenBuffers()
     this.applyMorphs()
-
-    // Initialize physics if rigidbodies exist
-    if (rigidbodies.length > 0) {
-      this.physics = new Physics(rigidbodies, joints)
-    }
   }
 
   private initializeRuntimeSkeleton(): void {
@@ -656,6 +663,10 @@ export class Model {
     return localTranslation
   }
 
+  getWorldMatrices(): Mat4[] {
+    return this.runtimeSkeleton.worldMatrices
+  }
+
   getBoneWorldMatrices(): Float32Array {
     // Convert Mat4[] to Float32Array for WebGPU compatibility
     const boneCount = this.skeleton.bones.length
@@ -707,7 +718,7 @@ export class Model {
       this.tweenState.morphActive[idx] = 0
       this.applyMorphs()
       try {
-        Engine.getInstance().markVertexBufferDirty()
+        Engine.getInstance().markVertexBufferDirty(this)
       } catch {
         /* not registered yet */
       }
@@ -882,10 +893,6 @@ export class Model {
     this.animationTime = 0
     this.getPoseAtTime(0)
 
-    if (this.physics) {
-      this.computeWorldMatrices()
-      this.physics.reset(this.runtimeSkeleton.worldMatrices, this.skeleton.inverseBindMatrices)
-    }
   }
 
   public resetAllBones(): void {
@@ -898,9 +905,6 @@ export class Model {
       localTrans.set(Vec3.zeros())
     }
     this.computeWorldMatrices()
-    if (this.physics) {
-      this.physics.reset(this.runtimeSkeleton.worldMatrices, this.skeleton.inverseBindMatrices)
-    }
   }
 
   public resetAllMorphs(): void {
@@ -920,16 +924,16 @@ export class Model {
     this.physicsEnabled = enabled
   }
 
+  public getPhysicsEnabled(): boolean {
+    return this.physicsEnabled
+  }
+
   playAnimation(): void {
     if (!this._hasAnimation) return
 
     this.isPaused = false
     this.isPlaying = true
 
-    if (this.physics && this.animationTime === 0) {
-      this.computeWorldMatrices()
-      this.physics.reset(this.runtimeSkeleton.worldMatrices, this.skeleton.inverseBindMatrices)
-    }
   }
 
   pauseAnimation(): void {
@@ -1114,10 +1118,6 @@ export class Model {
       this.computeWorldMatrices()
     }
 
-    if (this.physicsEnabled && this.physics) {
-      this.physics.step(deltaTime, this.runtimeSkeleton.worldMatrices, this.skeleton.inverseBindMatrices)
-    }
-
     return verticesChanged
   }
 
@@ -1260,7 +1260,7 @@ export class Model {
     }
   }
 
-  private computeWorldMatrices(): void {
+  public computeWorldMatrices(): void {
     const bones = this.skeleton.bones
     const localRot = this.runtimeSkeleton.localRotations
     const localTrans = this.runtimeSkeleton.localTranslations
