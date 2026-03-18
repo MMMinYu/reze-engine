@@ -207,9 +207,8 @@ export default function Home() {
         })
         engineRef.current = engine
         await engine.init()
-        const m1 = await Model.loadFrom("reze", "/models/reze/reze.pmx")
-        // engine.setModelIKEnabled("reze", false)
-
+        const m1 = await engine.loadModel("reze", "/models/reze/reze.pmx")
+        // engine.setIKEnabled(false)  // disable IK for all models
 
         modelRef.current = m1
 
@@ -219,14 +218,11 @@ export default function Home() {
           fadeStart: 10.0,
           fadeEnd: 80.0,
           diffuseColor: new Vec3(0.8, 0.1, 1.0),
-          mode: "shadow",
         })
 
         setLoading(false)
 
-        engine.runRenderLoop(() => {
-          setStats(engine.getStats())
-        })
+        engine.runRenderLoop(() => setStats(engine.getStats()))
         // console.log("materials", engine.getMaterials())
         // console.log("bones", engine.getBones())
         // console.log("morphs", engine.getMorphs())
@@ -234,8 +230,13 @@ export default function Home() {
         // engine.setMaterialVisible("GT Bow Button Blouse", false)
 
         await m1.loadAnimation("IRIS OUT", "/animations/IRIS OUT.vmd")
+        await m1.loadAnimation("run", "/animations/run.vmd")
         m1.show("IRIS OUT")
-        // await m1.loadAnimation("run", "/animations/run.vmd")
+
+        // Camera follows model bone; offset so target is at character height
+        engine.setCameraTarget(m1, "センター", new Vec3(0, 3.5, 0))
+        // engine.setCameraTarget(m1, "_", new Vec3(0, 11.5, 0))
+
 
         m1.resetAllBones()
         m1.resetAllMorphs()
@@ -274,30 +275,18 @@ export default function Home() {
     }
   }, [initEngine])
 
-  // Space key shortcut for play/pause
+  // Space key: play/pause
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Only handle space if not typing in an input/textarea
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
-        return
-      }
-
-      if (e.code === "Space" || e.key === " ") {
-        e.preventDefault()
-        if (isPlaying && !isPaused) {
-          handlePause()
-        } else if (isPaused) {
-          handleResume()
-        } else {
-          handlePlay()
-        }
-      }
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      if (e.code !== "Space" && e.key !== " ") return
+      e.preventDefault()
+      if (isPlaying && !isPaused) handlePause()
+      else if (isPaused) handleResume()
+      else handlePlay()
     }
-
     window.addEventListener("keydown", handleKeyDown)
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown)
-    }
+    return () => window.removeEventListener("keydown", handleKeyDown)
   }, [isPlaying, isPaused, handlePlay, handlePause, handleResume])
 
   return (

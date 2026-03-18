@@ -33,8 +33,7 @@ export default function Scene() {
         const engine = new Engine(canvasRef.current, {})
         engineRef.current = engine
         await engine.init()
-        // Loads PMX and registers with the engine (returns model; engine assigns a name)
-        const model = await Model.loadFrom("/models/reze/reze.pmx")
+        const model = await engine.loadModel("/models/reze/reze.pmx")
         await model.loadAnimation("default", "/animations/dance.vmd")
         model.resetAllBones()
         model.resetAllMorphs()
@@ -75,19 +74,20 @@ export default function Scene() {
 
 ## API
 
-One WebGPU **Engine** per page (singleton after `init()`). Load a model with **`Model.loadFrom(path)`** or **`Model.loadFrom(name, path)`**; it is registered on the engine. Use **`engine.addModel(model, pmxPath, name?)`** for additional models (returns the instance name used).
+One WebGPU **Engine** per page (singleton after `init()`). Load models via **`engine.loadModel(path)`** (default name) or **`engine.loadModel(name, path)`**; returns the **Model**. Use **`engine.addModel(model, pmxPath, name?)`** when you already have a Model instance.
 
 ### Multi-model
 
 ```javascript
-const name = await engine.addModel(model, "/path/to/model.pmx", "hero")
-engine.getModelNames()        // ["model_0", "hero", ...]
-engine.getModel("hero")       // Model | null
+const model = await engine.loadModel("hero", "/path/to/model.pmx")
+engine.getModelNames()
+engine.getModel("hero")
 engine.removeModel("hero")
+// Or add an existing Model: await engine.addModel(model, pmxPath, "hero")
 
 engine.setMaterialVisible("hero", "材質1", false)
-engine.setModelIKEnabled("hero", true)
-engine.setModelPhysicsEnabled("hero", true)
+engine.setIKEnabled(true)     // IK enabled for all models
+engine.setPhysicsEnabled(true) // physics enabled for all models
 engine.resetPhysics()         // resets physics for all instances
 engine.markVertexBufferDirty("hero")  // or pass Model
 ```
@@ -97,7 +97,7 @@ engine.markVertexBufferDirty("hero")  // or pass Model
 Animations are **non-interruptible**: the next one starts only when the current one finishes (or is queued).
 
 ```javascript
-const model = engine.getModel("hero")  // or the model from loadFrom
+const model = engine.getModel("hero")
 
 // Single animation (e.g. dance): load, then play when needed
 await model.loadAnimation("default", "/animations/dance.vmd")

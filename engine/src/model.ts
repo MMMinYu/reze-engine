@@ -1,6 +1,5 @@
 import { Mat4, Quat, Vec3 } from "./math"
 import { Engine } from "./engine"
-import { PmxLoader } from "./pmx-loader"
 import { Rigidbody, Joint } from "./physics"
 import { IKSolverSystem } from "./ik-solver"
 import { VMDLoader, type VMDKeyFrame } from "./vmd-loader"
@@ -158,22 +157,6 @@ interface TweenState {
 }
 
 export class Model {
-  private static _nextId = 0
-  private static nextDefaultName(): string {
-    return "model_" + Model._nextId++
-  }
-
-  static async loadFrom(path: string): Promise<Model>
-  static async loadFrom(name: string, path: string): Promise<Model>
-  static async loadFrom(nameOrPath: string, path?: string): Promise<Model> {
-    const name = path === undefined ? Model.nextDefaultName() : nameOrPath
-    const pmxPath = path === undefined ? nameOrPath : path
-    const model = await PmxLoader.load(pmxPath)
-    model.setName(name)
-    await Engine.getInstance().registerModel(model, pmxPath)
-    return model
-  }
-
   private _name: string = ""
 
   get name(): string {
@@ -224,9 +207,6 @@ export class Model {
   private morphTrackIndices: Map<string, number> = new Map()
   private lastAppliedClip: AnimationClip | null = null
 
-  // IK and Physics enable flags
-  private ikEnabled = true
-  private physicsEnabled = true
 
   constructor(
     vertexData: Float32Array<ArrayBuffer>,
@@ -906,18 +886,6 @@ export class Model {
     this.applyMorphs()
   }
 
-  public setIKEnabled(enabled: boolean): void {
-    this.ikEnabled = enabled
-  }
-
-  public setPhysicsEnabled(enabled: boolean): void {
-    this.physicsEnabled = enabled
-  }
-
-  public getPhysicsEnabled(): boolean {
-    return this.physicsEnabled
-  }
-
   getAnimationState(): AnimationState {
     return this.animationState
   }
@@ -1084,8 +1052,8 @@ export class Model {
     }
   }
 
-  // Returns true when morphs changed (vertex buffer may need upload)
-  update(deltaTime: number): boolean {
+  // Returns true when morphs changed (vertex buffer may need upload). ikEnabled is driven by engine (same for all models).
+  update(deltaTime: number, ikEnabled: boolean): boolean {
     // Update tween time (in milliseconds)
     this.tweenTimeMs += deltaTime * 1000
 
@@ -1110,7 +1078,7 @@ export class Model {
     this.computeWorldMatrices()
 
     // Solve IK chains (modifies localRotations with final IK rotations)
-    if (this.ikEnabled) {
+    if (ikEnabled) {
       this.solveIKChains()
       // Recompute world matrices with final IK rotations applied to localRotations
       this.computeWorldMatrices()

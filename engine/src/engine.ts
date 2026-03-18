@@ -1,6 +1,7 @@
 import { Camera } from "./camera"
 import { Mat4, Quat, Vec3 } from "./math"
 import { Model } from "./model"
+import { PmxLoader } from "./pmx-loader"
 import { Physics } from "./physics"
 
 export type RaycastCallback = (modelName: string, material: string | null, screenX: number, screenY: number) => void
@@ -14,7 +15,6 @@ export type EngineOptions = {
   cameraTarget?: Vec3
   cameraFov?: number
   onRaycast?: RaycastCallback
-  multisampleCount?: 1 | 4
 }
 
 export type RequiredEngineOptions = Required<Omit<EngineOptions, "onRaycast">> & Pick<EngineOptions, "onRaycast">
@@ -28,7 +28,6 @@ export const DEFAULT_ENGINE_OPTIONS: RequiredEngineOptions = {
   cameraTarget: new Vec3(0, 12.5, 0),
   cameraFov: Math.PI / 4,
   onRaycast: undefined,
-  multisampleCount: 4,
 }
 
 export interface EngineStats {
@@ -78,7 +77,7 @@ export class Engine {
 
   public static getInstance(): Engine {
     if (!Engine.instance) {
-      throw new Error("Engine not ready: create Engine, await init(), then load models via Model.loadFrom().")
+      throw new Error("Engine not ready: create Engine, await init(), then load models via engine.loadModel().")
     }
     return Engine.instance
   }
@@ -104,19 +103,18 @@ export class Engine {
   private hairPipelineOverEyes!: GPURenderPipeline
   private hairPipelineOverNonEyes!: GPURenderPipeline
   private hairDepthPipeline!: GPURenderPipeline
-  // Ground/reflection pipeline
-  private groundPipeline!: GPURenderPipeline
-  private groundBindGroupLayout!: GPUBindGroupLayout
-  private reflectionPipeline!: GPURenderPipeline
+  // Ground (shadow only)
+  private groundShadowPipeline!: GPURenderPipeline
+  private groundShadowBindGroupLayout!: GPUBindGroupLayout
   // Outline pipelines
   private outlinePipeline!: GPURenderPipeline
   private hairOutlinePipeline!: GPURenderPipeline
   private mainBindGroupLayout!: GPUBindGroupLayout
   private outlineBindGroupLayout!: GPUBindGroupLayout
   private multisampleTexture!: GPUTexture
-  private sampleCount: 1 | 4 = 4
+  private static readonly MULTISAMPLE_COUNT = 4
   private renderPassDescriptor!: GPURenderPassDescriptor
-  // Constants
+  // Post-alpha eye: eyes write stencil, hair-over-eyes reads it for see-through bangs (MMD-style).
   private readonly STENCIL_EYE_VALUE = 1
 
   // Ambient light settings
@@ -126,23 +124,15 @@ export class Engine {
   // Rim light settings
   private rimLightIntensity!: number
 
-  // Ground/reflection properties
+  // Ground properties (shadow only)
   private groundVertexBuffer?: GPUBuffer
   private groundIndexBuffer?: GPUBuffer
-  private groundReflectionTexture?: GPUTexture
-  private groundReflectionResolveTexture?: GPUTexture // Resolve target for multisampled texture
-  private groundReflectionDepthTexture?: GPUTexture
-  private groundReflectionBindGroup?: GPUBindGroup
-  private groundMaterialUniformBuffer?: GPUBuffer
-  private groundHasReflections = false
-  private groundMode: "reflection" | "shadow" = "reflection"
+  private hasGround = false
   private shadowMapTexture?: GPUTexture
   private shadowMapDepthView?: GPUTextureView
   private shadowDepthPipeline!: GPURenderPipeline
   private shadowLightVPBuffer!: GPUBuffer
   private shadowLightVPMatrix = new Float32Array(16)
-  private groundShadowPipeline!: GPURenderPipeline
-  private groundShadowBindGroupLayout!: GPUBindGroupLayout
   private groundShadowBindGroup?: GPUBindGroup
   private shadowComparisonSampler!: GPUSampler
   private groundShadowMaterialBuffer?: GPUBuffer
@@ -159,7 +149,16 @@ export class Engine {
   private modelInstances = new Map<string, ModelInstance>()
   private materialSampler!: GPUSampler
   private textureCache = new Map<string, GPUTexture>()
-  private raycastVertexBuffer: Float32Array | null = null
+  private _nextDefaultModelId = 0
+
+  // IK and physics enabled at engine level (same for all models)
+  private ikEnabled = true
+  private physicsEnabled = true
+
+  // Camera target binding (Babylon/Three style: camera follows model)
+  private cameraTargetModel: Model | null = null
+  private cameraTargetBoneName = "全ての親"
+  private cameraTargetOffset: Vec3 = new Vec3(0, 0, 0)
 
   private lastFpsUpdate = performance.now()
   private framesSinceLastUpdate = 0
@@ -175,7 +174,6 @@ export class Engine {
 
   constructor(canvas: HTMLCanvasElement, options?: EngineOptions) {
     this.canvas = canvas
-    this.sampleCount = options?.multisampleCount ?? DEFAULT_ENGINE_OPTIONS.multisampleCount
     if (options) {
       this.ambientColor = options.ambientColor ?? DEFAULT_ENGINE_OPTIONS.ambientColor!
       this.directionalLightIntensity =
@@ -246,7 +244,7 @@ export class Engine {
         : undefined,
       primitive: { cullMode: config.cullMode ?? "none" },
       depthStencil: config.depthStencil,
-      multisample: config.multisample ?? { count: this.sampleCount },
+      multisample: config.multisample ?? { count: Engine.MULTISAMPLE_COUNT },
     })
   }
 
@@ -496,71 +494,6 @@ export class Engine {
       },
     })
 
-    this.groundBindGroupLayout = this.device.createBindGroupLayout({
-      label: "ground bind group layout",
-      entries: [
-        { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
-        { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
-        { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: {} },
-        { binding: 3, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
-        { binding: 4, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
-      ],
-    })
-    const groundPipelineLayout = this.device.createPipelineLayout({
-      label: "ground pipeline layout",
-      bindGroupLayouts: [this.groundBindGroupLayout],
-    })
-    const groundShaderModule = this.device.createShaderModule({
-      label: "ground shaders",
-      code: /* wgsl */ `
-        struct CameraUniforms { view: mat4x4f, projection: mat4x4f, viewPos: vec3f, _p: f32, };
-        struct Light { direction: vec4f, color: vec4f, };
-        struct LightUniforms { ambientColor: vec4f, lights: array<Light, 4>, };
-        struct GroundMaterialUniforms { diffuseColor: vec3f, reflectionLevel: f32, fadeStart: f32, fadeEnd: f32, _a: f32, _b: f32, };
-        @group(0) @binding(0) var<uniform> camera: CameraUniforms;
-        @group(0) @binding(1) var<uniform> light: LightUniforms;
-        @group(0) @binding(2) var reflectionTexture: texture_2d<f32>;
-        @group(0) @binding(3) var reflectionSampler: sampler;
-        @group(0) @binding(4) var<uniform> material: GroundMaterialUniforms;
-        struct VertexOutput {
-          @builtin(position) position: vec4f, @location(0) normal: vec3f, @location(1) uv: vec2f, @location(2) worldPos: vec3f,
-        };
-        @vertex fn vs(@location(0) position: vec3f, @location(1) normal: vec3f, @location(2) uv: vec2f) -> VertexOutput {
-          var o: VertexOutput;
-          o.worldPos = position;
-          o.position = camera.projection * camera.view * vec4f(position, 1.0);
-          o.normal = normal; o.uv = uv; return o;
-        }
-        @fragment fn fs(input: VertexOutput) -> @location(0) vec4f {
-          let n = normalize(input.normal);
-          let centerDist = length(input.worldPos.xz);
-          let t = clamp((centerDist - material.fadeStart) / max(material.fadeEnd - material.fadeStart, 0.001), 0.0, 1.0);
-          let edgeFade = 1.0 - smoothstep(0.0, 1.0, t);
-          let clipPos = camera.projection * camera.view * vec4f(input.worldPos, 1.0);
-          let ndcPos = clipPos.xyz / clipPos.w;
-          let reflectionUV = vec2f(ndcPos.x * 0.5 + 0.5, 0.5 - ndcPos.y * 0.5);
-          let sampledReflectionColor = textureSample(reflectionTexture, reflectionSampler, reflectionUV).rgb;
-          let isValidReflection = clipPos.w > 0.0 && all(reflectionUV >= vec2f(0.0)) && all(reflectionUV <= vec2f(1.0));
-          let reflectionColor = select(vec3f(1.0, 1.0, 1.0), sampledReflectionColor, isValidReflection);
-          let fadeFactor = clamp((length(input.worldPos - camera.viewPos) - 15.0) / 20.0, 0.0, 1.0);
-          let refl = reflectionColor * (1.0 - fadeFactor * 0.3);
-          var finalColor = mix(material.diffuseColor, refl, material.reflectionLevel) * edgeFade;
-          let l = -light.lights[0].direction.xyz;
-          let lightAccum = light.ambientColor.xyz + light.lights[0].color.xyz * light.lights[0].color.w * max(dot(n, l), 0.0);
-          return vec4f(finalColor * lightAccum, edgeFade);
-        }
-      `,
-    })
-    this.groundPipeline = this.createRenderPipeline({
-      label: "ground pipeline",
-      layout: groundPipelineLayout,
-      shaderModule: groundShaderModule,
-      vertexBuffers: fullVertexBuffers,
-      fragmentTarget: standardBlend,
-      cullMode: "back",
-      depthStencil: { format: "depth24plus-stencil8", depthWriteEnabled: true, depthCompare: "less-equal" },
-    })
-
     this.shadowLightVPBuffer = this.device.createBuffer({
       size: 64,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -675,25 +608,6 @@ export class Engine {
       fragmentTarget: standardBlend,
       cullMode: "back",
       depthStencil: { format: "depth24plus-stencil8", depthWriteEnabled: true, depthCompare: "less-equal" },
-    })
-
-    // Create reflection pipeline (multisampled version for higher quality)
-    this.reflectionPipeline = this.createRenderPipeline({
-      label: "reflection pipeline",
-      layout: mainPipelineLayout,
-      shaderModule,
-      vertexBuffers: fullVertexBuffers,
-      fragmentTarget: {
-        format: this.presentationFormat,
-        blend: standardBlend.blend,
-      },
-      multisample: { count: this.sampleCount }, // Use same multisampling as main render
-      cullMode: "none",
-      depthStencil: {
-        format: "depth24plus-stencil8",
-        depthWriteEnabled: true,
-        depthCompare: "less-equal",
-      },
     })
 
     // Create bind group layout for outline pipelines
@@ -974,7 +888,7 @@ export class Engine {
       this.multisampleTexture = this.device.createTexture({
         label: "multisample render target",
         size: [width, height],
-        sampleCount: this.sampleCount,
+        sampleCount: Engine.MULTISAMPLE_COUNT,
         format: this.presentationFormat,
         usage: GPUTextureUsage.RENDER_ATTACHMENT,
       })
@@ -982,29 +896,20 @@ export class Engine {
       this.depthTexture = this.device.createTexture({
         label: "depth texture",
         size: [width, height],
-        sampleCount: this.sampleCount,
+        sampleCount: Engine.MULTISAMPLE_COUNT,
         format: "depth24plus-stencil8",
         usage: GPUTextureUsage.RENDER_ATTACHMENT,
       })
 
       const depthTextureView = this.depthTexture.createView()
 
-      // Render directly to canvas
-      const colorAttachment: GPURenderPassColorAttachment =
-        this.sampleCount > 1
-          ? {
-              view: this.multisampleTexture.createView(),
-              resolveTarget: this.context.getCurrentTexture().createView(),
-              clearValue: { r: 0, g: 0, b: 0, a: 0 },
-              loadOp: "clear",
-              storeOp: "store",
-            }
-          : {
-              view: this.context.getCurrentTexture().createView(),
-              clearValue: { r: 0, g: 0, b: 0, a: 0 },
-              loadOp: "clear",
-              storeOp: "store",
-            }
+      const colorAttachment: GPURenderPassColorAttachment = {
+        view: this.multisampleTexture.createView(),
+        resolveTarget: this.context.getCurrentTexture().createView(),
+        clearValue: { r: 0, g: 0, b: 0, a: 0 },
+        loadOp: "clear",
+        storeOp: "store",
+      }
 
       this.renderPassDescriptor = {
         label: "renderPass",
@@ -1036,6 +941,29 @@ export class Engine {
 
     this.camera.aspect = this.canvas.width / this.canvas.height
     this.camera.attachControl(this.canvas)
+  }
+
+  /** Set camera look-at target to a point. Clears any model binding. */
+  public setCameraTarget(v: Vec3): void
+  /** Bind camera target to a model's bone. Engine updates target each frame. Bone not found → (0,0,0) + offset. Pass null to unbind. */
+  public setCameraTarget(model: Model | null, boneName: string, offset?: Vec3): void
+  public setCameraTarget(modelOrVec: Model | Vec3 | null, boneName?: string, offset?: Vec3): void {
+    if (modelOrVec === null) {
+      this.cameraTargetModel = null
+      return
+    }
+    if ("x" in modelOrVec && "y" in modelOrVec && "z" in modelOrVec) {
+      this.cameraTargetModel = null
+      this.camera.target.x = modelOrVec.x
+      this.camera.target.y = modelOrVec.y
+      this.camera.target.z = modelOrVec.z
+      return
+    }
+    this.cameraTargetModel = modelOrVec
+    this.cameraTargetBoneName = boneName ?? ""
+    this.cameraTargetOffset.x = offset?.x ?? 0
+    this.cameraTargetOffset.y = offset?.y ?? 0
+    this.cameraTargetOffset.z = offset?.z ?? 0
   }
 
   // Step 5: Create lighting buffers
@@ -1096,11 +1024,8 @@ export class Engine {
     width?: number
     height?: number
     diffuseColor?: Vec3
-    reflectionLevel?: number
-    reflectionTextureSize?: number
     fadeStart?: number
     fadeEnd?: number
-    mode?: "reflection" | "shadow"
     shadowMapSize?: number
     shadowStrength?: number
   }): void {
@@ -1108,29 +1033,20 @@ export class Engine {
       width: 100,
       height: 100,
       diffuseColor: new Vec3(1, 1, 1),
-      reflectionLevel: 0.5,
-      reflectionTextureSize: 1024,
       fadeStart: 5.0,
       fadeEnd: 60.0,
-      mode: "reflection" as const,
       shadowMapSize: 4096,
       shadowStrength: 1.0,
       ...options,
     }
-    this.groundMode = opts.mode
     this.createGroundGeometry(opts.width, opts.height)
-    if (opts.mode === "reflection") {
-      this.createGroundMaterialBuffer(opts.diffuseColor, opts.reflectionLevel, opts.fadeStart, opts.fadeEnd)
-      this.createReflectionTexture(opts.reflectionTextureSize)
-    } else {
-      this.createShadowGroundResources(opts.shadowMapSize, opts.diffuseColor, opts.fadeStart, opts.fadeEnd, opts.shadowStrength)
-    }
-    this.groundHasReflections = true
+    this.createShadowGroundResources(opts.shadowMapSize, opts.diffuseColor, opts.fadeStart, opts.fadeEnd, opts.shadowStrength)
+    this.hasGround = true
     this.groundDrawCall = {
       type: "ground",
       count: 6,
       firstIndex: 0,
-      bindGroup: (opts.mode === "reflection" ? this.groundReflectionBindGroup : this.groundShadowBindGroup)!,
+      bindGroup: this.groundShadowBindGroup!,
       materialName: "Ground",
     }
   }
@@ -1183,6 +1099,17 @@ export class Engine {
       this.resizeObserver.disconnect()
       this.resizeObserver = null
     }
+  }
+
+  public async loadModel(path: string): Promise<Model>
+  public async loadModel(name: string, path: string): Promise<Model>
+  public async loadModel(nameOrPath: string, path?: string): Promise<Model> {
+    const pmxPath = path === undefined ? nameOrPath : path
+    const name = path === undefined ? "model_" + (this._nextDefaultModelId++) : nameOrPath
+    const model = await PmxLoader.load(pmxPath)
+    model.setName(name)
+    await this.addModel(model, pmxPath, name)
+    return model
   }
 
   public async addModel(model: Model, pmxPath: string, name?: string): Promise<string> {
@@ -1249,12 +1176,20 @@ export class Engine {
     return inst ? !inst.hiddenMaterials.has(materialName) : false
   }
 
-  public setModelIKEnabled(modelName: string, enabled: boolean): void {
-    this.modelInstances.get(modelName)?.model.setIKEnabled(enabled)
+  public setIKEnabled(enabled: boolean): void {
+    this.ikEnabled = enabled
   }
 
-  public setModelPhysicsEnabled(modelName: string, enabled: boolean): void {
-    this.modelInstances.get(modelName)?.model.setPhysicsEnabled(enabled)
+  public getIKEnabled(): boolean {
+    return this.ikEnabled
+  }
+
+  public setPhysicsEnabled(enabled: boolean): void {
+    this.physicsEnabled = enabled
+  }
+
+  public getPhysicsEnabled(): boolean {
+    return this.physicsEnabled
   }
 
   public resetPhysics(): void {
@@ -1275,9 +1210,9 @@ export class Engine {
 
   private updateInstances(deltaTime: number): void {
     this.forEachInstance((inst) => {
-      const verticesChanged = inst.model.update(deltaTime)
+      const verticesChanged = inst.model.update(deltaTime, this.ikEnabled)
       if (verticesChanged) inst.vertexBufferNeedsUpdate = true
-      if (inst.physics && inst.model.getPhysicsEnabled()) {
+      if (inst.physics && this.physicsEnabled) {
         inst.physics.step(
           deltaTime,
           inst.model.getWorldMatrices(),
@@ -1452,58 +1387,6 @@ export class Engine {
       usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
     })
     this.device.queue.writeBuffer(this.groundIndexBuffer, 0, indices)
-  }
-
-  private createGroundMaterialBuffer(diffuseColor: Vec3, reflectionLevel: number, fadeStart: number, fadeEnd: number) {
-    const u = new Float32Array(8)
-    u[0] = diffuseColor.x
-    u[1] = diffuseColor.y
-    u[2] = diffuseColor.z
-    u[3] = reflectionLevel
-    u[4] = fadeStart
-    u[5] = fadeEnd
-    u[6] = 0
-    u[7] = 0
-    this.groundMaterialUniformBuffer = this.device.createBuffer({
-      label: "ground material uniform buffer",
-      size: 64,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    })
-    this.device.queue.writeBuffer(this.groundMaterialUniformBuffer, 0, u)
-  }
-
-  private createReflectionTexture(size: number) {
-    this.groundReflectionTexture = this.device.createTexture({
-      label: "ground reflection texture",
-      size: [size, size],
-      sampleCount: this.sampleCount,
-      format: this.presentationFormat,
-      usage: GPUTextureUsage.RENDER_ATTACHMENT,
-    })
-    this.groundReflectionResolveTexture = this.device.createTexture({
-      label: "ground reflection resolve texture",
-      size: [size, size],
-      format: this.presentationFormat,
-      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-    })
-    this.groundReflectionDepthTexture = this.device.createTexture({
-      label: "ground reflection depth texture",
-      size: [size, size],
-      sampleCount: this.sampleCount,
-      format: "depth24plus-stencil8",
-      usage: GPUTextureUsage.RENDER_ATTACHMENT,
-    })
-    this.groundReflectionBindGroup = this.device.createBindGroup({
-      label: "ground reflection bind group",
-      layout: this.groundBindGroupLayout,
-      entries: [
-        { binding: 0, resource: { buffer: this.cameraUniformBuffer } },
-        { binding: 1, resource: { buffer: this.lightUniformBuffer } },
-        { binding: 2, resource: this.groundReflectionResolveTexture.createView() },
-        { binding: 3, resource: this.materialSampler },
-        { binding: 4, resource: { buffer: this.groundMaterialUniformBuffer! } },
-      ],
-    })
   }
 
   private createShadowGroundResources(
@@ -1776,85 +1659,29 @@ export class Engine {
     }
   }
 
-  // Helper: Render eyes with stencil writing (for post-alpha-eye effect)
-  private renderEyes(pass: GPURenderPassEncoder, inst: ModelInstance, useReflectionPipeline = false) {
-    if (useReflectionPipeline) {
-      pass.setPipeline(this.reflectionPipeline)
-      for (const draw of inst.drawCalls) {
-        if (draw.type === "eye") {
-          pass.setBindGroup(0, draw.bindGroup)
-          pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
-        }
-      }
-    } else {
-      pass.setPipeline(this.eyePipeline)
-      pass.setStencilReference(this.STENCIL_EYE_VALUE)
-      for (const draw of inst.drawCalls) {
-        if (draw.type === "eye" && this.shouldRenderDrawCall(inst, draw)) {
-          pass.setBindGroup(0, draw.bindGroup)
-          pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
-        }
+  // Post-alpha eye: render eye draws; main pass writes stencil so hair-over-eyes can use it for see-through bangs.
+  private renderEyes(pass: GPURenderPassEncoder, inst: ModelInstance) {
+    pass.setPipeline(this.eyePipeline)
+    pass.setStencilReference(this.STENCIL_EYE_VALUE)
+    for (const draw of inst.drawCalls) {
+      if (draw.type === "eye" && this.shouldRenderDrawCall(inst, draw)) {
+        pass.setBindGroup(0, draw.bindGroup)
+        pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
       }
     }
   }
 
   private renderGround(pass: GPURenderPassEncoder) {
-    if (!this.groundHasReflections || !this.groundVertexBuffer || !this.groundIndexBuffer || !this.groundDrawCall) return
-    if (this.groundMode === "reflection" && this.groundReflectionTexture) this.renderReflectionTexture()
-    pass.setPipeline(this.groundMode === "reflection" ? this.groundPipeline : this.groundShadowPipeline)
+    if (!this.hasGround || !this.groundVertexBuffer || !this.groundIndexBuffer || !this.groundDrawCall) return
+    pass.setPipeline(this.groundShadowPipeline)
     pass.setVertexBuffer(0, this.groundVertexBuffer)
     pass.setIndexBuffer(this.groundIndexBuffer, "uint16")
     pass.setBindGroup(0, this.groundDrawCall.bindGroup)
     pass.drawIndexed(this.groundDrawCall.count, 1, this.groundDrawCall.firstIndex, 0, 0)
   }
 
-  private renderReflectionTexture() {
-    if (!this.groundReflectionTexture) return
-
-    const mirrorMatrix = this.createMirrorMatrix(new Vec3(0, 1, 0), 0)
-    this.updateCameraUniforms()
-
-    const reflectionEncoder = this.device.createCommandEncoder()
-    const reflectionPassDescriptor: GPURenderPassDescriptor = {
-      label: "reflection render pass",
-      colorAttachments: [
-        {
-          view: this.groundReflectionTexture!.createView(),
-          resolveTarget: this.groundReflectionResolveTexture!.createView(),
-          clearValue: { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }, // White
-          loadOp: "clear",
-          storeOp: "store",
-        },
-      ],
-      depthStencilAttachment: {
-        view: this.groundReflectionDepthTexture!.createView(),
-        depthClearValue: 1.0,
-        depthLoadOp: "clear",
-        depthStoreOp: "store",
-        stencilClearValue: 0,
-        stencilLoadOp: "clear",
-        stencilStoreOp: "discard",
-      },
-    }
-
-    const reflectionPass = reflectionEncoder.beginRenderPass(reflectionPassDescriptor)
-    this.forEachInstance((inst) => this.renderOneModel(reflectionPass, inst, true, mirrorMatrix))
-    reflectionPass.end()
-    this.device.queue.submit([reflectionEncoder.finish()])
-    this.updateSkinMatrices()
-  }
-
-  private renderHair(pass: GPURenderPassEncoder, inst: ModelInstance, useReflectionPipeline = false) {
-    if (useReflectionPipeline) {
-      pass.setPipeline(this.reflectionPipeline)
-      for (const draw of inst.drawCalls) {
-        if (draw.type === "hair-over-eyes" || draw.type === "hair-over-non-eyes") {
-          pass.setBindGroup(0, draw.bindGroup)
-          pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
-        }
-      }
-      return
-    }
+  // Post-alpha eye: hair-over-eyes uses stencil (from renderEyes) for 50% alpha; hair-over-non-eyes uses inverse stencil.
+  private renderHair(pass: GPURenderPassEncoder, inst: ModelInstance) {
 
     const hasHair = inst.drawCalls.some(
       (d) => (d.type === "hair-over-eyes" || d.type === "hair-over-non-eyes") && this.shouldRenderDrawCall(inst, d)
@@ -2052,18 +1879,29 @@ export class Engine {
     const deltaTime = this.lastFrameTime > 0 ? (currentTime - this.lastFrameTime) / 1000 : 0.016
     this.lastFrameTime = currentTime
 
-    this.updateCameraUniforms()
     this.updateRenderTarget()
 
     const hasModels = this.modelInstances.size > 0
     if (hasModels) {
       this.updateInstances(deltaTime)
       this.updateSkinMatrices()
+      // Update camera target from bound model (bone not found → 0,0,0 + offset)
+      if (this.cameraTargetModel) {
+        const pos = this.cameraTargetModel.getBoneWorldPosition(this.cameraTargetBoneName)
+        const px = pos?.x ?? 0
+        const py = pos?.y ?? 0
+        const pz = pos?.z ?? 0
+        this.camera.target.x = px + this.cameraTargetOffset.x
+        this.camera.target.y = py + this.cameraTargetOffset.y
+        this.camera.target.z = pz + this.cameraTargetOffset.z
+      }
     }
-    if (this.groundMode === "shadow") this.updateShadowLightVP()
+
+    this.updateCameraUniforms()
+    if (this.hasGround) this.updateShadowLightVP()
 
     const encoder = this.device.createCommandEncoder()
-    if (hasModels && this.groundMode === "shadow" && this.shadowMapDepthView) {
+    if (hasModels && this.hasGround && this.shadowMapDepthView) {
       const sp = encoder.beginRenderPass({
         colorAttachments: [],
         depthStencilAttachment: {
@@ -2079,8 +1917,8 @@ export class Engine {
     }
 
     const pass = encoder.beginRenderPass(this.renderPassDescriptor)
-    if (hasModels) this.forEachInstance((inst) => this.renderOneModel(pass, inst, false))
-    if (this.groundHasReflections) this.renderGround(pass)
+    if (hasModels) this.forEachInstance((inst) => this.renderOneModel(pass, inst))
+    if (this.hasGround) this.renderGround(pass)
 
     pass.end()
     this.device.queue.submit([encoder.finish()])
@@ -2098,50 +1936,37 @@ export class Engine {
     }
   }
 
-  private renderOneModel(pass: GPURenderPassEncoder, inst: ModelInstance, useReflection: boolean, mirrorMatrix?: Mat4): void {
-    pass.setVertexBuffer(0, inst.vertexBuffer)
-    pass.setVertexBuffer(1, inst.jointsBuffer)
-    pass.setVertexBuffer(2, inst.weightsBuffer)
-    pass.setIndexBuffer(inst.indexBuffer, "uint32")
-
-    if (useReflection && mirrorMatrix) {
-      this.writeMirrorTransformedSkinMatrices(inst, mirrorMatrix)
-      pass.setPipeline(this.reflectionPipeline)
-      for (const draw of inst.drawCalls) {
-        if (draw.type === "opaque" && this.shouldRenderDrawCall(inst, draw)) {
-          pass.setBindGroup(0, draw.bindGroup)
-          pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
-        }
-      }
-      this.renderEyes(pass, inst, true)
-      this.renderHair(pass, inst, true)
-      for (const draw of inst.drawCalls) {
-        if (draw.type === "transparent" && this.shouldRenderDrawCall(inst, draw)) {
-          pass.setBindGroup(0, draw.bindGroup)
-          pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
-        }
-      }
-      this.drawOutlines(pass, inst, true, true)
-      return
-    }
-
-    pass.setPipeline(this.modelPipeline)
+  private drawOpaque(pass: GPURenderPassEncoder, inst: ModelInstance, pipeline: GPURenderPipeline): void {
+    pass.setPipeline(pipeline)
     for (const draw of inst.drawCalls) {
       if (draw.type === "opaque" && this.shouldRenderDrawCall(inst, draw)) {
         pass.setBindGroup(0, draw.bindGroup)
         pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
       }
     }
-    this.renderEyes(pass, inst, false)
-    this.drawOutlines(pass, inst, false)
-    this.renderHair(pass, inst, false)
-    pass.setPipeline(this.modelPipeline)
+  }
+
+  private drawTransparent(pass: GPURenderPassEncoder, inst: ModelInstance, pipeline: GPURenderPipeline): void {
+    pass.setPipeline(pipeline)
     for (const draw of inst.drawCalls) {
       if (draw.type === "transparent" && this.shouldRenderDrawCall(inst, draw)) {
         pass.setBindGroup(0, draw.bindGroup)
         pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
       }
     }
+  }
+
+  private renderOneModel(pass: GPURenderPassEncoder, inst: ModelInstance): void {
+    pass.setVertexBuffer(0, inst.vertexBuffer)
+    pass.setVertexBuffer(1, inst.jointsBuffer)
+    pass.setVertexBuffer(2, inst.weightsBuffer)
+    pass.setIndexBuffer(inst.indexBuffer, "uint32")
+
+    this.drawOpaque(pass, inst, this.modelPipeline)
+    this.renderEyes(pass, inst)
+    this.drawOutlines(pass, inst, false)
+    this.renderHair(pass, inst)
+    this.drawTransparent(pass, inst, this.modelPipeline)
     this.drawOutlines(pass, inst, true)
   }
 
@@ -2159,13 +1984,8 @@ export class Engine {
   }
 
   private updateRenderTarget() {
-    // Update render target to use current canvas texture
     const colorAttachment = (this.renderPassDescriptor.colorAttachments as GPURenderPassColorAttachment[])[0]
-    if (this.sampleCount > 1) {
-      colorAttachment.resolveTarget = this.context.getCurrentTexture().createView()
-    } else {
-      colorAttachment.view = this.context.getCurrentTexture().createView()
-    }
+    colorAttachment.resolveTarget = this.context.getCurrentTexture().createView()
   }
 
   private updateSkinMatrices() {
@@ -2181,8 +2001,7 @@ export class Engine {
     })
   }
 
-  private drawOutlines(pass: GPURenderPassEncoder, inst: ModelInstance, transparent: boolean, useReflectionPipeline = false) {
-    if (useReflectionPipeline) return
+  private drawOutlines(pass: GPURenderPassEncoder, inst: ModelInstance, transparent: boolean) {
     pass.setPipeline(this.outlinePipeline)
     const outlineType: DrawCallType = transparent ? "transparent-outline" : "opaque-outline"
     for (const draw of inst.drawCalls) {
@@ -2218,42 +2037,4 @@ export class Engine {
     }
   }
 
-  private createMirrorMatrix(planeNormal: Vec3, planeDistance: number): Mat4 {
-    // Create reflection matrix across a plane
-    const n = planeNormal.normalize()
-
-    return new Mat4(
-      new Float32Array([
-        1 - 2 * n.x * n.x,
-        -2 * n.x * n.y,
-        -2 * n.x * n.z,
-        0,
-        -2 * n.y * n.x,
-        1 - 2 * n.y * n.y,
-        -2 * n.y * n.z,
-        0,
-        -2 * n.z * n.x,
-        -2 * n.z * n.y,
-        1 - 2 * n.z * n.z,
-        0,
-        -2 * planeDistance * n.x,
-        -2 * planeDistance * n.y,
-        -2 * planeDistance * n.z,
-        1,
-      ])
-    )
-  }
-
-  private writeMirrorTransformedSkinMatrices(inst: ModelInstance, mirrorMatrix: Mat4) {
-    const originalMatrices = inst.model.getSkinMatrices()
-    const transformedMatrices = new Float32Array(originalMatrices.length)
-    for (let i = 0; i < originalMatrices.length; i += 16) {
-      const boneMatrixValues = new Float32Array(16)
-      for (let j = 0; j < 16; j++) boneMatrixValues[j] = originalMatrices[i + j]
-      const boneMatrix = new Mat4(boneMatrixValues)
-      const transformed = mirrorMatrix.multiply(boneMatrix)
-      for (let j = 0; j < 16; j++) transformedMatrices[i + j] = transformed.values[j]
-    }
-    this.device.queue.writeBuffer(inst.skinMatrixBuffer, 0, transformedMatrices)
-  }
 }
