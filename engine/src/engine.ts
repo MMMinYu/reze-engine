@@ -696,9 +696,11 @@ export class Engine {
           }
           let worldPos = skinnedPos.xyz;
           let worldNormal = normalize(skinnedNrm);
-          
-          let scaleFactor = 0.01;
-          let expandedPos = worldPos + worldNormal * material.edgeSize * scaleFactor;
+          // Screen-stable edgeline: extrusion ∝ camera distance (same idea as MMD viewers / babylon-mmd-style scaling)
+          let camDist = max(length(camera.viewPos - worldPos), 0.25);
+          let refDist = 30.0;
+          let edgeScale = 0.03;
+          let expandedPos = worldPos + worldNormal * material.edgeSize * edgeScale * (camDist / refDist);
           output.position = camera.projection * camera.view * vec4f(expandedPos, 1.0);
           return output;
         }
@@ -718,7 +720,8 @@ export class Engine {
       cullMode: "back",
       depthStencil: {
         format: "depth24plus-stencil8",
-        depthWriteEnabled: true,
+        // Don’t write outline into depth buffer — stops z-fighting / black cracks vs body (MMD-style; body depth stays authoritative)
+        depthWriteEnabled: false,
         depthCompare: "less-equal",
       },
     })

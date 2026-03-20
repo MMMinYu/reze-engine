@@ -261,8 +261,8 @@ export class PmxLoader {
           this.getFloat32(),
           this.getFloat32(),
         ]
-        // edgeSize float
-        const edgeSize = this.getFloat32()*2 // double the size for better visibility
+        // edgeSize float (outline width in PMX units; engine scales by camera distance for stable screen thickness)
+        const edgeSize = this.getFloat32()
 
         const textureIndex = this.getNonVertexIndex(this.textureIndexSize)
         const sphereTextureIndex = this.getNonVertexIndex(this.textureIndexSize)

@@ -1,6 +1,8 @@
 import { Mat4, Vec3 } from "./math"
 
-const FAR = 2000
+/** Far cap / zoom limit; large enough for wide shots without clipping distant ground */
+const FAR_CAP = 8000
+const FAR_MIN = 200
 
 export class Camera {
   alpha: number
@@ -10,7 +12,7 @@ export class Camera {
   fov: number
   aspect: number = 1
   near: number = 0.05
-  far: number = FAR
+  far: number = FAR_CAP
 
   // Input state
   private canvas: HTMLCanvasElement | null = null
@@ -30,7 +32,7 @@ export class Camera {
   wheelPrecision: number = 0.01
   pinchPrecision: number = 0.05
   minZ: number = 0.05
-  maxZ: number = FAR
+  maxZ: number = FAR_CAP
   lowerBetaLimit: number = 0.001
   upperBetaLimit: number = Math.PI - 0.001
 
@@ -40,6 +42,7 @@ export class Camera {
     this.radius = radius
     this.target = target
     this.fov = fov
+    this.updateFarFromRadius()
 
     // Bind event handlers
     this.onMouseDown = this.onMouseDown.bind(this)
@@ -127,7 +130,14 @@ export class Camera {
     this.target = this.target.add(panRight).add(panUp)
   }
 
+  /** Far plane grows with zoom-out so big floors / distant geometry stay visible */
+  private updateFarFromRadius(): void {
+    const margin = 600
+    this.far = Math.min(FAR_CAP, Math.max(FAR_MIN, this.radius * 12 + margin))
+  }
+
   getProjectionMatrix(): Mat4 {
+    this.updateFarFromRadius()
     return Mat4.perspective(this.fov, this.aspect, this.near, this.far)
   }
 
@@ -206,8 +216,7 @@ export class Camera {
 
     // Clamp radius to reasonable bounds
     this.radius = Math.max(this.minZ, Math.min(this.maxZ, this.radius))
-    // Expand far plane to keep scene visible when zooming out
-    this.far = Math.max(FAR, this.radius * 4)
+    this.updateFarFromRadius()
   }
 
   private onContextMenu(e: Event) {
@@ -285,8 +294,7 @@ export class Camera {
 
         // Clamp radius to reasonable bounds
         this.radius = Math.max(this.minZ, Math.min(this.maxZ, this.radius))
-        // Expand far plane for pinch zoom as well
-        this.far = Math.max(FAR, this.radius * 4)
+        this.updateFarFromRadius()
       }
 
       if (isPanGesture) {
