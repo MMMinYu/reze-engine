@@ -36,9 +36,6 @@ export interface Material {
   edgeColor: [number, number, number, number]
   edgeSize: number
   vertexCount: number
-  isEye?: boolean // New: marks eye materials
-  isFace?: boolean // New: marks face/skin materials
-  isHair?: boolean // New: marks hair materials
 }
 
 export interface Bone {

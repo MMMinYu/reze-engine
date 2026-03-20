@@ -294,27 +294,6 @@ export class PmxLoader {
           vertexCount,
         }
 
-        // Classify materials based on name
-        const materialName = name.toLowerCase()
-
-        // Classify eye materials
-        mat.isEye =
-          materialName.includes("目") || // Japanese "eye"
-          materialName.includes("瞳") || // Japanese "pupil"
-          materialName.includes("eye") ||
-          materialName.includes("pupil") ||
-          materialName.includes("iris") ||
-          materialName.includes("目白") ||
-          materialName.includes("眼") ||
-          materialName.includes("睛") ||
-          materialName.includes("眉")
-
-        // Classify face materials
-        mat.isFace = materialName.includes("face") || materialName.includes("脸")
-
-        // Classify hair materials
-        mat.isHair = materialName.includes("hair_f") || materialName.includes("头发")
-
         this.materials.push(mat)
       }
     } catch (error) {

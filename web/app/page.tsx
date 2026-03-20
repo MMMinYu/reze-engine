@@ -201,6 +201,7 @@ export default function Home() {
             if (material) {
               setMousePosition({ x: screenX, y: screenY })
               setRippleId((prev) => prev + 1)
+              console.log("material selected:", modelName, material)
             }
             setSelectedMaterial(material)
           },
@@ -223,20 +224,12 @@ export default function Home() {
         setLoading(false)
 
         engine.runRenderLoop(() => setStats(engine.getStats()))
-        // console.log("materials", engine.getMaterials())
-        // console.log("bones", engine.getBones())
-        // console.log("morphs", engine.getMorphs())
-        // engine.setMaterialVisible("材質1", false)
-        // engine.setMaterialVisible("GT Bow Button Blouse", false)
 
         await m1.loadAnimation("IRIS OUT", "/animations/IRIS OUT.vmd")
         await m1.loadAnimation("run", "/animations/run.vmd")
         m1.show("IRIS OUT")
 
-        // Camera follows model bone; offset so target is at character height
-        engine.setCameraTarget(m1, "センター", new Vec3(0, 3.5, 0))
-        // engine.setCameraTarget(m1, "_", new Vec3(0, 11.5, 0))
-
+        // engine.setCameraFollow(m1, "センター", new Vec3(0, 11.5, 0))
 
         m1.resetAllBones()
         m1.resetAllMorphs()

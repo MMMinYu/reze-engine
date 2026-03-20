@@ -1,62 +1,47 @@
 # Reze Engine
 
-A lightweight engine built with WebGPU and TypeScript for real-time 3D anime character MMD model rendering.
+A lightweight WebGPU engine for real-time 3D MMD/PMX model rendering, built with TypeScript.
 
 ![screenshot](./screenshot.png)
 
+## Install
+
+```bash
+npm install reze-engine
+```
+
 ## Features
 
-- Blinn-Phong lighting
-- Alpha blending
-- Post alpha eye rendering (the see-through eyes)
-- Rim lighting
-- Outlines
-- MSAA 4x anti-aliasing
-- Bone and morph API
-- VMD animation (multiple named animations, non-interruptible playback)
-- IK solver
-- Ammo/Bullet physics
-- Multi-model support (per-model materials, IK, physics)
+- **Rendering:** Blinn-Phong lighting, alpha blending, rim lighting, outlines, MSAA 4x
+- **Animation:** VMD animation (multiple named animations, non-interruptible playback), IK solver, Ammo/Bullet physics
+- **Interaction:** GPU picking (double-click/tap returns model name, material name, screen coordinates)
+- **Camera:** Orbit camera with Souls-style follow cam (bind orbit center to model bone)
+- **Performance:** Optimized bind group layout (per-frame / per-instance / per-material), ground shadow mapping with PCF
+- **Multi-model:** Per-model materials, IK, physics, vertex buffer management
 
 ## Usage
 
 ```javascript
-import { Engine, Model } from "reze-engine"
+import { Engine, Vec3 } from "reze-engine"
 
-export default function Scene() {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const engineRef = useRef<Engine>(null)
+const engine = new Engine(canvas, {
+  ambientColor: new Vec3(0.88, 0.92, 0.99),
+  cameraDistance: 31.5,
+  cameraTarget: new Vec3(0, 11.5, 0),
+})
+await engine.init()
 
-  const initEngine = useCallback(async () => {
-    if (canvasRef.current) {
-      try {
-        const engine = new Engine(canvasRef.current, {})
-        engineRef.current = engine
-        await engine.init()
-        const model = await engine.loadModel("/models/reze/reze.pmx")
-        await model.loadAnimation("default", "/animations/dance.vmd")
-        model.resetAllBones()
-        model.resetAllMorphs()
-        model.show("default")
-        model.play()
+const model = await engine.loadModel("hero", "/models/hero/hero.pmx")
+await model.loadAnimation("idle", "/animations/idle.vmd")
+model.show("idle")
+model.play()
 
-        engine.runRenderLoop(() => {})
-      } catch (error) {
-        console.error(error)
-      }
-    }
-  }, [])
-
-  useEffect(() => {
-    void initEngine()
-    return () => engineRef.current?.dispose()
-  }, [initEngine])
-
-  return <canvas ref={canvasRef} className="w-full h-full" />
-}
+engine.setCameraFollow(model, "センター", new Vec3(0, 3.5, 0))
+engine.addGround({ width: 160, height: 160 })
+engine.runRenderLoop()
 ```
 
-### Engine options
+### Engine Options
 
 ```javascript
 {
@@ -67,60 +52,52 @@ export default function Scene() {
   cameraDistance: 26.6,
   cameraTarget: new Vec3(0, 12.5, 0),
   cameraFov: Math.PI / 4,
-  onRaycast: (modelName, material, screenX, screenY) => { /* tap/click on model */ },
-  multisampleCount: 4,  // 1 | 4
+  onRaycast: (modelName, material, screenX, screenY) => {},
 }
 ```
 
 ## API
 
-One WebGPU **Engine** per page (singleton after `init()`). Load models via **`engine.loadModel(path)`** (default name) or **`engine.loadModel(name, path)`**; returns the **Model**. Use **`engine.addModel(model, pmxPath, name?)`** when you already have a Model instance.
+One WebGPU **Engine** per page (singleton after `init()`). Load models via `engine.loadModel(path)` (auto-named) or `engine.loadModel(name, path)`; returns the **Model**.
 
 ### Multi-model
 
 ```javascript
-const model = await engine.loadModel("hero", "/path/to/model.pmx")
-engine.getModelNames()
-engine.getModel("hero")
+const model = await engine.loadModel("hero", "/models/hero.pmx")
+engine.getModelNames()           // ["hero"]
+engine.getModel("hero")          // Model
 engine.removeModel("hero")
-// Or add an existing Model: await engine.addModel(model, pmxPath, "hero")
 
-engine.setMaterialVisible("hero", "材質1", false)
-engine.setIKEnabled(true)     // IK enabled for all models
-engine.setPhysicsEnabled(true) // physics enabled for all models
-engine.resetPhysics()         // resets physics for all instances
-engine.markVertexBufferDirty("hero")  // or pass Model
+engine.setMaterialVisible("hero", "body", false)
+engine.toggleMaterialVisible("hero", "body")
+engine.isMaterialVisible("hero", "body")
+
+engine.setIKEnabled(true)
+engine.setPhysicsEnabled(true)
+engine.resetPhysics()
+engine.markVertexBufferDirty("hero")
 ```
 
 ### Animation
 
-Animations are **non-interruptible**: the next one starts only when the current one finishes (or is queued).
+Animations are non-interruptible: the next one starts only when the current one finishes (or is queued).
 
 ```javascript
-const model = engine.getModel("hero")
-
-// Single animation (e.g. dance): load, then play when needed
-await model.loadAnimation("default", "/animations/dance.vmd")
-model.resetAllBones()
-model.resetAllMorphs()
-model.show("default")
-model.play()
-const { current, duration, percentage } = model.getAnimationProgress()
-
-// Multiple named animations
 await model.loadAnimation("idle", "/animations/idle.vmd")
 await model.loadAnimation("walk", "/animations/walk.vmd")
-model.show("idle")         // show "idle" at time 0, no playback
-model.play("walk")          // play "walk"; if something is playing, "walk" is queued for when it ends
-model.play()                 // resume current
+
+model.show("idle")       // set pose at time 0, no playback
+model.play("walk")       // play "walk"; queued if something is playing
+model.play()             // resume current
 model.pause()
 model.stop()
 model.seek(1.5)
+
 model.getAnimationProgress()  // { current, duration, percentage, animationName }
 model.getAnimationState().setOnEnd((name) => model.play("idle"))
 ```
 
-### Bone and morph tweening
+### Bone and Morph Tweening
 
 ```javascript
 model.rotateBones({ 首: neckQuat, 頭: headQuat }, 300)
@@ -130,18 +107,59 @@ model.resetAllBones()
 model.resetAllMorphs()
 ```
 
-### Engine (render loop, ground, raycast)
+### Camera
 
 ```javascript
-engine.runRenderLoop(() => {})
+// Souls-style follow cam: orbit center tracks a model bone
+engine.setCameraFollow(model, "センター", new Vec3(0, 3.5, 0))
+engine.setCameraFollow(null)  // unbind
 
-engine.addGround({ width: 160, height: 160, mode: "reflection", ... })  // mirror + reflection
-engine.addGround({ width: 160, height: 160, mode: "shadow", ... })      // floor + character shadow
+// Static target
+engine.setCameraTarget(new Vec3(0, 12, 0))
 
-// Raycast: tap/click on model (callback receives model name and material name)
-new Engine(canvas, {
-  onRaycast: (modelName, material, screenX, screenY) => { ... }
+// Read/write orbit parameters
+engine.getCameraDistance()
+engine.setCameraDistance(8)
+engine.getCameraAlpha()
+engine.setCameraAlpha(Math.PI)
+engine.getCameraBeta()
+engine.setCameraBeta(Math.PI / 2.5)
+```
+
+### Ground and Shadows
+
+```javascript
+engine.addGround({
+  width: 160,
+  height: 160,
+  diffuseColor: new Vec3(1, 1, 1),
+  fadeStart: 10.0,
+  fadeEnd: 80.0,
+  shadowMapSize: 4096,
+  shadowStrength: 1.0,
 })
+```
+
+### GPU Picking
+
+```javascript
+const engine = new Engine(canvas, {
+  onRaycast: (modelName, material, screenX, screenY) => {
+    console.log(`Clicked ${modelName} / ${material} at (${screenX}, ${screenY})`)
+  },
+})
+```
+
+Double-click (desktop) or double-tap (mobile) triggers a GPU pick pass that returns the model name and material name under the cursor.
+
+### Render Loop and Lifecycle
+
+```javascript
+engine.runRenderLoop(() => {
+  const stats = engine.getStats()  // { fps, frameTime }
+})
+engine.stopRenderLoop()
+engine.dispose()
 ```
 
 ## Projects Using This Engine
@@ -153,6 +171,6 @@ new Engine(canvas, {
 
 ## Tutorial
 
-Learn WebGPU from scratch by building an anime character renderer in incremental steps. The tutorial covers the complete rendering pipeline from a simple triangle to fully textured, skeletal-animated characters.
+Learn WebGPU from scratch by building an anime character renderer in incremental steps.
 
 [How to Render an Anime Character with WebGPU](https://reze.one/tutorial)
