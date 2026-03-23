@@ -107,11 +107,14 @@ model.getBoneWorldPosition(name)
   cameraTarget: Vec3,
   cameraFov: number,
   onRaycast: (modelName, material, screenX, screenY) => void,
+  shadowLightDirection: Vec3,
   physicsOptions: {
     constraintSolverKeywords: string[],
   },
 }
 ```
+
+`shadowLightDirection` — direction of the shadow-only light, independent of the visible directional light. Default `(0.12, -1, 0.16)` casts a near-top-down shadow with a slight offset so extended limbs still project visible shadows.
 
 `constraintSolverKeywords` — joints whose name contains any keyword use the Bullet 2.75 constraint solver; all others keep the stable Ammo 2.82+ default. See [babylon-mmd: Fix Constraint Behavior](https://noname0310.github.io/babylon-mmd/docs/reference/runtime/apply-physics-to-mmd-models/#fix-constraint-behavior) for details.
 

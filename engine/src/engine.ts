@@ -16,6 +16,7 @@ export type EngineOptions = {
   cameraFov?: number
   onRaycast?: RaycastCallback
   physicsOptions?: PhysicsOptions
+  shadowLightDirection?: Vec3
 }
 
 export const DEFAULT_ENGINE_OPTIONS = {
@@ -28,6 +29,7 @@ export const DEFAULT_ENGINE_OPTIONS = {
   cameraFov: Math.PI / 4,
   onRaycast: undefined,
   physicsOptions: { constraintSolverKeywords: ["胸"] },
+  shadowLightDirection: new Vec3(0.12, -1, 0.16),
 }
 
 export interface EngineStats {
@@ -136,12 +138,10 @@ export class Engine {
   private shadowComparisonSampler!: GPUSampler
   private groundShadowMaterialBuffer?: GPUBuffer
   private groundDrawCall: DrawCall | null = null
-  private shadowVPLightX = Number.NaN
-  private shadowVPLightY = Number.NaN
-  private shadowVPLightZ = Number.NaN
 
   private onRaycast?: RaycastCallback
   private physicsOptions: PhysicsOptions = DEFAULT_ENGINE_OPTIONS.physicsOptions
+  private shadowLightDirection: Vec3 = DEFAULT_ENGINE_OPTIONS.shadowLightDirection
   private lastTouchTime = 0
   private readonly DOUBLE_TAP_DELAY = 300
   // GPU picking
@@ -194,6 +194,7 @@ export class Engine {
       this.cameraFov = options.cameraFov ?? DEFAULT_ENGINE_OPTIONS.cameraFov
       this.onRaycast = options.onRaycast
       this.physicsOptions = options.physicsOptions ?? DEFAULT_ENGINE_OPTIONS.physicsOptions
+      this.shadowLightDirection = options.shadowLightDirection ?? DEFAULT_ENGINE_OPTIONS.shadowLightDirection
     }
   }
 
@@ -1433,23 +1434,17 @@ export class Engine {
     })
   }
 
+  // Shadow uses a fixed orthographic projection, independent of the visible light direction
+  private shadowLightVPDirty = true
   private updateShadowLightVP() {
-    const lx = this.lightData[4]
-    const ly = this.lightData[5]
-    const lz = this.lightData[6]
-    if (lx === this.shadowVPLightX && ly === this.shadowVPLightY && lz === this.shadowVPLightZ) return
-    this.shadowVPLightX = lx
-    this.shadowVPLightY = ly
-    this.shadowVPLightZ = lz
-    const dir = new Vec3(lx, ly, lz)
-    if (dir.length() < 1e-6) {
-      dir.x = 0.35
-      dir.y = -1
-      dir.z = 0.2
-    } else dir.normalize()
+    if (!this.shadowLightVPDirty) return
+    this.shadowLightVPDirty = false
+    const dir = new Vec3(this.shadowLightDirection.x, this.shadowLightDirection.y, this.shadowLightDirection.z)
+    dir.normalize()
     const target = new Vec3(0, 11, 0)
     const eye = new Vec3(target.x - dir.x * 72, target.y - dir.y * 72, target.z - dir.z * 72)
-    const view = Mat4.lookAt(eye, target, new Vec3(0, 1, 0))
+    const up = Math.abs(dir.y) > 0.99 ? new Vec3(0, 0, -1) : new Vec3(0, 1, 0)
+    const view = Mat4.lookAt(eye, target, up)
     const proj = Mat4.orthographicLh(-72, 72, -72, 72, 1, 140)
     const vp = proj.multiply(view)
     this.shadowLightVPMatrix.set(vp.values)
