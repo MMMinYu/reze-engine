@@ -1,6 +1,6 @@
 # Reze Engine
 
-A lightweight WebGPU engine for real-time 3D MMD/PMX model rendering, built with TypeScript.
+A minimal-dependency WebGPU engine for real-time MMD/PMX rendering. Only external dependency is Ammo.js for physics.
 
 ![screenshot](./screenshot.png)
 
@@ -12,12 +12,12 @@ npm install reze-engine
 
 ## Features
 
-- **Rendering:** Blinn-Phong lighting, alpha blending, rim lighting, outlines, MSAA 4x
-- **Animation:** VMD animation (multiple named animations, non-interruptible playback), IK solver, Ammo/Bullet physics
-- **Interaction:** GPU picking (double-click/tap returns model name, material name, screen coordinates)
-- **Camera:** Orbit camera with Souls-style follow cam (bind orbit center to model bone)
-- **Performance:** Optimized bind group layout (per-frame / per-instance / per-material), ground shadow mapping with PCF
-- **Multi-model:** Per-model materials, IK, physics, vertex buffer management
+- Blinn-Phong shading, alpha blending, rim lighting, outlines, MSAA 4x
+- VMD animation with IK solver and Bullet physics
+- Orbit camera with bone-follow mode
+- GPU picking (double-click/tap)
+- Ground plane with PCF shadow mapping
+- Multi-model support
 
 ## Usage
 
@@ -26,7 +26,7 @@ import { Engine, Vec3 } from "reze-engine"
 
 const engine = new Engine(canvas, {
   ambientColor: new Vec3(0.88, 0.92, 0.99),
-  cameraDistance: 31.5,
+  cameraDistance: 31.5, // MMD units (1 unit = 8 cm)
   cameraTarget: new Vec3(0, 11.5, 0),
 })
 await engine.init()
@@ -41,136 +41,87 @@ engine.addGround({ width: 160, height: 160 })
 engine.runRenderLoop()
 ```
 
+## API
+
+One WebGPU **Engine** per page (singleton after `init()`). Load models via `engine.loadModel(path)` or `engine.loadModel(name, path)`.
+
+### Engine
+
+```javascript
+engine.init()
+engine.loadModel(name, path)
+engine.getModel(name)
+engine.getModelNames()
+engine.removeModel(name)
+
+engine.setMaterialVisible(name, material, visible)
+engine.toggleMaterialVisible(name, material)
+engine.isMaterialVisible(name, material)
+
+engine.setIKEnabled(enabled)
+engine.setPhysicsEnabled(enabled)
+
+engine.setCameraFollow(model, bone?, offset?)
+engine.setCameraFollow(null)
+engine.setCameraTarget(vec3)
+engine.setCameraDistance(d)
+engine.setCameraAlpha(a)
+engine.setCameraBeta(b)
+
+engine.addGround(options?)
+engine.runRenderLoop(callback?)
+engine.stopRenderLoop()
+engine.getStats()
+engine.dispose()
+```
+
+### Model
+
+```javascript
+await model.loadAnimation(name, url)
+model.show(name)
+model.play(name?)
+model.pause()
+model.stop()
+model.seek(time)
+model.getAnimationProgress()
+model.getAnimationState()
+
+model.rotateBones({ 首: quat, 頭: quat }, ms?)
+model.moveBones({ センター: vec3 }, ms?)
+model.setMorphWeight(name, weight, ms?)
+model.resetAllBones()
+model.resetAllMorphs()
+model.getBoneWorldPosition(name)
+```
+
 ### Engine Options
 
 ```javascript
 {
-  ambientColor: new Vec3(0.88, 0.88, 0.88),
-  directionalLightIntensity: 0.24,
-  minSpecularIntensity: 0.3,
-  rimLightIntensity: 0.4,
-  cameraDistance: 26.6,
-  cameraTarget: new Vec3(0, 12.5, 0),
-  cameraFov: Math.PI / 4,
-  onRaycast: (modelName, material, screenX, screenY) => {},
+  ambientColor: Vec3,
+  directionalLightIntensity: number,
+  minSpecularIntensity: number,
+  rimLightIntensity: number,
+  cameraDistance: number,
+  cameraTarget: Vec3,
+  cameraFov: number,
+  onRaycast: (modelName, material, screenX, screenY) => void,
+  physicsOptions: {
+    constraintSolverKeywords: string[],
+  },
 }
 ```
 
-## API
-
-One WebGPU **Engine** per page (singleton after `init()`). Load models via `engine.loadModel(path)` (auto-named) or `engine.loadModel(name, path)`; returns the **Model**.
-
-### Multi-model
-
-```javascript
-const model = await engine.loadModel("hero", "/models/hero.pmx")
-engine.getModelNames()           // ["hero"]
-engine.getModel("hero")          // Model
-engine.removeModel("hero")
-
-engine.setMaterialVisible("hero", "body", false)
-engine.toggleMaterialVisible("hero", "body")
-engine.isMaterialVisible("hero", "body")
-
-engine.setIKEnabled(true)
-engine.setPhysicsEnabled(true)
-engine.resetPhysics()
-engine.markVertexBufferDirty("hero")
-```
-
-### Animation
-
-Animations are non-interruptible: the next one starts only when the current one finishes (or is queued).
-
-```javascript
-await model.loadAnimation("idle", "/animations/idle.vmd")
-await model.loadAnimation("walk", "/animations/walk.vmd")
-
-model.show("idle")       // set pose at time 0, no playback
-model.play("walk")       // play "walk"; queued if something is playing
-model.play()             // resume current
-model.pause()
-model.stop()
-model.seek(1.5)
-
-model.getAnimationProgress()  // { current, duration, percentage, animationName }
-model.getAnimationState().setOnEnd((name) => model.play("idle"))
-```
-
-### Bone and Morph Tweening
-
-```javascript
-model.rotateBones({ 首: neckQuat, 頭: headQuat }, 300)
-model.moveBones({ センター: centerVec }, 300)
-model.setMorphWeight("まばたき", 1.0, 300)
-model.resetAllBones()
-model.resetAllMorphs()
-```
-
-### Camera
-
-```javascript
-// Souls-style follow cam: orbit center tracks a model bone
-engine.setCameraFollow(model, "センター", new Vec3(0, 3.5, 0))
-engine.setCameraFollow(null)  // unbind
-
-// Static target
-engine.setCameraTarget(new Vec3(0, 12, 0))
-
-// Read/write orbit parameters
-engine.getCameraDistance()
-engine.setCameraDistance(8)
-engine.getCameraAlpha()
-engine.setCameraAlpha(Math.PI)
-engine.getCameraBeta()
-engine.setCameraBeta(Math.PI / 2.5)
-```
-
-### Ground and Shadows
-
-```javascript
-engine.addGround({
-  width: 160,
-  height: 160,
-  diffuseColor: new Vec3(1, 1, 1),
-  fadeStart: 10.0,
-  fadeEnd: 80.0,
-  shadowMapSize: 4096,
-  shadowStrength: 1.0,
-})
-```
-
-### GPU Picking
-
-```javascript
-const engine = new Engine(canvas, {
-  onRaycast: (modelName, material, screenX, screenY) => {
-    console.log(`Clicked ${modelName} / ${material} at (${screenX}, ${screenY})`)
-  },
-})
-```
-
-Double-click (desktop) or double-tap (mobile) triggers a GPU pick pass that returns the model name and material name under the cursor.
-
-### Render Loop and Lifecycle
-
-```javascript
-engine.runRenderLoop(() => {
-  const stats = engine.getStats()  // { fps, frameTime }
-})
-engine.stopRenderLoop()
-engine.dispose()
-```
+`constraintSolverKeywords` — joints whose name contains any keyword use the Bullet 2.75 constraint solver; all others keep the stable Ammo 2.82+ default. See [babylon-mmd: Fix Constraint Behavior](https://noname0310.github.io/babylon-mmd/docs/reference/runtime/apply-physics-to-mmd-models/#fix-constraint-behavior) for details.
 
 ## Projects Using This Engine
 
-- **[MiKaPo](https://mikapo.vercel.app)** - Online real-time motion capture for MMD using webcam and MediaPipe
-- **[Popo](https://popo.love)** - Fine-tuned LLM that generates MMD poses from natural language descriptions
-- **[MPL](https://mmd-mpl.vercel.app)** - Semantic motion programming language for scripting MMD animations with intuitive syntax
-- **[Mixamo-MMD](https://mixamo-mmd.vercel.app)** - Retarget Mixamo FBX animation to VMD in one click
+- **[MiKaPo](https://mikapo.vercel.app)** — Real-time motion capture for MMD
+- **[Popo](https://popo.love)** — LLM-generated MMD poses
+- **[MPL](https://mmd-mpl.vercel.app)** — Motion programming language for MMD
+- **[Mixamo-MMD](https://mixamo-mmd.vercel.app)** — Retarget Mixamo FBX to VMD
 
 ## Tutorial
-
-Learn WebGPU from scratch by building an anime character renderer in incremental steps.
 
 [How to Render an Anime Character with WebGPU](https://reze.one/tutorial)

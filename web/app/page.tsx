@@ -227,6 +227,7 @@ export default function Home() {
 
         await m1.loadAnimation("IRIS OUT", "/animations/IRIS OUT.vmd")
         await m1.loadAnimation("run", "/animations/run.vmd")
+
         m1.show("IRIS OUT")
 
         // engine.setCameraFollow(m1, "センター", new Vec3(0, 11.5, 0))

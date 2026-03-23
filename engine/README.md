@@ -1,6 +1,6 @@
 # Reze Engine
 
-A lightweight WebGPU engine for real-time 3D MMD/PMX model rendering, built with TypeScript.
+A minimal-dependency WebGPU engine for real-time MMD/PMX rendering. Only external dependency is Ammo.js for physics.
 
 ## Install
 
@@ -10,13 +10,12 @@ npm install reze-engine
 
 ## Features
 
-- Blinn-Phong lighting, alpha blending, rim lighting, outlines, MSAA 4x
-- VMD animation (multiple named, non-interruptible), IK solver, Ammo/Bullet physics
-- GPU picking (double-click/tap returns model + material name)
-- Souls-style follow cam (orbit center bound to model bone)
-- Optimized bind groups (per-frame / per-instance / per-material)
-- Ground shadow mapping with PCF
-- Multi-model (per-model materials, IK, physics)
+- Blinn-Phong shading, alpha blending, rim lighting, outlines, MSAA 4x
+- VMD animation with IK solver and Bullet physics
+- Orbit camera with bone-follow mode
+- GPU picking (double-click/tap)
+- Ground plane with PCF shadow mapping
+- Multi-model support
 
 ## Quick Start
 
@@ -25,7 +24,7 @@ import { Engine, Vec3 } from "reze-engine"
 
 const engine = new Engine(canvas, {
   ambientColor: new Vec3(0.88, 0.92, 0.99),
-  cameraDistance: 31.5,
+  cameraDistance: 31.5, // MMD units (1 unit = 8 cm)
 })
 await engine.init()
 
@@ -56,8 +55,7 @@ engine.runRenderLoop()
 | `engine.toggleMaterialVisible(model, mat)` | Toggle material visibility |
 | `engine.setIKEnabled(enabled)` | Enable/disable IK globally |
 | `engine.setPhysicsEnabled(enabled)` | Enable/disable physics globally |
-| `engine.resetPhysics()` | Reset physics to current pose |
-| `engine.setCameraFollow(model, bone?, offset?)` | Follow cam bound to bone |
+| `engine.setCameraFollow(model, bone?, offset?)` | Orbit center tracks a bone |
 | `engine.setCameraTarget(vec3)` | Static camera target |
 | `engine.setCameraDistance(d)` | Set orbit radius |
 | `engine.setCameraAlpha(a)` | Set horizontal orbit angle |
@@ -99,15 +97,20 @@ engine.runRenderLoop()
   cameraTarget: Vec3,
   cameraFov: number,
   onRaycast: (modelName, material, screenX, screenY) => void,
+  physicsOptions: {
+    constraintSolverKeywords: string[],
+  },
 }
 ```
 
+`constraintSolverKeywords` — joints whose name contains any keyword use the Bullet 2.75 constraint solver; all others keep the stable Ammo 2.82+ default. See [babylon-mmd: Fix Constraint Behavior](https://noname0310.github.io/babylon-mmd/docs/reference/runtime/apply-physics-to-mmd-models/#fix-constraint-behavior) for details.
+
 ## Projects Using This Engine
 
-- **[MiKaPo](https://mikapo.vercel.app)** - Real-time motion capture for MMD
-- **[Popo](https://popo.love)** - LLM-generated MMD poses
-- **[MPL](https://mmd-mpl.vercel.app)** - Motion programming language for MMD
-- **[Mixamo-MMD](https://mixamo-mmd.vercel.app)** - Retarget Mixamo FBX to VMD
+- **[MiKaPo](https://mikapo.vercel.app)** — Real-time motion capture for MMD
+- **[Popo](https://popo.love)** — LLM-generated MMD poses
+- **[MPL](https://mmd-mpl.vercel.app)** — Motion programming language for MMD
+- **[Mixamo-MMD](https://mixamo-mmd.vercel.app)** — Retarget Mixamo FBX to VMD
 
 ## Tutorial
 

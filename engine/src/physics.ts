@@ -50,10 +50,18 @@ export interface Joint {
   springRotation: Vec3 // Spring stiffness values
 }
 
+export interface PhysicsOptions {
+  // Joint name keywords for per-joint Bullet 2.75 constraint solver behavior.
+  // Joints whose name contains any keyword get m_useOffsetForConstraintFrame
+  // disabled (matching Bullet 2.75). All others keep the stable Ammo 2.82+ default.
+  constraintSolverKeywords?: string[]
+}
+
 export class Physics {
   private rigidbodies: Rigidbody[]
   private joints: Joint[]
   private gravity: Vec3 = new Vec3(0, -98, 0) // Gravity acceleration (cm/s²), MMD-style default
+  private constraintSolverPattern: RegExp | null = null
   private ammoInitialized = false
   private ammoPromise: Promise<AmmoInstance> | null = null
   private ammo: AmmoInstance | null = null
@@ -66,13 +74,16 @@ export class Physics {
   private rigidbodiesInitialized = false // bodyOffsetMatrixInverse computed and bodies positioned
   private jointsCreated = false // Joints delayed until after rigidbodies are positioned
   private firstFrame = true // Needed to reposition bodies before creating joints
-  private forceDisableOffsetForConstraintFrame = true // MMD compatibility (Bullet 2.75 behavior)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private zeroVector: any = null // Cached zero vector for velocity clearing
 
-  constructor(rigidbodies: Rigidbody[], joints: Joint[] = []) {
+  constructor(rigidbodies: Rigidbody[], joints: Joint[] = [], options?: PhysicsOptions) {
     this.rigidbodies = rigidbodies
     this.joints = joints
+    const keywords = options?.constraintSolverKeywords ?? []
+    if (keywords.length > 0) {
+      this.constraintSolverPattern = new RegExp(keywords.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "i")
+    }
     this.initAmmo()
   }
 
@@ -361,8 +372,9 @@ export class Physics {
         useLinearReferenceFrameA
       )
 
-      // Disable offset for constraint frame for MMD compatibility (Bullet 2.75 behavior)
-      if (this.forceDisableOffsetForConstraintFrame) {
+      // Per-joint Bullet 2.75 constraint solver: disable m_useOffsetForConstraintFrame for
+      // joints whose name matches constraintSolverKeywords.
+      if (this.constraintSolverPattern && this.constraintSolverPattern.test(joint.name)) {
         let jointPtr: number | undefined
         if (typeof Ammo.getPointer === "function") {
           jointPtr = Ammo.getPointer(constraint)
@@ -373,7 +385,6 @@ export class Physics {
 
         if (jointPtr !== undefined && Ammo.HEAP8) {
           const heap8 = Ammo.HEAP8 as Uint8Array
-          // jointPtr + 1300 = m_useLinearReferenceFrameA, jointPtr + 1301 = m_useOffsetForConstraintFrame
           if (heap8[jointPtr + 1300] === (useLinearReferenceFrameA ? 1 : 0) && heap8[jointPtr + 1301] === 1) {
             heap8[jointPtr + 1301] = 0
           }
@@ -455,77 +466,6 @@ export class Physics {
       angle -= twoPi
     }
     return angle
-  }
-
-  // Reset physics state (reposition bodies, clear velocities)
-  // Following babylon-mmd pattern: initialize all rigid body positions from current bone poses
-  // Call this when starting a new animation to prevent physics instability from sudden pose changes
-  reset(boneWorldMatrices: Mat4[], boneInverseBindMatrices: Float32Array): void {
-    if (!this.ammoInitialized || !this.ammo || !this.dynamicsWorld) {
-      return
-    }
-
-    const boneCount = boneWorldMatrices.length
-    const Ammo = this.ammo
-
-    // Ensure body offsets are computed
-    if (!this.rigidbodiesInitialized) {
-      this.computeBodyOffsets(boneInverseBindMatrices, boneCount)
-      this.rigidbodiesInitialized = true
-    }
-
-    // Reposition ALL rigid bodies from current bone poses (like babylon-mmd initialize)
-    // This ensures all bodies are correctly positioned before physics starts
-    for (let i = 0; i < this.rigidbodies.length; i++) {
-      const rb = this.rigidbodies[i]
-      const ammoBody = this.ammoRigidbodies[i]
-      if (!ammoBody || rb.boneIndex < 0 || rb.boneIndex >= boneCount) continue
-
-      const boneIdx = rb.boneIndex
-
-      // Get bone world matrix
-      const boneWorldMat = boneWorldMatrices[boneIdx]
-
-      // Compute body world matrix: bodyWorld = boneWorld × bodyOffsetMatrix
-      // (like babylon-mmd: bodyWorldMatrix = bodyOffsetMatrix.multiplyToRef(bodyWorldMatrix))
-      const bodyOffsetMatrix = rb.bodyOffsetMatrix || rb.bodyOffsetMatrixInverse.inverse()
-      const bodyWorldMatrix = boneWorldMat.multiply(bodyOffsetMatrix)
-
-      const worldPos = bodyWorldMatrix.getPosition()
-      const worldRot = bodyWorldMatrix.toQuat()
-
-      // Set transform matrix
-      const transform = new Ammo.btTransform()
-      const pos = new Ammo.btVector3(worldPos.x, worldPos.y, worldPos.z)
-      const quat = new Ammo.btQuaternion(worldRot.x, worldRot.y, worldRot.z, worldRot.w)
-
-      transform.setOrigin(pos)
-      transform.setRotation(quat)
-
-      ammoBody.setWorldTransform(transform)
-      ammoBody.getMotionState().setWorldTransform(transform)
-
-      // Clear velocities for all rigidbodies
-      if (!this.zeroVector) {
-        this.zeroVector = new Ammo.btVector3(0, 0, 0)
-      }
-      ammoBody.setLinearVelocity(this.zeroVector)
-      ammoBody.setAngularVelocity(this.zeroVector)
-
-      // Explicitly activate dynamic rigidbodies after reset (wake them up)
-      // This is critical for dress pieces and other dynamic bodies to prevent teleporting
-      if (rb.type === RigidbodyType.Dynamic) {
-        ammoBody.activate(true) // Wake up the body
-      }
-
-      Ammo.destroy(pos)
-      Ammo.destroy(quat)
-    }
-
-    // Step simulation once to stabilize (like babylon-mmd)
-    if (this.dynamicsWorld.stepSimulation) {
-      this.dynamicsWorld.stepSimulation(0, 0, 0)
-    }
   }
 
   // Syncs bones to rigidbodies, simulates dynamics, solves constraints

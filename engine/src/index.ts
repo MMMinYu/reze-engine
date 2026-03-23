@@ -7,3 +7,4 @@ export {
   type BoneKeyframe,
   type MorphKeyframe,
 } from "./animation"
+export { Physics, type PhysicsOptions } from "./physics"

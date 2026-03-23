@@ -2,7 +2,7 @@ import { Camera } from "./camera"
 import { Mat4, Vec3 } from "./math"
 import { Model } from "./model"
 import { PmxLoader } from "./pmx-loader"
-import { Physics } from "./physics"
+import { Physics, type PhysicsOptions } from "./physics"
 
 export type RaycastCallback = (modelName: string, material: string | null, screenX: number, screenY: number) => void
 
@@ -15,11 +15,10 @@ export type EngineOptions = {
   cameraTarget?: Vec3
   cameraFov?: number
   onRaycast?: RaycastCallback
+  physicsOptions?: PhysicsOptions
 }
 
-export type RequiredEngineOptions = Required<Omit<EngineOptions, "onRaycast">> & Pick<EngineOptions, "onRaycast">
-
-export const DEFAULT_ENGINE_OPTIONS: RequiredEngineOptions = {
+export const DEFAULT_ENGINE_OPTIONS = {
   ambientColor: new Vec3(0.88, 0.88, 0.88),
   directionalLightIntensity: 0.24,
   minSpecularIntensity: 0.3,
@@ -28,6 +27,7 @@ export const DEFAULT_ENGINE_OPTIONS: RequiredEngineOptions = {
   cameraTarget: new Vec3(0, 12.5, 0),
   cameraFov: Math.PI / 4,
   onRaycast: undefined,
+  physicsOptions: { constraintSolverKeywords: ["胸"] },
 }
 
 export interface EngineStats {
@@ -141,6 +141,7 @@ export class Engine {
   private shadowVPLightZ = Number.NaN
 
   private onRaycast?: RaycastCallback
+  private physicsOptions: PhysicsOptions = DEFAULT_ENGINE_OPTIONS.physicsOptions
   private lastTouchTime = 0
   private readonly DOUBLE_TAP_DELAY = 300
   // GPU picking
@@ -183,7 +184,7 @@ export class Engine {
   constructor(canvas: HTMLCanvasElement, options?: EngineOptions) {
     this.canvas = canvas
     if (options) {
-      this.ambientColor = options.ambientColor ?? DEFAULT_ENGINE_OPTIONS.ambientColor!
+      this.ambientColor = options.ambientColor ?? DEFAULT_ENGINE_OPTIONS.ambientColor
       this.directionalLightIntensity =
         options.directionalLightIntensity ?? DEFAULT_ENGINE_OPTIONS.directionalLightIntensity
       this.minSpecularIntensity = options.minSpecularIntensity ?? DEFAULT_ENGINE_OPTIONS.minSpecularIntensity
@@ -192,6 +193,7 @@ export class Engine {
       this.cameraTarget = options.cameraTarget ?? DEFAULT_ENGINE_OPTIONS.cameraTarget
       this.cameraFov = options.cameraFov ?? DEFAULT_ENGINE_OPTIONS.cameraFov
       this.onRaycast = options.onRaycast
+      this.physicsOptions = options.physicsOptions ?? DEFAULT_ENGINE_OPTIONS.physicsOptions
     }
   }
 
@@ -1188,14 +1190,6 @@ export class Engine {
     return this.physicsEnabled
   }
 
-  public resetPhysics(): void {
-    this.forEachInstance((inst) => {
-      if (!inst.physics) return
-      inst.model.computeWorldMatrices()
-      inst.physics.reset(inst.model.getWorldMatrices(), inst.model.getBoneInverseBindMatrices())
-    })
-  }
-
   private forEachInstance(fn: (inst: ModelInstance) => void): void {
     for (const inst of this.modelInstances.values()) fn(inst)
   }
@@ -1278,7 +1272,7 @@ export class Engine {
     this.device.queue.writeBuffer(indexBuffer, 0, indices)
 
     const rbs = model.getRigidbodies()
-    const physics = rbs.length > 0 ? new Physics(rbs, model.getJoints()) : null
+    const physics = rbs.length > 0 ? new Physics(rbs, model.getJoints(), this.physicsOptions) : null
 
     const shadowBindGroup = this.device.createBindGroup({
       label: `${name}: shadow bind`,
