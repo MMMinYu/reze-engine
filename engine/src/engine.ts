@@ -590,16 +590,12 @@ export class Engine {
           let st = material.pcfTexel;
           let compareZ = ndc.z - 0.0035;
           var vis = 0.0;
-          vis += textureSampleCompare(shadowMap, shadowSampler, suv_c + vec2f(-st, -st), compareZ);
-          vis += textureSampleCompare(shadowMap, shadowSampler, suv_c + vec2f(0.0, -st), compareZ);
-          vis += textureSampleCompare(shadowMap, shadowSampler, suv_c + vec2f(st, -st), compareZ);
-          vis += textureSampleCompare(shadowMap, shadowSampler, suv_c + vec2f(-st, 0.0), compareZ);
-          vis += textureSampleCompare(shadowMap, shadowSampler, suv_c, compareZ);
-          vis += textureSampleCompare(shadowMap, shadowSampler, suv_c + vec2f(st, 0.0), compareZ);
-          vis += textureSampleCompare(shadowMap, shadowSampler, suv_c + vec2f(-st, st), compareZ);
-          vis += textureSampleCompare(shadowMap, shadowSampler, suv_c + vec2f(0.0, st), compareZ);
-          vis += textureSampleCompare(shadowMap, shadowSampler, suv_c + vec2f(st, st), compareZ);
-          vis *= 0.1111111;
+          for (var y = -2; y <= 2; y++) {
+            for (var x = -2; x <= 2; x++) {
+              vis += textureSampleCompare(shadowMap, shadowSampler, suv_c + vec2f(f32(x), f32(y)) * st, compareZ);
+            }
+          }
+          vis *= 0.04;
           let sun = light.ambientColor.xyz + light.lights[0].color.xyz * light.lights[0].color.w * max(dot(n, -light.lights[0].direction.xyz), 0.0);
           let dark = (1.0 - vis) * material.shadowStrength;
           let lit = material.diffuseColor * sun * (1.0 - dark * 0.65);
@@ -702,7 +698,7 @@ export class Engine {
           // Screen-stable edgeline: extrusion ∝ camera distance (same idea as MMD viewers / babylon-mmd-style scaling)
           let camDist = max(length(camera.viewPos - worldPos), 0.25);
           let refDist = 30.0;
-          let edgeScale = 0.03;
+          let edgeScale = 0.032;
           let expandedPos = worldPos + worldNormal * material.edgeSize * edgeScale * (camDist / refDist);
           output.position = camera.projection * camera.view * vec4f(expandedPos, 1.0);
           return output;
@@ -1416,7 +1412,7 @@ export class Engine {
     gb[3] = fadeStart
     gb[4] = fadeEnd
     gb[5] = shadowStrength
-    gb[6] = 1.2 / shadowMapSize
+    gb[6] = 1 / shadowMapSize
     gb[7] = 0
     this.groundShadowMaterialBuffer = this.device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
     this.device.queue.writeBuffer(this.groundShadowMaterialBuffer, 0, gb)
