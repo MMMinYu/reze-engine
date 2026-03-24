@@ -566,7 +566,12 @@ export class Engine {
         struct CameraUniforms { view: mat4x4f, projection: mat4x4f, viewPos: vec3f, _p: f32, };
         struct Light { direction: vec4f, color: vec4f, };
         struct LightUniforms { ambientColor: vec4f, lights: array<Light, 4>, };
-        struct GroundShadowMat { diffuseColor: vec3f, fadeStart: f32, fadeEnd: f32, shadowStrength: f32, pcfTexel: f32, _y: f32, };
+        struct GroundShadowMat {
+          diffuseColor: vec3f, fadeStart: f32,
+          fadeEnd: f32, shadowStrength: f32, pcfTexel: f32, gridSpacing: f32,
+          gridLineWidth: f32, gridLineOpacity: f32, noiseStrength: f32, _pad: f32,
+          gridLineColor: vec3f, _pad2: f32,
+        };
         struct LightVP { viewProj: mat4x4f, };
         @group(0) @binding(0) var<uniform> camera: CameraUniforms;
         @group(0) @binding(1) var<uniform> light: LightUniforms;
@@ -574,6 +579,32 @@ export class Engine {
         @group(0) @binding(3) var shadowSampler: sampler_comparison;
         @group(0) @binding(4) var<uniform> material: GroundShadowMat;
         @group(0) @binding(5) var<uniform> lightVP: LightVP;
+
+        // Hash-based noise for frosted/matte surface
+        fn hash2(p: vec2f) -> f32 {
+          var p3 = fract(vec3f(p.x, p.y, p.x) * 0.1031);
+          p3 += dot(p3, vec3f(p3.y + 33.33, p3.z + 33.33, p3.x + 33.33));
+          return fract((p3.x + p3.y) * p3.z);
+        }
+        fn valueNoise(p: vec2f) -> f32 {
+          let i = floor(p);
+          let f = fract(p);
+          let u = f * f * (3.0 - 2.0 * f);
+          return mix(mix(hash2(i), hash2(i + vec2f(1.0, 0.0)), u.x),
+                     mix(hash2(i + vec2f(0.0, 1.0)), hash2(i + vec2f(1.0, 1.0)), u.x), u.y);
+        }
+        fn fbmNoise(p: vec2f) -> f32 {
+          var v = 0.0;
+          var a = 0.5;
+          var pp = p;
+          for (var i = 0; i < 4; i++) {
+            v += a * valueNoise(pp);
+            pp *= 2.0;
+            a *= 0.5;
+          }
+          return v;
+        }
+
         struct VO { @builtin(position) position: vec4f, @location(0) worldPos: vec3f, @location(1) normal: vec3f, };
         @vertex fn vs(@location(0) position: vec3f, @location(1) normal: vec3f, @location(2) uv: vec2f) -> VO {
           var o: VO; o.worldPos = position; o.normal = normal;
@@ -583,6 +614,8 @@ export class Engine {
           let n = normalize(i.normal);
           let centerDist = length(i.worldPos.xz);
           let edgeFade = 1.0 - smoothstep(0.0, 1.0, clamp((centerDist - material.fadeStart) / max(material.fadeEnd - material.fadeStart, 0.001), 0.0, 1.0));
+
+          // Shadow sampling
           let lclip = lightVP.viewProj * vec4f(i.worldPos, 1.0);
           let ndc = lclip.xyz / max(lclip.w, 1e-6);
           let suv = vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
@@ -596,10 +629,26 @@ export class Engine {
             }
           }
           vis *= 0.04;
+
+          // Frosted/matte micro-texture (磨砂)
+          let noiseVal = fbmNoise(i.worldPos.xz * 3.0);
+          let noiseTint = 1.0 + (noiseVal - 0.5) * material.noiseStrength;
+
+          // Grid lines — anti-aliased via screen-space derivatives
+          let gp = i.worldPos.xz / material.gridSpacing;
+          let gridFrac = abs(fract(gp - 0.5) - 0.5);
+          let gridDeriv = fwidth(gp);
+          let halfLine = material.gridLineWidth * 0.5;
+          let gridLine = 1.0 - min(
+            smoothstep(halfLine - gridDeriv.x, halfLine + gridDeriv.x, gridFrac.x),
+            smoothstep(halfLine - gridDeriv.y, halfLine + gridDeriv.y, gridFrac.y)
+          );
           let sun = light.ambientColor.xyz + light.lights[0].color.xyz * light.lights[0].color.w * max(dot(n, -light.lights[0].direction.xyz), 0.0);
           let dark = (1.0 - vis) * material.shadowStrength;
-          let lit = material.diffuseColor * sun * (1.0 - dark * 0.65);
-          return vec4f(lit * edgeFade, edgeFade);
+          var baseColor = material.diffuseColor * sun * (1.0 - dark * 0.65);
+          baseColor *= noiseTint;
+          let finalColor = mix(baseColor, material.gridLineColor, gridLine * material.gridLineOpacity * edgeFade);
+          return vec4f(finalColor * edgeFade, edgeFade);
         }
       `,
     })
@@ -1027,19 +1076,29 @@ export class Engine {
     fadeEnd?: number
     shadowMapSize?: number
     shadowStrength?: number
+    gridSpacing?: number
+    gridLineWidth?: number
+    gridLineOpacity?: number
+    gridLineColor?: Vec3
+    noiseStrength?: number
   }): void {
     const opts = {
-      width: 100,
-      height: 100,
-      diffuseColor: new Vec3(1, 1, 1),
-      fadeStart: 5.0,
-      fadeEnd: 60.0,
+      width: 160,
+      height: 160,
+      diffuseColor: new Vec3(0.8, 0.1, 1.0),
+      fadeStart: 10.0,
+      fadeEnd: 80.0,
       shadowMapSize: 4096,
       shadowStrength: 1.0,
+      gridSpacing: 4.2,
+      gridLineWidth: 0.012,
+      gridLineOpacity: 0.4,
+      gridLineColor: new Vec3(0.85, 0.85, 0.85),
+      noiseStrength: 0.05,
       ...options,
     }
     this.createGroundGeometry(opts.width, opts.height)
-    this.createShadowGroundResources(opts.shadowMapSize, opts.diffuseColor, opts.fadeStart, opts.fadeEnd, opts.shadowStrength)
+    this.createShadowGroundResources(opts)
     this.hasGround = true
     this.groundDrawCall = {
       type: "ground",
@@ -1391,13 +1450,19 @@ export class Engine {
     this.device.queue.writeBuffer(this.groundIndexBuffer, 0, indices)
   }
 
-  private createShadowGroundResources(
-    shadowMapSize: number,
-    diffuseColor: Vec3,
-    fadeStart: number,
-    fadeEnd: number,
+  private createShadowGroundResources(opts: {
+    shadowMapSize: number
+    diffuseColor: Vec3
+    fadeStart: number
+    fadeEnd: number
     shadowStrength: number
-  ) {
+    gridSpacing: number
+    gridLineWidth: number
+    gridLineOpacity: number
+    gridLineColor: Vec3
+    noiseStrength: number
+  }) {
+    const { shadowMapSize, diffuseColor, fadeStart, fadeEnd, shadowStrength, gridSpacing, gridLineWidth, gridLineOpacity, gridLineColor, noiseStrength } = opts
     this.shadowMapTexture = this.device.createTexture({
       label: "shadow map",
       size: [shadowMapSize, shadowMapSize],
@@ -1405,16 +1470,13 @@ export class Engine {
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
     })
     this.shadowMapDepthView = this.shadowMapTexture.createView()
-    const gb = new Float32Array(8)
-    gb[0] = diffuseColor.x
-    gb[1] = diffuseColor.y
-    gb[2] = diffuseColor.z
-    gb[3] = fadeStart
-    gb[4] = fadeEnd
-    gb[5] = shadowStrength
-    gb[6] = 1 / shadowMapSize
-    gb[7] = 0
-    this.groundShadowMaterialBuffer = this.device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
+    // Layout: diffuseColor(3f) fadeStart(1f) | fadeEnd(1f) shadowStrength(1f) pcfTexel(1f) gridSpacing(1f) | gridLineWidth(1f) gridOpacity(1f) noiseStrength(1f) _pad(1f) | gridColor(3f) _pad2(1f)
+    const gb = new Float32Array(16)
+    gb[0] = diffuseColor.x; gb[1] = diffuseColor.y; gb[2] = diffuseColor.z; gb[3] = fadeStart
+    gb[4] = fadeEnd; gb[5] = shadowStrength; gb[6] = 1 / shadowMapSize; gb[7] = gridSpacing
+    gb[8] = gridLineWidth; gb[9] = gridLineOpacity; gb[10] = noiseStrength; gb[11] = 0
+    gb[12] = gridLineColor.x; gb[13] = gridLineColor.y; gb[14] = gridLineColor.z; gb[15] = 0
+    this.groundShadowMaterialBuffer = this.device.createBuffer({ size: gb.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
     this.device.queue.writeBuffer(this.groundShadowMaterialBuffer, 0, gb)
     this.groundShadowBindGroup = this.device.createBindGroup({
       label: "ground shadow bind",

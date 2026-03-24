@@ -194,7 +194,7 @@ export default function Home() {
       // Initialize engine
       try {
         const engine = new Engine(canvasRef.current, {
-          ambientColor: new Vec3(0.88, 0.92, 0.99),
+          ambientColor: new Vec3(0.9, 0.9, 0.99),
           cameraDistance: 31.5,
           cameraTarget: new Vec3(0, 11.5, 0),
           onRaycast: (modelName: string, material: string | null, screenX: number, screenY: number) => {
@@ -213,13 +213,7 @@ export default function Home() {
 
         modelRef.current = m1
 
-        engine.addGround({
-          width: 160,
-          height: 160,
-          fadeStart: 10.0,
-          fadeEnd: 80.0,
-          diffuseColor: new Vec3(0.8, 0.1, 1.0),
-        })
+        engine.addGround()
 
         setLoading(false)
 

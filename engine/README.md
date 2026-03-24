@@ -14,7 +14,7 @@ npm install reze-engine
 - VMD animation with IK solver and Bullet physics
 - Orbit camera with bone-follow mode
 - GPU picking (double-click/tap)
-- Ground plane with PCF shadow mapping
+- Ground plane with PCF shadow mapping, grid lines, and frosted texture
 - Multi-model support
 
 ## Quick Start
@@ -107,6 +107,25 @@ engine.runRenderLoop()
 `shadowLightDirection` — direction of the shadow-only light, independent of the visible directional light. Default `(0.12, -1, 0.16)` casts a near-top-down shadow with a slight offset so extended limbs still project visible shadows.
 
 `constraintSolverKeywords` — joints whose name contains any keyword use the Bullet 2.75 constraint solver; all others keep the stable Ammo 2.82+ default. See [babylon-mmd: Fix Constraint Behavior](https://noname0310.github.io/babylon-mmd/docs/reference/runtime/apply-physics-to-mmd-models/#fix-constraint-behavior) for details.
+
+### Ground Options
+
+```javascript
+engine.addGround({
+  width: 100,            // ground plane width
+  height: 100,           // ground plane depth
+  diffuseColor: Vec3,    // base color (default: 0.8, 0.1, 1.0)
+  fadeStart: 5.0,        // distance where edge fade begins
+  fadeEnd: 60.0,         // distance where ground fully fades out
+  shadowMapSize: 4096,   // shadow map resolution
+  shadowStrength: 1.0,   // shadow darkness
+  gridSpacing: 5.0,      // world-space distance between grid lines
+  gridLineWidth: 0.012,  // thickness of grid lines
+  gridLineOpacity: 0.4,  // grid line visibility (0–1)
+  gridLineColor: Vec3,   // grid line color (default: 0.8, 0.8, 0.8)
+  noiseStrength: 0.08,   // frosted/matte micro-texture intensity
+})
+```
 
 ## Projects Using This Engine
 
