@@ -81,8 +81,7 @@ engine.dispose()
 await model.loadAnimation(name, url)
 model.loadAnimation(name, clip)
 model.show(name)
-model.play() // resume paused playback (no reset)
-model.play(name) // resets bones/morphs, then plays (priority options optional)
+model.play(name)
 model.play(name, { priority: 8 }) // higher number = higher priority (0 default/lowest)
 model.play(name, { loop: true }) // repeat until stop/pause or another play
 model.pause()
@@ -99,7 +98,17 @@ model.resetAllMorphs()
 model.getBoneWorldPosition(name)
 ```
 
-`AnimationClip` is frame-based: `frameCount` is the last keyframe frame index, keyframes use `frame`. Playback uses fixed `FPS` (30). `getAnimationProgress()` reports `current` and `duration` in seconds (not frames). Use `model.play(name, { loop: true })` to loop; looping is not stored on the clip.
+#### Animation data
+
+`AnimationClip` holds keyframes only: bone/morph tracks keyed by `frame`, and `frameCount` (last keyframe index). Time advances at fixed `FPS` (see package export `FPS`, default 30).
+
+#### Playback
+
+Call `model.play(name, options?)` to start or switch motion. `loop: true` makes the playhead wrap at the end of the clip until you stop, pause, or call `play` with something else. `priority` chooses which request wins when several clips compete.
+
+#### Progress
+
+`getAnimationProgress()` reports `current` and `duration` in seconds, plus `playing`, `paused`, `looping`, and related fields.
 
 ### Engine Options
 
