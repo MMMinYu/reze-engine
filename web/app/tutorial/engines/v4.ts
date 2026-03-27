@@ -81,7 +81,7 @@ export class EngineV4 {
     this.canvas = canvas
   }
 
-  public async init() {
+  async init() {
     this.loadModel()
     await this.initDevice()
     this.initContext()
@@ -658,7 +658,7 @@ export class EngineV4 {
     this.device.queue.submit([encoder.finish()])
   }
 
-  public rotateBone(boneName: string, rotation: Quat) {
+  rotateBone(boneName: string, rotation: Quat) {
     const index = this.model.bones.findIndex((b) => b.name === boneName)
     if (index < 0) return
 
@@ -667,7 +667,7 @@ export class EngineV4 {
     this.evaluatePose() // This now handles GPU upload and compute
   }
 
-  public render() {
+  render() {
     // Update render target views
     ;(this.renderPassDescriptor.colorAttachments as GPURenderPassColorAttachment[])[0].view = this.context
       .getCurrentTexture()
@@ -701,7 +701,7 @@ export class EngineV4 {
     this.device.queue.submit([encoder.finish()])
   }
 
-  public runRenderLoop() {
+  runRenderLoop() {
     const loop = () => {
       this.render()
       this.animationFrameId = requestAnimationFrame(loop)
@@ -710,7 +710,7 @@ export class EngineV4 {
     this.animationFrameId = requestAnimationFrame(loop)
   }
 
-  public dispose() {
+  dispose() {
     if (this.animationFrameId !== null) {
       cancelAnimationFrame(this.animationFrameId)
       this.animationFrameId = null

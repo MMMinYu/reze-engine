@@ -71,19 +71,23 @@ engine.runRenderLoop()
 | Method | Description |
 |--------|-------------|
 | `model.loadAnimation(name, url)` | Load VMD animation |
-| `model.show(name)` | Set pose at time 0 |
-| `model.play(name?)` | Play animation (queued if busy) |
+| `model.loadAnimation(name, clip)` | Load/replace animation clip directly |
+| `model.show(name)` | Set pose at time 0 (resets bones and morphs first) |
+| `model.play(name?)` | Play animation (queued if busy; named play resets bones/morphs first) |
+| `model.play(name, { priority?, loop? })` | Priority-aware play; `loop` wraps at end (`0` default/lowest priority) |
 | `model.pause()` | Pause playback |
 | `model.stop()` | Stop playback |
 | `model.seek(time)` | Seek to time |
-| `model.getAnimationProgress()` | `{ current, duration, percentage, animationName }` |
-| `model.getAnimationState()` | Access animation controller |
+| `model.getAnimationProgress()` | `{ current, duration, percentage, animationName, looping, playing, paused }` — `current`/`duration` are seconds |
+| `model.getAnimationClip(name)` | Get loaded clip by name |
 | `model.rotateBones(rotations, ms?)` | Tween bone rotations |
 | `model.moveBones(translations, ms?)` | Tween bone translations |
 | `model.setMorphWeight(name, weight, ms?)` | Tween morph weight |
 | `model.resetAllBones()` | Reset to bind pose |
 | `model.resetAllMorphs()` | Reset all morph weights |
 | `model.getBoneWorldPosition(name)` | World position of bone |
+
+`AnimationClip` is frame-based: `frameCount` is the last keyframe frame index, keyframes store `frame`. Engine playback uses fixed 30 FPS. Looping is controlled via `play(name, { loop: true })`, not on the clip.
 
 ### Engine Options
 

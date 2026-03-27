@@ -13,7 +13,7 @@ export class EngineV0 {
     this.canvas = canvas
   }
 
-  public async init() {
+  async init() {
     await this.initDevice()
     this.initContext()
     this.initShader()
@@ -117,7 +117,7 @@ export class EngineV0 {
     })
   }
 
-  public render() {
+  render() {
     ;(this.renderPassDescriptor.colorAttachments as GPURenderPassColorAttachment[])[0].view = this.context
       .getCurrentTexture()
       .createView()

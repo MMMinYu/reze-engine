@@ -81,7 +81,7 @@ interface ModelInstance {
 export class Engine {
   private static instance: Engine | null = null
 
-  public static getInstance(): Engine {
+  static getInstance(): Engine {
     if (!Engine.instance) {
       throw new Error("Engine not ready: create Engine, await init(), then load models via engine.loadModel().")
     }
@@ -199,7 +199,7 @@ export class Engine {
   }
 
   // Step 1: Get WebGPU device and context
-  public async init() {
+  async init() {
     const adapter = await navigator.gpu?.requestAdapter()
     const device = await adapter?.requestDevice()
     if (!device) {
@@ -747,7 +747,7 @@ export class Engine {
           // Screen-stable edgeline: extrusion ∝ camera distance (same idea as MMD viewers / babylon-mmd-style scaling)
           let camDist = max(length(camera.viewPos - worldPos), 0.25);
           let refDist = 30.0;
-          let edgeScale = 0.032;
+          let edgeScale = 0.025;
           let expandedPos = worldPos + worldNormal * material.edgeSize * edgeScale * (camDist / refDist);
           output.position = camera.projection * camera.view * vec4f(expandedPos, 1.0);
           return output;
@@ -972,10 +972,10 @@ export class Engine {
   }
 
   /** Set static camera look-at / orbit center. Clears any model follow binding. */
-  public setCameraTarget(v: Vec3): void
+  setCameraTarget(v: Vec3): void
   /** Bind camera orbit center to a model's bone (Souls-style follow cam). Pass null to unbind. */
-  public setCameraTarget(model: Model | null, boneName: string, offset?: Vec3): void
-  public setCameraTarget(modelOrVec: Model | Vec3 | null, boneName?: string, offset?: Vec3): void {
+  setCameraTarget(model: Model | null, boneName: string, offset?: Vec3): void
+  setCameraTarget(modelOrVec: Model | Vec3 | null, boneName?: string, offset?: Vec3): void {
     if (modelOrVec === null) {
       this.cameraTargetModel = null
       return
@@ -995,7 +995,7 @@ export class Engine {
   }
 
   /** Souls-style follow cam: orbit center tracks a model bone each frame. Shorthand for setCameraTarget(model, boneName, offset). */
-  public setCameraFollow(model: Model | null, boneName?: string, offset?: Vec3): void {
+  setCameraFollow(model: Model | null, boneName?: string, offset?: Vec3): void {
     if (model === null) {
       this.cameraTargetModel = null
       return
@@ -1007,12 +1007,12 @@ export class Engine {
     this.cameraTargetOffset.z = offset?.z ?? 0
   }
 
-  public getCameraDistance(): number { return this.camera.radius }
-  public setCameraDistance(d: number): void { this.camera.radius = d }
-  public getCameraAlpha(): number { return this.camera.alpha }
-  public setCameraAlpha(a: number): void { this.camera.alpha = a }
-  public getCameraBeta(): number { return this.camera.beta }
-  public setCameraBeta(b: number): void { this.camera.beta = b }
+  getCameraDistance(): number { return this.camera.radius }
+  setCameraDistance(d: number): void { this.camera.radius = d }
+  getCameraAlpha(): number { return this.camera.alpha }
+  setCameraAlpha(a: number): void { this.camera.alpha = a }
+  getCameraBeta(): number { return this.camera.beta }
+  setCameraBeta(b: number): void { this.camera.beta = b }
 
   // Step 5: Create lighting buffers
   private setupLighting() {
@@ -1039,16 +1039,6 @@ export class Engine {
     this.updateLightBuffer()
   }
 
-  public clearLights() {
-    this.lightCount = 0
-    // Clear all light data by setting intensity to 0
-    for (let i = 0; i < 4; i++) {
-      const baseIndex = 4 + i * 8
-      this.lightData[baseIndex + 7] = 0 // color.w / intensity
-    }
-    this.updateLightBuffer()
-  }
-
   private addLight(direction: Vec3, color: Vec3, intensity: number = 1.0): boolean {
     if (this.lightCount >= 4) return false
 
@@ -1068,7 +1058,7 @@ export class Engine {
     return true
   }
 
-  public addGround(options?: {
+  addGround(options?: {
     width?: number
     height?: number
     diffuseColor?: Vec3
@@ -1113,11 +1103,11 @@ export class Engine {
     this.device.queue.writeBuffer(this.lightUniformBuffer, 0, this.lightData)
   }
 
-  public getStats(): EngineStats {
+  getStats(): EngineStats {
     return { ...this.stats }
   }
 
-  public runRenderLoop(callback?: () => void) {
+  runRenderLoop(callback?: () => void) {
     this.renderLoopCallback = callback || null
 
     const loop = () => {
@@ -1133,7 +1123,7 @@ export class Engine {
     this.animationFrameId = requestAnimationFrame(loop)
   }
 
-  public stopRenderLoop() {
+  stopRenderLoop() {
     if (this.animationFrameId !== null) {
       cancelAnimationFrame(this.animationFrameId)
       this.animationFrameId = null
@@ -1141,7 +1131,7 @@ export class Engine {
     this.renderLoopCallback = null
   }
 
-  public dispose() {
+  dispose() {
     this.stopRenderLoop()
     this.forEachInstance((inst) => inst.model.stopAnimation())
     if (Engine.instance === this) Engine.instance = null
@@ -1159,9 +1149,9 @@ export class Engine {
     }
   }
 
-  public async loadModel(path: string): Promise<Model>
-  public async loadModel(name: string, path: string): Promise<Model>
-  public async loadModel(nameOrPath: string, path?: string): Promise<Model> {
+  async loadModel(path: string): Promise<Model>
+  async loadModel(name: string, path: string): Promise<Model>
+  async loadModel(nameOrPath: string, path?: string): Promise<Model> {
     const pmxPath = path === undefined ? nameOrPath : path
     const name = path === undefined ? "model_" + (this._nextDefaultModelId++) : nameOrPath
     const model = await PmxLoader.load(pmxPath)
@@ -1170,7 +1160,7 @@ export class Engine {
     return model
   }
 
-  public async addModel(model: Model, pmxPath: string, name?: string): Promise<string> {
+  async addModel(model: Model, pmxPath: string, name?: string): Promise<string> {
     const requested = name ?? model.name
     let key = requested
     let n = 1
@@ -1184,19 +1174,19 @@ export class Engine {
     return key
   }
 
-  public removeModel(name: string): void {
+  removeModel(name: string): void {
     this.modelInstances.delete(name)
   }
 
-  public getModelNames(): string[] {
+  getModelNames(): string[] {
     return Array.from(this.modelInstances.keys())
   }
 
-  public getModel(name: string): Model | null {
+  getModel(name: string): Model | null {
     return this.modelInstances.get(name)?.model ?? null
   }
 
-  public markVertexBufferDirty(modelNameOrModel?: string | Model): void {
+  markVertexBufferDirty(modelNameOrModel?: string | Model): void {
     if (modelNameOrModel === undefined) return
     if (typeof modelNameOrModel === "string") {
       const inst = this.modelInstances.get(modelNameOrModel)
@@ -1211,38 +1201,38 @@ export class Engine {
     }
   }
 
-  public setMaterialVisible(modelName: string, materialName: string, visible: boolean): void {
+  setMaterialVisible(modelName: string, materialName: string, visible: boolean): void {
     const inst = this.modelInstances.get(modelName)
     if (!inst) return
     if (visible) inst.hiddenMaterials.delete(materialName)
     else inst.hiddenMaterials.add(materialName)
   }
 
-  public toggleMaterialVisible(modelName: string, materialName: string): void {
+  toggleMaterialVisible(modelName: string, materialName: string): void {
     const inst = this.modelInstances.get(modelName)
     if (!inst) return
     if (inst.hiddenMaterials.has(materialName)) inst.hiddenMaterials.delete(materialName)
     else inst.hiddenMaterials.add(materialName)
   }
 
-  public isMaterialVisible(modelName: string, materialName: string): boolean {
+  isMaterialVisible(modelName: string, materialName: string): boolean {
     const inst = this.modelInstances.get(modelName)
     return inst ? !inst.hiddenMaterials.has(materialName) : false
   }
 
-  public setIKEnabled(enabled: boolean): void {
+  setIKEnabled(enabled: boolean): void {
     this.ikEnabled = enabled
   }
 
-  public getIKEnabled(): boolean {
+  getIKEnabled(): boolean {
     return this.ikEnabled
   }
 
-  public setPhysicsEnabled(enabled: boolean): void {
+  setPhysicsEnabled(enabled: boolean): void {
     this.physicsEnabled = enabled
   }
 
-  public getPhysicsEnabled(): boolean {
+  getPhysicsEnabled(): boolean {
     return this.physicsEnabled
   }
 
@@ -1803,7 +1793,7 @@ export class Engine {
     this.onRaycast(hitModel, hitMaterial, screenX, screenY)
   }
 
-  public render() {
+  render() {
     if (!this.multisampleTexture || !this.camera || !this.device) return
 
     const currentTime = performance.now()

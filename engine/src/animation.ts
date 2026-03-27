@@ -18,52 +18,82 @@ export interface BoneKeyframe {
   rotation: Quat
   translation: Vec3
   interpolation: BoneInterpolation
-  time: number
 }
 
 export interface MorphKeyframe {
   morphName: string
   frame: number
   weight: number
-  time: number
 }
 
 export interface AnimationClip {
   boneTracks: Map<string, BoneKeyframe[]>
   morphTracks: Map<string, MorphKeyframe[]>
-  duration: number
-  loop?: boolean
+  frameCount: number // last keyframe frame index
 }
 
-// Non-interruptible playback; play(name) while playing queues one next.
+export interface AnimationPlayOptions {
+  priority?: number // Higher number = higher priority. Default: 0.
+  loop?: boolean // When true, timeline wraps at end. Default: false.
+}
+
+/** Wall-clock playback progress; `current`/`duration` are seconds (clip span uses `AnimationClip.frameCount`, not `duration`). */
+export interface AnimationProgress {
+  animationName: string | null
+  current: number
+  duration: number
+  percentage: number
+  looping: boolean
+  /** True while the timeline is advancing (not idle at end, not paused). */
+  playing: boolean
+  paused: boolean
+}
+
+export const FPS = 30
+
+interface QueuedAnimationRequest {
+  name: string
+  priority: number
+  loop: boolean
+}
+
+// Priority-aware playback: higher priority preempts, otherwise latest request is queued.
 export class AnimationState {
   private animations = new Map<string, AnimationClip>()
   private currentAnimationName: string | null = null
-  private currentTime = 0
+  private currentFrame = 0
+  private currentPriority = 0
+  private currentLoop = false
   private isPlaying = false
   private isPaused = false
-  private nextAnimationName: string | null = null
+  private nextAnimation: QueuedAnimationRequest | null = null
   private onEnd: ((animationName: string) => void) | null = null
 
   loadAnimation(name: string, clip: AnimationClip): void {
-    this.animations.set(name, clip)
+    this.animations.set(name, {
+      boneTracks: clip.boneTracks,
+      morphTracks: clip.morphTracks,
+      frameCount: clip.frameCount,
+    })
   }
 
   removeAnimation(name: string): void {
     this.animations.delete(name)
     if (this.currentAnimationName === name) {
       this.currentAnimationName = null
-      this.currentTime = 0
+      this.currentFrame = 0
+      this.currentPriority = 0
+      this.currentLoop = false
       this.isPlaying = false
-      this.nextAnimationName = this.nextAnimationName === name ? null : this.nextAnimationName
-    } else if (this.nextAnimationName === name) {
-      this.nextAnimationName = null
+      this.nextAnimation = this.nextAnimation?.name === name ? null : this.nextAnimation
+    } else if (this.nextAnimation?.name === name) {
+      this.nextAnimation = null
     }
   }
 
-  play(name: string): boolean
+  play(name: string, options?: AnimationPlayOptions): boolean
   play(): void
-  play(name?: string): boolean | void {
+  play(name?: string, options?: AnimationPlayOptions): boolean | void {
     if (name === undefined) {
       if (this.currentAnimationName && this.animations.has(this.currentAnimationName)) {
         this.isPaused = false
@@ -72,15 +102,39 @@ export class AnimationState {
       return
     }
     if (!this.animations.has(name)) return false
+    const priority = options?.priority ?? 0
+    const loop = options?.loop ?? false
+
+    if (this.currentAnimationName === name) {
+      this.currentFrame = 0
+      this.currentPriority = priority
+      this.currentLoop = loop
+      this.isPlaying = true
+      this.isPaused = false
+      return true
+    }
+
     if (this.isPlaying && !this.isPaused) {
-      this.nextAnimationName = name
+      if (priority > this.currentPriority) {
+        this.currentAnimationName = name
+        this.currentFrame = 0
+        this.currentPriority = priority
+        this.currentLoop = loop
+        this.isPlaying = true
+        this.isPaused = false
+        this.nextAnimation = null
+        return true
+      }
+      this.nextAnimation = { name, priority, loop }
       return true
     }
     this.currentAnimationName = name
-    this.currentTime = 0
+    this.currentFrame = 0
+    this.currentPriority = priority
+    this.currentLoop = loop
     this.isPlaying = true
     this.isPaused = false
-    this.nextAnimationName = null
+    this.nextAnimation = null
     return true
   }
 
@@ -91,22 +145,30 @@ export class AnimationState {
     const clip = this.animations.get(this.currentAnimationName)
     if (!clip) return { ended: false, animationName: this.currentAnimationName }
 
-    this.currentTime += deltaTime
-    const duration = clip.duration
+    const frameCount = clip.frameCount
+    if (frameCount <= 0 || !Number.isFinite(frameCount)) {
+      return { ended: false, animationName: this.currentAnimationName }
+    }
 
-    if (this.currentTime >= duration) {
-      this.currentTime = duration
-      if (clip.loop) {
-        this.currentTime = 0
+    this.currentFrame += deltaTime * FPS
+
+    if (this.currentFrame >= frameCount) {
+      if (this.currentLoop) {
+        while (this.currentFrame >= frameCount) {
+          this.currentFrame -= frameCount
+        }
         return { ended: false, animationName: this.currentAnimationName }
       }
+      this.currentFrame = frameCount
       const finishedName = this.currentAnimationName
       this.onEnd?.(finishedName)
-      if (this.nextAnimationName !== null) {
-        const next = this.nextAnimationName
-        this.nextAnimationName = null
-        this.currentAnimationName = next
-        this.currentTime = 0
+      if (this.nextAnimation !== null) {
+        const next = this.nextAnimation
+        this.nextAnimation = null
+        this.currentAnimationName = next.name
+        this.currentFrame = 0
+        this.currentPriority = next.priority
+        this.currentLoop = next.loop
         this.isPlaying = true
         this.isPaused = false
         return { ended: true, animationName: finishedName }
@@ -124,18 +186,26 @@ export class AnimationState {
   stop(): void {
     this.isPlaying = false
     this.isPaused = false
-    this.currentTime = 0
-    this.nextAnimationName = null
+    this.currentFrame = 0
+    this.currentPriority = 0
+    this.currentLoop = false
+    this.nextAnimation = null
   }
 
-  seek(time: number): void {
+  // Seek by absolute timeline seconds, not frame index.
+  seek(seconds: number): void {
     const clip = this.getCurrentClip()
-    if (!clip) return
-    this.currentTime = Math.max(0, Math.min(time, clip.duration))
+    if (!clip || clip.frameCount <= 0 || !Number.isFinite(clip.frameCount)) return
+    const targetFrame = seconds * FPS
+    this.currentFrame = Math.max(0, Math.min(targetFrame, clip.frameCount))
   }
 
   getCurrentClip(): AnimationClip | null {
     return this.currentAnimationName !== null ? this.animations.get(this.currentAnimationName) ?? null : null
+  }
+
+  getAnimationClip(name: string): AnimationClip | null {
+    return this.animations.get(name) ?? null
   }
 
   getCurrentAnimation(): string | null {
@@ -143,23 +213,35 @@ export class AnimationState {
   }
 
   getCurrentTime(): number {
-    return this.currentTime
+    const clip = this.getCurrentClip()
+    if (!clip) return 0
+    return this.currentFrame / FPS
   }
 
+  getCurrentFrame(): number {
+    return this.currentFrame
+  }
+
+  /** Clip length in seconds (`frameCount / FPS`). */
   getDuration(): number {
     const clip = this.getCurrentClip()
-    return clip ? clip.duration : 0
+    if (!clip || clip.frameCount <= 0 || !Number.isFinite(clip.frameCount)) return 0
+    return clip.frameCount / FPS
   }
 
-  getProgress(): { animationName: string | null; current: number; duration: number; percentage: number } {
+  getProgress(): AnimationProgress {
     const clip = this.getCurrentClip()
-    const duration = clip ? clip.duration : 0
-    const percentage = duration > 0 ? (this.currentTime / duration) * 100 : 0
+    const duration = clip && clip.frameCount > 0 ? clip.frameCount / FPS : 0
+    const current = clip ? this.currentFrame / FPS : 0
+    const percentage = duration > 0 ? (current / duration) * 100 : 0
     return {
       animationName: this.currentAnimationName,
-      current: this.currentTime,
+      current,
       duration,
       percentage,
+      looping: this.currentLoop,
+      playing: this.isPlaying && !this.isPaused,
+      paused: this.isPaused,
     }
   }
 
@@ -174,10 +256,12 @@ export class AnimationState {
   show(name: string): void {
     if (!this.animations.has(name)) return
     this.currentAnimationName = name
-    this.currentTime = 0
+    this.currentFrame = 0
+    this.currentPriority = 0
+    this.currentLoop = false
     this.isPlaying = false
     this.isPaused = false
-    this.nextAnimationName = null
+    this.nextAnimation = null
   }
 
   setOnEnd(callback: ((animationName: string) => void) | null): void {

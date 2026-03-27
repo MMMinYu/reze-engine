@@ -21,13 +21,13 @@ const enum InternalSolveAxis {
 }
 
 class IKChain {
-  public readonly boneIndex: number
-  public readonly minimumAngle: Vec3 | null
-  public readonly maximumAngle: Vec3 | null
-  public readonly rotationOrder: InternalEulerRotationOrder
-  public readonly solveAxis: InternalSolveAxis
+  readonly boneIndex: number
+  readonly minimumAngle: Vec3 | null
+  readonly maximumAngle: Vec3 | null
+  readonly rotationOrder: InternalEulerRotationOrder
+  readonly solveAxis: InternalSolveAxis
 
-  public constructor(boneIndex: number, link: IKLink) {
+  constructor(boneIndex: number, link: IKLink) {
     this.boneIndex = boneIndex
 
     if (link.hasLimit && link.minAngle && link.maxAngle) {
@@ -76,7 +76,7 @@ export class IKSolverSystem {
   private static readonly EPSILON = 1.0e-8
   private static readonly THRESHOLD = (88 * Math.PI) / 180
 
-  public static solve(
+  static solve(
     ikSolvers: IKSolver[],
     bones: Bone[],
     localRotations: Quat[],

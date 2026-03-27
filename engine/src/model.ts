@@ -5,6 +5,8 @@ import { IKSolverSystem } from "./ik-solver"
 import { VMDLoader, type VMDKeyFrame } from "./vmd-loader"
 import {
   AnimationClip,
+  AnimationPlayOptions,
+  AnimationProgress,
   AnimationState,
   BoneInterpolation,
   BoneKeyframe,
@@ -13,7 +15,6 @@ import {
   rawInterpolationToBoneInterpolation,
 } from "./animation"
 
-const VMD_FPS = 30
 const VERTEX_STRIDE = 8
 
 export interface Texture {
@@ -480,7 +481,7 @@ export class Model {
     return this.runtimeMorph.weights
   }
 
-  // ------- Bone helpers (public API) -------
+  // ------- Bone helpers (API) -------
 
   rotateBones(boneRotations: Record<string, Quat>, durationMs?: number): void {
     const state = this.tweenState
@@ -822,7 +823,6 @@ export class Model {
           rotation: kf.rotation,
           translation: kf.translation,
           interpolation: kf.interpolation,
-          time: kf.frame / VMD_FPS,
         }))
       )
     }
@@ -843,27 +843,33 @@ export class Model {
           morphName: name,
           frame: kf.frame,
           weight: kf.weight,
-          time: kf.frame / VMD_FPS,
         }))
       )
     }
-    let maxTime = 0
+    let maxFrame = 0
     for (const frames of boneTracks.values()) {
-      if (frames.length > 0) maxTime = Math.max(maxTime, frames[frames.length - 1].time)
+      if (frames.length > 0) maxFrame = Math.max(maxFrame, frames[frames.length - 1].frame)
     }
     for (const frames of morphTracks.values()) {
-      if (frames.length > 0) maxTime = Math.max(maxTime, frames[frames.length - 1].time)
+      if (frames.length > 0) maxFrame = Math.max(maxFrame, frames[frames.length - 1].frame)
     }
-    return { boneTracks, morphTracks, duration: maxTime }
+    return { boneTracks, morphTracks, frameCount: maxFrame }
   }
 
-  async loadAnimation(animationName: string, vmdUrl: string): Promise<void> {
-    const vmdKeyFrames = await VMDLoader.load(vmdUrl)
-    const clip = this.buildClipFromVmdKeyFrames(vmdKeyFrames)
-    this.animationState.loadAnimation(animationName, clip)
+  loadAnimation(animationName: string, source: string): Promise<void>
+  loadAnimation(animationName: string, source: AnimationClip): void
+  loadAnimation(animationName: string, source: string | AnimationClip): Promise<void> | void {
+    if (typeof source !== "string") {
+      this.animationState.loadAnimation(animationName, source)
+      return
+    }
+    return VMDLoader.load(source).then((vmdKeyFrames) => {
+      const clip = this.buildClipFromVmdKeyFrames(vmdKeyFrames)
+      this.animationState.loadAnimation(animationName, clip)
+    })
   }
 
-  public resetAllBones(): void {
+  resetAllBones(): void {
     for (let boneIdx = 0; boneIdx < this.skeleton.bones.length; boneIdx++) {
       const localRot = this.runtimeSkeleton.localRotations[boneIdx]
       const localTrans = this.runtimeSkeleton.localTranslations[boneIdx]
@@ -874,7 +880,7 @@ export class Model {
     this.computeWorldMatrices()
   }
 
-  public resetAllMorphs(): void {
+  resetAllMorphs(): void {
     for (let morphIdx = 0; morphIdx < this.morphing.morphs.length; morphIdx++) {
       const morphName = this.morphing.morphs[morphIdx].name
       this.setMorphWeight(morphName, 0)
@@ -883,21 +889,26 @@ export class Model {
     this.applyMorphs()
   }
 
-  getAnimationState(): AnimationState {
-    return this.animationState
+  getAnimationClip(name: string): AnimationClip | null {
+    return this.animationState.getAnimationClip(name)
   }
 
   play(): void
   play(name: string): boolean
-  play(name?: string): void | boolean {
+  play(name: string, options?: AnimationPlayOptions): boolean
+  play(name?: string, options?: AnimationPlayOptions): void | boolean {
     if (name === undefined) {
       this.animationState.play()
       return
     }
-    return this.animationState.play(name)
+    this.resetAllBones()
+    this.resetAllMorphs()
+    return this.animationState.play(name, options)
   }
 
   show(name: string): void {
+    this.resetAllBones()
+    this.resetAllMorphs()
     this.animationState.show(name)
   }
 
@@ -924,46 +935,55 @@ export class Model {
     this.animationState.stop()
   }
 
-  seek(time: number): void {
-    this.animationState.seek(time)
+  // Seek by absolute timeline seconds, not frame index.
+  seek(seconds: number): void {
+    this.animationState.seek(seconds)
   }
 
   // @deprecated Use model.seek()
-  seekAnimation(time: number): void {
-    this.animationState.seek(time)
+  seekAnimation(seconds: number): void {
+    this.animationState.seek(seconds)
   }
 
-  getAnimationProgress(): { current: number; duration: number; percentage: number; animationName: string | null } {
+  getAnimationProgress(): AnimationProgress {
     const p = this.animationState.getProgress()
-    return { current: p.current, duration: p.duration, percentage: p.percentage, animationName: p.animationName }
+    return {
+      current: p.current,
+      duration: p.duration,
+      percentage: p.percentage,
+      animationName: p.animationName,
+      looping: p.looping,
+      playing: p.playing,
+      paused: p.paused,
+    }
   }
 
-  private static upperBound<T extends { time: number }>(time: number, keyFrames: T[], startIdx: number = 0): number {
+  private static upperBound<T extends { frame: number }>(frame: number, keyFrames: T[], startIdx: number = 0): number {
     let left = startIdx,
       right = keyFrames.length
     while (left < right) {
       const mid = Math.floor((left + right) / 2)
-      if (keyFrames[mid].time <= time) left = mid + 1
+      if (keyFrames[mid].frame <= frame) left = mid + 1
       else right = mid
     }
     return left
   }
 
-  private findKeyframeIndex<T extends { time: number }>(time: number, keyFrames: T[], cachedIdx: number): number {
+  private findKeyframeIndex<T extends { frame: number }>(frame: number, keyFrames: T[], cachedIdx: number): number {
     if (keyFrames.length === 0) return -1
 
     if (cachedIdx >= 0 && cachedIdx < keyFrames.length) {
-      const frameTime = keyFrames[cachedIdx].time
-      const nextFrameTime = cachedIdx + 1 < keyFrames.length ? keyFrames[cachedIdx + 1].time : Infinity
-      if (time >= frameTime && time < nextFrameTime) {
+      const currentFrame = keyFrames[cachedIdx].frame
+      const nextFrame = cachedIdx + 1 < keyFrames.length ? keyFrames[cachedIdx + 1].frame : Infinity
+      if (frame >= currentFrame && frame < nextFrame) {
         return cachedIdx
       }
     }
-    const idx = Model.upperBound(time, keyFrames, 0) - 1
+    const idx = Model.upperBound(frame, keyFrames, 0) - 1
     return idx
   }
 
-  private applyPoseFromClip(clip: AnimationClip | null, time: number): void {
+  private applyPoseFromClip(clip: AnimationClip | null, frame: number): void {
     if (!clip) return
     if (clip !== this.lastAppliedClip) {
       this.boneTrackIndices.clear()
@@ -975,8 +995,8 @@ export class Model {
       if (keyFrames.length === 0) continue
 
       const cachedIdx = this.boneTrackIndices.get(boneName) ?? -1
-      const clampedTime = Math.max(keyFrames[0].time, Math.min(keyFrames[keyFrames.length - 1].time, time))
-      const idx = this.findKeyframeIndex(clampedTime, keyFrames, cachedIdx)
+      const clampedFrame = Math.max(keyFrames[0].frame, Math.min(keyFrames[keyFrames.length - 1].frame, frame))
+      const idx = this.findKeyframeIndex(clampedFrame, keyFrames, cachedIdx)
 
       if (idx < 0) continue
 
@@ -997,8 +1017,8 @@ export class Model {
         const localTranslation = this.convertVMDTranslationToLocal(boneIdx, frameA.translation, frameRotation)
         localTrans.set(localTranslation)
       } else {
-        const timeDelta = frameB.time - frameA.time
-        const gradient = (clampedTime - frameA.time) / timeDelta
+        const frameDelta = frameB.frame - frameA.frame
+        const gradient = frameDelta > 0 ? (clampedFrame - frameA.frame) / frameDelta : 0
         const interp = frameB.interpolation
 
         const rotT = interpolateControlPoints(interp.rotation, gradient)
@@ -1025,8 +1045,8 @@ export class Model {
       if (keyFrames.length === 0) continue
 
       const cachedIdx = this.morphTrackIndices.get(morphName) ?? -1
-      const clampedTime = Math.max(keyFrames[0].time, Math.min(keyFrames[keyFrames.length - 1].time, time))
-      const idx = this.findKeyframeIndex(clampedTime, keyFrames, cachedIdx)
+      const clampedFrame = Math.max(keyFrames[0].frame, Math.min(keyFrames[keyFrames.length - 1].frame, frame))
+      const idx = this.findKeyframeIndex(clampedFrame, keyFrames, cachedIdx)
 
       if (idx < 0) continue
 
@@ -1041,7 +1061,9 @@ export class Model {
       const weight = frameB
         ? frameA.weight +
         (frameB.weight - frameA.weight) *
-        ((clampedTime - keyFrames[idx].time) / (keyFrames[idx + 1].time - keyFrames[idx].time))
+        (keyFrames[idx + 1].frame > keyFrames[idx].frame
+          ? (clampedFrame - keyFrames[idx].frame) / (keyFrames[idx + 1].frame - keyFrames[idx].frame)
+          : 0)
         : frameA.weight
 
       this.runtimeMorph.weights[morphIdx] = weight
@@ -1059,9 +1081,9 @@ export class Model {
 
     this.animationState.update(deltaTime)
     const clip = this.animationState.getCurrentClip()
-    const time = this.animationState.getCurrentTime()
+    const frame = this.animationState.getCurrentFrame()
     if (clip !== null) {
-      this.applyPoseFromClip(clip, time)
+      this.applyPoseFromClip(clip, frame)
     }
 
     // Apply morphs if tweens changed morphs or animation changed morphs
@@ -1223,7 +1245,7 @@ export class Model {
     }
   }
 
-  public computeWorldMatrices(): void {
+  computeWorldMatrices(): void {
     const bones = this.skeleton.bones
     const localRot = this.runtimeSkeleton.localRotations
     const localTrans = this.runtimeSkeleton.localTranslations

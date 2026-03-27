@@ -1,12 +1,14 @@
 "use client"
 
 import Header from "@/components/header"
-import { Engine, EngineStats, Model, Vec3 } from "reze-engine"
+import { Engine, EngineStats, Model, Vec3, type AnimationProgress } from "reze-engine"
 import { useCallback, useEffect, useRef, useState } from "react"
 import Loading from "@/components/loading"
 import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
 import { Play, Pause } from "lucide-react"
+
+const IRIS_ANIM = "IRIS OUT"
 
 // Format time as M:SS or MM:SS (with leading zero)
 function formatTime(seconds: number): string {
@@ -24,13 +26,6 @@ function formatRemainingTime(current: number, duration: number): string {
   return `-${mins}:${secs.toString().padStart(2, "0")}`
 }
 
-type AnimationProgress = {
-  current: number
-  duration: number
-  percentage: number
-  animationName: string | null
-}
-
 export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const engineRef = useRef<Engine | null>(null)
@@ -46,12 +41,15 @@ export default function Home() {
     duration: 0,
     percentage: 0,
     animationName: null,
+    looping: false,
+    playing: false,
+    paused: false,
   })
   const [selectedMaterial, setSelectedMaterial] = useState<string | null>(null)
   const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 })
   const [rippleId, setRippleId] = useState(0)
 
-  // Sync progress from model (current animation time, duration, name)
+  // Sync progress from model (current/duration in seconds, name)
   useEffect(() => {
     let rafId: number | null = null
 
@@ -63,13 +61,14 @@ export default function Home() {
           duration: prog.duration,
           percentage: prog.percentage,
           animationName: prog.animationName ?? null,
+          looping: prog.looping,
+          playing: prog.playing,
+          paused: prog.paused,
         })
-        if (prog.percentage >= 100) {
-          setIsPlaying(false)
-          setIsPaused(false)
-        } else {
-          rafId = requestAnimationFrame(updateProgress)
-        }
+        // Keep UI in sync when clip ends (engine sets isPlaying false; React would stay "playing" forever otherwise).
+        setIsPlaying(prog.playing)
+        setIsPaused(prog.paused)
+        if (prog.playing) rafId = requestAnimationFrame(updateProgress)
       }
     }
 
@@ -120,34 +119,38 @@ export default function Home() {
   }, [])
 
   // Play animation
-  const handlePlay = useCallback(async () => {
-    if (engineRef.current) {
-      // iOS CRITICAL: Call audio.play() DIRECTLY from click handler
-      // This must be synchronous - no async/await, no callbacks
+  const handlePlay = useCallback(() => {
+    if (!engineRef.current || !modelRef.current) return
+    const prog = modelRef.current.getAnimationProgress()
+    // Resume after pause
+    if (prog.paused) {
       if (audioRef.current) {
         audioRef.current.muted = false
         audioRef.current.volume = 1.0
-        audioRef.current.currentTime = progress.current
-        // Call play() directly - synchronous from user interaction
-        audioRef.current.play().catch(() => {
-          // Silent fail
-        })
+        audioRef.current.play().catch(() => { })
       }
+      modelRef.current.play()
+      modelRef.current.setMorphWeight("抗穿模", 0.5)
 
-      // If animation has ended (at 100%), restart from beginning
-      if (progress.percentage >= 100) {
-        modelRef.current?.seek(0)
-        if (audioRef.current) {
-          audioRef.current.currentTime = 0
-        }
-        setProgress((p) => ({ ...p, current: 0, percentage: 0 }))
-        await new Promise((resolve) => requestAnimationFrame(resolve))
-      }
-      modelRef.current?.play()
       setIsPlaying(true)
       setIsPaused(false)
+      return
     }
-  }, [progress])
+    if (prog.playing) return
+    // Stopped (idle or finished): named play resets frame to 0 when same clip — fixes replay after end without loop.
+    if (audioRef.current) {
+      audioRef.current.muted = false
+      audioRef.current.volume = 1.0
+      const atEnd = prog.duration > 0 && prog.current >= prog.duration - 1e-3
+      audioRef.current.currentTime = atEnd ? 0 : prog.current
+      audioRef.current.play().catch(() => { })
+    }
+    modelRef.current.play(IRIS_ANIM)
+    modelRef.current.setMorphWeight("抗穿模", 0.5)
+
+    setIsPlaying(true)
+    setIsPaused(false)
+  }, [])
 
   // Pause animation
   const handlePause = useCallback(() => {
@@ -170,6 +173,7 @@ export default function Home() {
         })
       }
       modelRef.current?.play()
+      modelRef.current?.setMorphWeight("抗穿模", 0.5)
       setIsPaused(false)
     }
   }, [])
@@ -183,7 +187,11 @@ export default function Home() {
         if (audioRef.current) {
           audioRef.current.currentTime = seekTime
         }
-        setProgress((p) => ({ ...p, current: seekTime, percentage: value[0] }))
+        setProgress((p) => ({
+          ...p,
+          current: seekTime,
+          percentage: value[0],
+        }))
       }
     },
     [progress.duration]
@@ -209,7 +217,6 @@ export default function Home() {
         engineRef.current = engine
         await engine.init()
         const m1 = await engine.loadModel("reze", "/models/reze/reze.pmx")
-        // engine.setIKEnabled(false)  // disable IK for all models
 
         modelRef.current = m1
 
@@ -219,15 +226,11 @@ export default function Home() {
 
         engine.runRenderLoop(() => setStats(engine.getStats()))
 
-        await m1.loadAnimation("IRIS OUT", "/animations/IRIS OUT.vmd")
-        await m1.loadAnimation("run", "/animations/run.vmd")
-
-        m1.show("IRIS OUT")
+        await m1.loadAnimation(IRIS_ANIM, "/animations/IRIS OUT.vmd")
+        m1.show(IRIS_ANIM)
 
         // engine.setCameraFollow(m1, "センター", new Vec3(0, 11.5, 0))
 
-        m1.resetAllBones()
-        m1.resetAllMorphs()
         m1.setMorphWeight("抗穿模", 0.5)
 
         const prog: AnimationProgress = m1.getAnimationProgress()
@@ -236,6 +239,9 @@ export default function Home() {
           duration: prog.duration,
           percentage: prog.percentage,
           animationName: prog.animationName ?? null,
+          looping: prog.looping,
+          playing: prog.playing,
+          paused: prog.paused,
         })
         setEngineError(null)
       } catch (error) {
@@ -313,12 +319,12 @@ export default function Home() {
         </div>
       )}
 
-      <canvas ref={canvasRef} className="absolute inset-0 w-full h-full touch-none z-1" />
+      <canvas ref={canvasRef} className="absolute inset-0 w-full h-full touch-none pointer-events-auto z-1" />
 
       {/* Player Controls */}
       {!loading && !engineError && (
-        <div className="absolute bottom-4 left-4 right-4 z-50 ">
-          <div className="max-w-4xl mx-auto  px-2 pr-4 bg-black/30 backdrop-blur-xs rounded-full outline-none">
+        <div className="absolute bottom-4 left-4 right-4 z-[60] pointer-events-auto">
+          <div className="max-w-4xl mx-auto  px-2 pr-4 bg-black/30 backdrop-blur-xs rounded-full outline-none pointer-events-auto">
             {/* Single Row: Play/Pause - Time - Slider - Remaining Time */}
             <div className="flex items-center gap-3">
               {/* Play/Pause Button (Left) */}
@@ -337,7 +343,12 @@ export default function Home() {
               )}
 
               {/* Start Time */}
-              <div className="text-white text-sm font-mono tabular-nums">{formatTime(progress.current)}</div>
+              <div className="text-white text-sm font-mono tabular-nums flex items-center gap-2">
+                {formatTime(progress.current)}
+                {progress.looping && (
+                  <span className="text-[10px] uppercase tracking-wide text-emerald-400/90">loop</span>
+                )}
+              </div>
 
               {/* Progress Slider */}
               <div className="flex-1">
@@ -356,6 +367,7 @@ export default function Home() {
               <div className="text-muted-foreground text-sm font-mono tabular-nums text-right">
                 {formatRemainingTime(progress.current, progress.duration)}
               </div>
+
             </div>
           </div>
         </div>

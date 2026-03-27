@@ -22,23 +22,23 @@ npm install reze-engine
 ## Usage
 
 ```javascript
-import { Engine, Vec3 } from "reze-engine"
+import { Engine, Vec3 } from "reze-engine";
 
 const engine = new Engine(canvas, {
   ambientColor: new Vec3(0.88, 0.92, 0.99),
   cameraDistance: 31.5, // MMD units (1 unit = 8 cm)
   cameraTarget: new Vec3(0, 11.5, 0),
-})
-await engine.init()
+});
+await engine.init();
 
-const model = await engine.loadModel("hero", "/models/hero/hero.pmx")
-await model.loadAnimation("idle", "/animations/idle.vmd")
-model.show("idle")
-model.play()
+const model = await engine.loadModel("hero", "/models/hero/hero.pmx");
+await model.loadAnimation("idle", "/animations/idle.vmd");
+model.show("idle");
+model.play();
 
-engine.setCameraFollow(model, "センター", new Vec3(0, 3.5, 0))
-engine.addGround({ width: 160, height: 160 })
-engine.runRenderLoop()
+engine.setCameraFollow(model, "センター", new Vec3(0, 3.5, 0));
+engine.addGround({ width: 160, height: 160 });
+engine.runRenderLoop();
 ```
 
 ## API
@@ -79,13 +79,17 @@ engine.dispose()
 
 ```javascript
 await model.loadAnimation(name, url)
+model.loadAnimation(name, clip)
 model.show(name)
-model.play(name?)
+model.play() // resume paused playback (no reset)
+model.play(name) // resets bones/morphs, then plays (priority options optional)
+model.play(name, { priority: 8 }) // higher number = higher priority (0 default/lowest)
+model.play(name, { loop: true }) // repeat until stop/pause or another play
 model.pause()
 model.stop()
 model.seek(time)
 model.getAnimationProgress()
-model.getAnimationState()
+model.getAnimationClip(name)
 
 model.rotateBones({ 首: quat, 頭: quat }, ms?)
 model.moveBones({ センター: vec3 }, ms?)
@@ -94,6 +98,8 @@ model.resetAllBones()
 model.resetAllMorphs()
 model.getBoneWorldPosition(name)
 ```
+
+`AnimationClip` is frame-based: `frameCount` is the last keyframe frame index, keyframes use `frame`. Playback uses fixed `FPS` (30). `getAnimationProgress()` reports `current` and `duration` in seconds (not frames). Use `model.play(name, { loop: true })` to loop; looping is not stored on the clip.
 
 ### Engine Options
 

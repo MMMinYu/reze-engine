@@ -25,7 +25,7 @@ export class EngineV1 {
     this.canvas = canvas
   }
 
-  public async init() {
+  async init() {
     await this.initDevice()
     this.initContext()
     this.initShader()
@@ -172,7 +172,7 @@ export class EngineV1 {
     this.device.queue.writeBuffer(this.cameraUniformBuffer, 0, this.cameraMatrixData)
   }
 
-  public render() {
+  render() {
     ;(this.renderPassDescriptor.colorAttachments as GPURenderPassColorAttachment[])[0].view = this.context
       .getCurrentTexture()
       .createView()
@@ -190,7 +190,7 @@ export class EngineV1 {
     this.device.queue.submit([encoder.finish()])
   }
 
-  public runRenderLoop() {
+  runRenderLoop() {
     const loop = () => {
       this.render()
       this.animationFrameId = requestAnimationFrame(loop)
@@ -199,7 +199,7 @@ export class EngineV1 {
     this.animationFrameId = requestAnimationFrame(loop)
   }
 
-  public dispose() {
+  dispose() {
     if (this.animationFrameId !== null) {
       cancelAnimationFrame(this.animationFrameId)
       this.animationFrameId = null
