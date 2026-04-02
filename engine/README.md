@@ -108,12 +108,12 @@ model.getBoneWorldPosition(name)
 `model.exportVmd(name)` serialises a loaded clip back to the VMD binary format and returns an `ArrayBuffer`. Bone and morph names are Shift-JIS encoded for compatibility with standard MMD tools.
 
 ```javascript
-const buffer = model.exportVmd("idle")
-const blob = new Blob([buffer], { type: "application/octet-stream" })
-const link = document.createElement("a")
-link.href = URL.createObjectURL(blob)
-link.download = "idle.vmd"
-link.click()
+const buffer = model.exportVmd("idle");
+const blob = new Blob([buffer], { type: "application/octet-stream" });
+const link = document.createElement("a");
+link.href = URL.createObjectURL(blob);
+link.download = "idle.vmd";
+link.click();
 ```
 
 #### Playback
@@ -149,6 +149,7 @@ Call `model.play(name, options?)` to start or switch motion. `loop: true` makes 
 
 ## Projects Using This Engine
 
+- **[Reze Studio](https://reze.studio)** - Web-native MMD animation editor
 - **[MiKaPo](https://mikapo.vercel.app)** — Real-time motion capture for MMD
 - **[Popo](https://popo.love)** — LLM-generated MMD poses
 - **[MPL](https://mmd-mpl.vercel.app)** — Motion programming language for MMD
