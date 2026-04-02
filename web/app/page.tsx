@@ -226,8 +226,19 @@ export default function Home() {
 
         engine.runRenderLoop(() => setStats(engine.getStats()))
 
-        await m1.loadAnimation(IRIS_ANIM, "/animations/IRIS OUT.vmd")
+        await m1.loadVmd(IRIS_ANIM, "/animations/IRIS OUT.vmd")
         m1.show(IRIS_ANIM)
+
+        // // exportVmd round-trip: clip → buffer; download to diff or load in MMD
+        // const vmdOut = m1.exportVmd(IRIS_ANIM)
+        // console.log(`exportVmd("${IRIS_ANIM}"): ${vmdOut.byteLength} bytes`)
+        // const vmdUrl = URL.createObjectURL(new Blob([vmdOut], { type: "application/octet-stream" }))
+        // const vmdLink = document.createElement("a")
+        // vmdLink.href = vmdUrl
+        // vmdLink.download = `${IRIS_ANIM}-export.vmd`
+        // vmdLink.click()
+        // URL.revokeObjectURL(vmdUrl)
+        
 
         // engine.setCameraFollow(m1, "センター", new Vec3(0, 11.5, 0))
 

@@ -3,6 +3,7 @@ import { Engine } from "./engine"
 import { Rigidbody, Joint } from "./physics"
 import { IKSolverSystem } from "./ik-solver"
 import { VMDLoader, type VMDKeyFrame } from "./vmd-loader"
+import { VMDWriter } from "./vmd-writer"
 import {
   AnimationClip,
   AnimationPlayOptions,
@@ -856,17 +857,15 @@ export class Model {
     return { boneTracks, morphTracks, frameCount: maxFrame }
   }
 
-  loadAnimation(animationName: string, source: string): Promise<void>
-  loadAnimation(animationName: string, source: AnimationClip): void
-  loadAnimation(animationName: string, source: string | AnimationClip): Promise<void> | void {
-    if (typeof source !== "string") {
-      this.animationState.loadAnimation(animationName, source)
-      return
-    }
-    return VMDLoader.load(source).then((vmdKeyFrames) => {
+  loadVmd(name: string, url: string): Promise<void> {
+    return VMDLoader.load(url).then((vmdKeyFrames) => {
       const clip = this.buildClipFromVmdKeyFrames(vmdKeyFrames)
-      this.animationState.loadAnimation(animationName, clip)
+      this.animationState.loadAnimation(name, clip)
     })
+  }
+
+  loadClip(name: string, clip: AnimationClip): void {
+    this.animationState.loadAnimation(name, clip)
   }
 
   resetAllBones(): void {
@@ -889,8 +888,14 @@ export class Model {
     this.applyMorphs()
   }
 
-  getAnimationClip(name: string): AnimationClip | null {
+  getClip(name: string): AnimationClip | null {
     return this.animationState.getAnimationClip(name)
+  }
+
+  exportVmd(name: string): ArrayBuffer {
+    const clip = this.animationState.getAnimationClip(name)
+    if (!clip) throw new Error(`Animation clip "${name}" not found`)
+    return new VMDWriter().write(clip)
   }
 
   play(): void

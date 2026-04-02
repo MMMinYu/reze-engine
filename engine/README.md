@@ -32,7 +32,7 @@ const engine = new Engine(canvas, {
 await engine.init();
 
 const model = await engine.loadModel("hero", "/models/hero/hero.pmx");
-await model.loadAnimation("idle", "/animations/idle.vmd");
+await model.loadVmd("idle", "/animations/idle.vmd");
 model.show("idle");
 model.play();
 
@@ -78,8 +78,8 @@ engine.dispose()
 ### Model
 
 ```javascript
-await model.loadAnimation(name, url)
-model.loadAnimation(name, clip)
+await model.loadVmd(name, url)
+model.loadClip(name, clip)
 model.show(name)
 model.play(name)
 model.play(name, { priority: 8 }) // higher number = higher priority (0 default/lowest)
@@ -88,7 +88,8 @@ model.pause()
 model.stop()
 model.seek(time)
 model.getAnimationProgress()
-model.getAnimationClip(name)
+model.getClip(name)
+model.exportVmd(name)              // returns ArrayBuffer
 
 model.rotateBones({ 首: quat, 頭: quat }, ms?)
 model.moveBones({ センター: vec3 }, ms?)
@@ -101,6 +102,19 @@ model.getBoneWorldPosition(name)
 #### Animation data
 
 `AnimationClip` holds keyframes only: bone/morph tracks keyed by `frame`, and `frameCount` (last keyframe index). Time advances at fixed `FPS` (see package export `FPS`, default 30).
+
+#### VMD Export
+
+`model.exportVmd(name)` serialises a loaded clip back to the VMD binary format and returns an `ArrayBuffer`. Bone and morph names are Shift-JIS encoded for compatibility with standard MMD tools.
+
+```javascript
+const buffer = model.exportVmd("idle")
+const blob = new Blob([buffer], { type: "application/octet-stream" })
+const link = document.createElement("a")
+link.href = URL.createObjectURL(blob)
+link.download = "idle.vmd"
+link.click()
+```
 
 #### Playback
 
