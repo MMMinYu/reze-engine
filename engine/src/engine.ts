@@ -3,8 +3,24 @@ import { Mat4, Vec3 } from "./math"
 import { Model } from "./model"
 import { PmxLoader } from "./pmx-loader"
 import { Physics, type PhysicsOptions } from "./physics"
+import {
+  createFetchAssetReader,
+  createFileMapAssetReader,
+  deriveBasePathFromPmxPath,
+  fileListToMap,
+  findFirstPmxFileInList,
+  joinAssetPath,
+  normalizeAssetPath,
+  type AssetReader,
+} from "./asset-reader"
 
 export type RaycastCallback = (modelName: string, material: string | null, screenX: number, screenY: number) => void
+
+/** Select a folder (webkitdirectory) and pass FileList or File[]; pmxFile picks which .pmx when several exist. */
+export type LoadModelFromFilesOptions = {
+  files: FileList | File[]
+  pmxFile?: File
+}
 
 export type EngineOptions = {
   ambientColor?: Vec3
@@ -62,6 +78,9 @@ interface ModelInstance {
   name: string
   model: Model
   basePath: string
+  assetReader: AssetReader
+  gpuBuffers: GPUBuffer[]
+  textureCacheKeys: string[]
   vertexBuffer: GPUBuffer
   indexBuffer: GPUBuffer
   jointsBuffer: GPUBuffer
@@ -1151,30 +1170,62 @@ export class Engine {
 
   async loadModel(path: string): Promise<Model>
   async loadModel(name: string, path: string): Promise<Model>
-  async loadModel(nameOrPath: string, path?: string): Promise<Model> {
-    const pmxPath = path === undefined ? nameOrPath : path
-    const name = path === undefined ? "model_" + (this._nextDefaultModelId++) : nameOrPath
+  async loadModel(name: string, options: LoadModelFromFilesOptions): Promise<Model>
+  async loadModel(
+    nameOrPath: string,
+    pathOrOptions?: string | LoadModelFromFilesOptions
+  ): Promise<Model> {
+    if (pathOrOptions !== undefined && typeof pathOrOptions === "object" && "files" in pathOrOptions) {
+      const name = nameOrPath
+      const pmxFile = pathOrOptions.pmxFile ?? findFirstPmxFileInList(pathOrOptions.files)
+      if (!pmxFile) throw new Error("No .pmx file found in the selected folder")
+      const map = fileListToMap(pathOrOptions.files)
+      const pmxKey = normalizeAssetPath(
+        (pmxFile as File & { webkitRelativePath?: string }).webkitRelativePath ?? pmxFile.name
+      )
+      const reader = createFileMapAssetReader(map)
+      const model = await PmxLoader.loadFromReader(reader, pmxKey)
+      model.setName(name)
+      await this.addModel(model, pmxKey, name, reader)
+      return model
+    }
+
+    const pmxPath = pathOrOptions === undefined ? nameOrPath : pathOrOptions
+    const name = pathOrOptions === undefined ? "model_" + this._nextDefaultModelId++ : nameOrPath
     const model = await PmxLoader.load(pmxPath)
     model.setName(name)
     await this.addModel(model, pmxPath, name)
     return model
   }
 
-  async addModel(model: Model, pmxPath: string, name?: string): Promise<string> {
+  async addModel(model: Model, pmxPath: string, name?: string, assetReader?: AssetReader): Promise<string> {
     const requested = name ?? model.name
     let key = requested
     let n = 1
     while (this.modelInstances.has(key)) {
       key = `${requested}_${n++}`
     }
-    const pathParts = pmxPath.split("/")
-    pathParts.pop()
-    const basePath = pathParts.join("/") + "/"
-    await this.setupModelInstance(key, model, basePath)
+    const reader = assetReader ?? createFetchAssetReader()
+    const basePath = deriveBasePathFromPmxPath(pmxPath)
+    model.setAssetContext(reader, basePath)
+    await this.setupModelInstance(key, model, basePath, reader)
     return key
   }
 
   removeModel(name: string): void {
+    const inst = this.modelInstances.get(name)
+    if (!inst) return
+    inst.model.stopAnimation()
+    for (const path of inst.textureCacheKeys) {
+      const tex = this.textureCache.get(path)
+      if (tex) {
+        tex.destroy()
+        this.textureCache.delete(path)
+      }
+    }
+    for (const buf of inst.gpuBuffers) {
+      buf.destroy()
+    }
     this.modelInstances.delete(name)
   }
 
@@ -1262,7 +1313,7 @@ export class Engine {
     inst.vertexBufferNeedsUpdate = false
   }
 
-  private async setupModelInstance(name: string, model: Model, basePath: string): Promise<void> {
+  private async setupModelInstance(name: string, model: Model, basePath: string, assetReader: AssetReader): Promise<void> {
     const vertices = model.getVertices()
     const skinning = model.getSkinning()
     const skeleton = model.getSkeleton()
@@ -1345,10 +1396,21 @@ export class Engine {
       ],
     })
 
+    const gpuBuffers: GPUBuffer[] = [
+      vertexBuffer,
+      indexBuffer,
+      jointsBuffer,
+      weightsBuffer,
+      skinMatrixBuffer,
+    ]
+
     const inst: ModelInstance = {
       name,
       model,
       basePath,
+      assetReader,
+      gpuBuffers,
+      textureCacheKeys: [],
       vertexBuffer,
       indexBuffer,
       jointsBuffer,
@@ -1510,8 +1572,8 @@ export class Engine {
 
     const loadTextureByIndex = async (texIndex: number): Promise<GPUTexture | null> => {
       if (texIndex < 0 || texIndex >= textures.length) return null
-      const path = inst.basePath + textures[texIndex].path
-      return this.createTextureFromPath(path)
+      const logicalPath = joinAssetPath(inst.basePath, normalizeAssetPath(textures[texIndex].path))
+      return this.createTextureFromLogicalPath(inst, logicalPath)
     }
 
     let currentIndexOffset = 0
@@ -1535,6 +1597,7 @@ export class Engine {
         mat.specular,
         mat.shininess
       )
+      inst.gpuBuffers.push(materialUniformBuffer)
 
       const textureView = diffuseTexture.createView()
       const bindGroup = this.device.createBindGroup({
@@ -1555,6 +1618,7 @@ export class Engine {
           mat.edgeSize, 0, 0, 0,
         ])
         const outlineUniformBuffer = this.createUniformBuffer(`${prefix}outline: ${mat.name}`, materialUniformData)
+        inst.gpuBuffers.push(outlineUniformBuffer)
         const outlineBindGroup = this.device.createBindGroup({
           label: `${prefix}outline: ${mat.name}`,
           layout: this.outlinePerMaterialBindGroupLayout,
@@ -1569,6 +1633,7 @@ export class Engine {
       if (this.onRaycast) {
         const pickIdData = new Float32Array([modelId, materialId, 0, 0])
         const pickIdBuffer = this.createUniformBuffer(`${prefix}pick: ${mat.name}`, pickIdData)
+        inst.gpuBuffers.push(pickIdBuffer)
         const pickBindGroup = this.device.createBindGroup({
           label: `${prefix}pick: ${mat.name}`,
           layout: this.pickPerMaterialBindGroupLayout,
@@ -1621,24 +1686,22 @@ export class Engine {
     return !inst.hiddenMaterials.has(drawCall.materialName)
   }
 
-  private async createTextureFromPath(path: string): Promise<GPUTexture | null> {
-    const cached = this.textureCache.get(path)
+  private async createTextureFromLogicalPath(inst: ModelInstance, logicalPath: string): Promise<GPUTexture | null> {
+    const cacheKey = logicalPath
+    const cached = this.textureCache.get(cacheKey)
     if (cached) {
       return cached
     }
 
     try {
-      const response = await fetch(path)
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-      }
-      const imageBitmap = await createImageBitmap(await response.blob(), {
+      const buffer = await inst.assetReader.readBinary(logicalPath)
+      const imageBitmap = await createImageBitmap(new Blob([buffer]), {
         premultiplyAlpha: "none",
         colorSpaceConversion: "none",
       })
 
       const texture = this.device.createTexture({
-        label: `texture: ${path}`,
+        label: `texture: ${cacheKey}`,
         size: [imageBitmap.width, imageBitmap.height],
         format: "rgba8unorm",
         usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
@@ -1648,7 +1711,8 @@ export class Engine {
         imageBitmap.height,
       ])
 
-      this.textureCache.set(path, texture)
+      this.textureCache.set(cacheKey, texture)
+      inst.textureCacheKeys.push(cacheKey)
       return texture
     } catch {
       return null

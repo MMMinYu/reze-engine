@@ -43,13 +43,14 @@ engine.runRenderLoop();
 
 ## API
 
-One WebGPU **Engine** per page (singleton after `init()`). Load models via `engine.loadModel(path)` or `engine.loadModel(name, path)`.
+One WebGPU **Engine** per page (singleton after `init()`). Load models via URL **or** from a user-selected folder (see [Local folder uploads](#local-folder-uploads-browser)).
 
 ### Engine
 
 ```javascript
 engine.init()
 engine.loadModel(name, path)
+engine.loadModel(name, { files, pmxFile? })  // folder upload — see below
 engine.getModel(name)
 engine.getModelNames()
 engine.removeModel(name)
@@ -74,6 +75,45 @@ engine.stopRenderLoop()
 engine.getStats()
 engine.dispose()
 ```
+
+### Local folder uploads (browser)
+
+Use a hidden `<input type="file" webkitdirectory multiple>` (or drag/drop) and pass the resulting `FileList` or `File[]` into the engine. Textures resolve relative to the chosen PMX file inside that tree.
+
+**Important:** read `input.files` into a normal array **before** setting `input.value = ""`. The browser’s `FileList` is _live_ — clearing the input empties it.
+
+1. **`parsePmxFolderInput(fileList)`** — returns a tagged result (`empty` | `not_directory` | `no_pmx` | `single` | `multiple`). For `single`, you already have `files` and `pmxFile`. For `multiple`, show a picker (dropdown) of `pmxRelativePaths`, then resolve with **`pmxFileAtRelativePath(files, path)`**.
+2. **`engine.loadModel(name, { files, pmxFile })`** — `pmxFile` selects which `.pmx` when the folder contains several.
+
+```javascript
+import {
+  Engine,
+  parsePmxFolderInput,
+  pmxFileAtRelativePath,
+} from "reze-engine";
+
+// In <input onChange>:
+const picked = parsePmxFolderInput(e.target.files);
+e.target.value = "";
+
+if (picked.status === "single") {
+  const model = await engine.loadModel("myModel", {
+    files: picked.files,
+    pmxFile: picked.pmxFile,
+  });
+}
+
+if (picked.status === "multiple") {
+  // Let the user choose `chosenPath` from picked.pmxRelativePaths, then:
+  const pmxFile = pmxFileAtRelativePath(picked.files, chosenPath);
+  const model = await engine.loadModel("myModel", {
+    files: picked.files,
+    pmxFile,
+  });
+}
+```
+
+VMD and other assets still load by URL when the path starts with `/` or `http(s):`; relative paths are resolved against the PMX directory inside the upload.
 
 ### Model
 

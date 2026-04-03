@@ -1,4 +1,5 @@
-export { Engine, type EngineStats } from "./engine"
+export { Engine, type EngineStats, type LoadModelFromFilesOptions } from "./engine"
+export { parsePmxFolderInput, pmxFileAtRelativePath, type PmxFolderInputResult } from "./folder-upload"
 export { Model } from "./model"
 export { Vec3, Quat, Mat4 } from "./math"
 export type {

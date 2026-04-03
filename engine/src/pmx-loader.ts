@@ -13,6 +13,7 @@ import {
 } from "./model"
 import { Mat4, Vec3 } from "./math"
 import { Rigidbody, Joint, RigidbodyShape, RigidbodyType } from "./physics"
+import { createFetchAssetReader, type AssetReader } from "./asset-reader"
 
 export class PmxLoader {
   private view: DataView
@@ -42,8 +43,16 @@ export class PmxLoader {
   }
 
   static async load(url: string): Promise<Model> {
-    const loader = new PmxLoader(await fetch(url).then((r) => r.arrayBuffer()))
-    return loader.parse()
+    return PmxLoader.loadFromReader(createFetchAssetReader(), url)
+  }
+
+  static loadFromBuffer(buffer: ArrayBuffer): Model {
+    return new PmxLoader(buffer).parse()
+  }
+
+  static async loadFromReader(reader: AssetReader, pmxLogicalPath: string): Promise<Model> {
+    const buffer = await reader.readBinary(pmxLogicalPath)
+    return PmxLoader.loadFromBuffer(buffer)
   }
 
   private parse(): Model {

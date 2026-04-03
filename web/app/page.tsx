@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import Loading from "@/components/loading"
 import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
-import { Play, Pause } from "lucide-react"
+import { Pause, Play } from "lucide-react"
 
 const IRIS_ANIM = "IRIS OUT"
 
@@ -65,7 +65,6 @@ export default function Home() {
           playing: prog.playing,
           paused: prog.paused,
         })
-        // Keep UI in sync when clip ends (engine sets isPlaying false; React would stay "playing" forever otherwise).
         setIsPlaying(prog.playing)
         setIsPaused(prog.paused)
         if (prog.playing) rafId = requestAnimationFrame(updateProgress)
@@ -92,7 +91,6 @@ export default function Home() {
     audio.volume = 1.0
     audio.muted = false
 
-    // Add to DOM (iOS requirement)
     Object.assign(audio.style, {
       display: "none",
       position: "absolute",
@@ -118,11 +116,9 @@ export default function Home() {
     }
   }, [])
 
-  // Play animation
   const handlePlay = useCallback(() => {
     if (!engineRef.current || !modelRef.current) return
     const prog = modelRef.current.getAnimationProgress()
-    // Resume after pause
     if (prog.paused) {
       if (audioRef.current) {
         audioRef.current.muted = false
@@ -137,7 +133,6 @@ export default function Home() {
       return
     }
     if (prog.playing) return
-    // Stopped (idle or finished): named play resets frame to 0 when same clip — fixes replay after end without loop.
     if (audioRef.current) {
       audioRef.current.muted = false
       audioRef.current.volume = 1.0
@@ -152,7 +147,6 @@ export default function Home() {
     setIsPaused(false)
   }, [])
 
-  // Pause animation
   const handlePause = useCallback(() => {
     if (engineRef.current) {
       modelRef.current?.pause()
@@ -163,14 +157,10 @@ export default function Home() {
     }
   }, [])
 
-  // Resume animation
   const handleResume = useCallback(() => {
     if (engineRef.current) {
-      // iOS CRITICAL: Call audio.play() DIRECTLY from click handler
       if (audioRef.current) {
-        audioRef.current.play().catch(() => {
-          // Silent fail
-        })
+        audioRef.current.play().catch(() => { })
       }
       modelRef.current?.play()
       modelRef.current?.setMorphWeight("抗穿模", 0.5)
@@ -178,7 +168,6 @@ export default function Home() {
     }
   }, [])
 
-  // Seek to position
   const handleSeek = useCallback(
     (value: number[]) => {
       if (engineRef.current && progress.duration > 0) {
@@ -198,75 +187,60 @@ export default function Home() {
   )
 
   const initEngine = useCallback(async () => {
-    if (canvasRef.current) {
-      // Initialize engine
-      try {
-        const engine = new Engine(canvasRef.current, {
-          ambientColor: new Vec3(0.9, 0.9, 0.99),
-          cameraDistance: 31.5,
-          cameraTarget: new Vec3(0, 11.5, 0),
-          onRaycast: (modelName: string, material: string | null, screenX: number, screenY: number) => {
-            if (material) {
-              setMousePosition({ x: screenX, y: screenY })
-              setRippleId((prev) => prev + 1)
-              console.log("material selected:", modelName, material)
-            }
-            setSelectedMaterial(material)
-          },
-        })
-        engineRef.current = engine
-        await engine.init()
-        const m1 = await engine.loadModel("reze", "/models/reze/reze.pmx")
+    if (!canvasRef.current) {
+      setLoading(false)
+      return
+    }
+    try {
+      const engine = new Engine(canvasRef.current, {
+        ambientColor: new Vec3(0.9, 0.9, 0.99),
+        cameraDistance: 31.5,
+        cameraTarget: new Vec3(0, 11.5, 0),
+        onRaycast: (modelName: string, material: string | null, screenX: number, screenY: number) => {
+          if (material) {
+            setMousePosition({ x: screenX, y: screenY })
+            setRippleId((prev) => prev + 1)
+            console.log("material selected:", modelName, material)
+          }
+          setSelectedMaterial(material)
+        },
+      })
+      engineRef.current = engine
+      await engine.init()
+      const m1 = await engine.loadModel("reze", "/models/reze/reze.pmx")
 
-        modelRef.current = m1
+      modelRef.current = m1
 
-        engine.addGround()
+      engine.addGround()
 
-        setLoading(false)
+      engine.runRenderLoop(() => setStats(engine.getStats()))
 
-        engine.runRenderLoop(() => setStats(engine.getStats()))
+      await m1.loadVmd(IRIS_ANIM, "/animations/IRIS OUT.vmd")
+      m1.show(IRIS_ANIM)
 
-        await m1.loadVmd(IRIS_ANIM, "/animations/IRIS OUT.vmd")
-        m1.show(IRIS_ANIM)
+      m1.setMorphWeight("抗穿模", 0.5)
 
-        // // exportVmd round-trip: clip → buffer; download to diff or load in MMD
-        // const vmdOut = m1.exportVmd(IRIS_ANIM)
-        // console.log(`exportVmd("${IRIS_ANIM}"): ${vmdOut.byteLength} bytes`)
-        // const vmdUrl = URL.createObjectURL(new Blob([vmdOut], { type: "application/octet-stream" }))
-        // const vmdLink = document.createElement("a")
-        // vmdLink.href = vmdUrl
-        // vmdLink.download = `${IRIS_ANIM}-export.vmd`
-        // vmdLink.click()
-        // URL.revokeObjectURL(vmdUrl)
-        
-
-        // engine.setCameraFollow(m1, "センター", new Vec3(0, 11.5, 0))
-
-        m1.setMorphWeight("抗穿模", 0.5)
-
-        const prog: AnimationProgress = m1.getAnimationProgress()
-        setProgress({
-          current: prog.current,
-          duration: prog.duration,
-          percentage: prog.percentage,
-          animationName: prog.animationName ?? null,
-          looping: prog.looping,
-          playing: prog.playing,
-          paused: prog.paused,
-        })
-        setEngineError(null)
-      } catch (error) {
-        setEngineError(error instanceof Error ? error.message : "Unknown error")
-      }
+      const prog: AnimationProgress = m1.getAnimationProgress()
+      setProgress({
+        current: prog.current,
+        duration: prog.duration,
+        percentage: prog.percentage,
+        animationName: prog.animationName ?? null,
+        looping: prog.looping,
+        playing: prog.playing,
+        paused: prog.paused,
+      })
+      setEngineError(null)
+    } catch (error) {
+      setEngineError(error instanceof Error ? error.message : "Unknown error")
+    } finally {
+      setLoading(false)
     }
   }, [])
 
   useEffect(() => {
-    void (async () => {
-      initEngine()
-    })()
+    void initEngine()
 
-    // Cleanup on unmount
     return () => {
       if (engineRef.current) {
         engineRef.current.dispose()
@@ -280,7 +254,6 @@ export default function Home() {
     }
   }, [initEngine])
 
-  // Space key: play/pause
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
@@ -305,7 +278,6 @@ export default function Home() {
       )}
       {loading && !engineError && <Loading loading={loading} />}
 
-      {/* Ripple effect around cursor when material is selected */}
       {selectedMaterial && (
         <div
           key={rippleId}
@@ -332,13 +304,10 @@ export default function Home() {
 
       <canvas ref={canvasRef} className="absolute inset-0 w-full h-full touch-none pointer-events-auto z-1" />
 
-      {/* Player Controls */}
       {!loading && !engineError && (
         <div className="absolute bottom-4 left-4 right-4 z-[60] pointer-events-auto">
           <div className="max-w-4xl mx-auto  px-2 pr-4 bg-black/30 backdrop-blur-xs rounded-full outline-none pointer-events-auto">
-            {/* Single Row: Play/Pause - Time - Slider - Remaining Time */}
             <div className="flex items-center gap-3">
-              {/* Play/Pause Button (Left) */}
               {!isPlaying ? (
                 <Button onClick={handlePlay} size="icon" variant="ghost" aria-label="Play">
                   <Play />
@@ -353,7 +322,6 @@ export default function Home() {
                 </Button>
               )}
 
-              {/* Start Time */}
               <div className="text-white text-sm font-mono tabular-nums flex items-center gap-2">
                 {formatTime(progress.current)}
                 {progress.looping && (
@@ -361,7 +329,6 @@ export default function Home() {
                 )}
               </div>
 
-              {/* Progress Slider */}
               <div className="flex-1">
                 <Slider
                   value={[progress.percentage]}
@@ -374,11 +341,9 @@ export default function Home() {
                 />
               </div>
 
-              {/* Remaining Time (Right) */}
               <div className="text-muted-foreground text-sm font-mono tabular-nums text-right">
                 {formatRemainingTime(progress.current, progress.duration)}
               </div>
-
             </div>
           </div>
         </div>

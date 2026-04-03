@@ -1,5 +1,6 @@
 import { Mat4, Quat, Vec3 } from "./math"
 import { Engine } from "./engine"
+import { joinAssetPath, type AssetReader } from "./asset-reader"
 import { Rigidbody, Joint } from "./physics"
 import { IKSolverSystem } from "./ik-solver"
 import { VMDLoader, type VMDKeyFrame } from "./vmd-loader"
@@ -206,6 +207,14 @@ export class Model {
   private morphTrackIndices: Map<string, number> = new Map()
   private lastAppliedClip: AnimationClip | null = null
 
+  private assetReader: AssetReader | null = null
+  private assetBasePath = ""
+
+  /** Called by Engine when registering the model; enables loadVmd to resolve relative paths for folder uploads. */
+  setAssetContext(reader: AssetReader, basePath: string): void {
+    this.assetReader = reader
+    this.assetBasePath = basePath
+  }
 
   constructor(
     vertexData: Float32Array<ArrayBuffer>,
@@ -857,8 +866,31 @@ export class Model {
     return { boneTracks, morphTracks, frameCount: maxFrame }
   }
 
-  loadVmd(name: string, url: string): Promise<void> {
-    return VMDLoader.load(url).then((vmdKeyFrames) => {
+  loadVmd(name: string, urlOrRelative: string): Promise<void> {
+    const loadBuffer = (): Promise<ArrayBuffer> => {
+      const u = urlOrRelative.trim()
+      const useSiteFetch =
+        u.startsWith("http://") ||
+        u.startsWith("https://") ||
+        u.startsWith("/") ||
+        u.startsWith("blob:") ||
+        u.startsWith("data:")
+      if (useSiteFetch) {
+        return fetch(u).then((r) => {
+          if (!r.ok) throw new Error(`Failed to fetch VMD ${u}: ${r.status}`)
+          return r.arrayBuffer()
+        })
+      }
+      if (this.assetReader) {
+        return this.assetReader.readBinary(joinAssetPath(this.assetBasePath, u))
+      }
+      return fetch(u).then((r) => {
+        if (!r.ok) throw new Error(`Failed to fetch VMD ${u}: ${r.status}`)
+        return r.arrayBuffer()
+      })
+    }
+    return loadBuffer().then((buf) => {
+      const vmdKeyFrames = VMDLoader.loadFromBuffer(buf)
       const clip = this.buildClipFromVmdKeyFrames(vmdKeyFrames)
       this.animationState.loadAnimation(name, clip)
     })
