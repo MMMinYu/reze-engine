@@ -24,6 +24,7 @@ export type LoadModelFromFilesOptions = {
 
 export type EngineOptions = {
   ambientColor?: Vec3
+  directionalLightDirection?: Vec3
   directionalLightIntensity?: number
   minSpecularIntensity?: number
   rimLightIntensity?: number
@@ -32,12 +33,16 @@ export type EngineOptions = {
   cameraFov?: number
   onRaycast?: RaycastCallback
   physicsOptions?: PhysicsOptions
-  shadowLightDirection?: Vec3
 }
 
+// Lighting defaults come from the Blender game-like preset:
+//   world_color (0.401, 0.494, 0.647) × world_strength 0.3 → (0.120, 0.148, 0.194)
+//   sun direction in Blender Z-up (-0.087, 0.919, -0.384) → Y-up (-0.087, -0.384, -0.919)
+//   sun intensity (energy) 2.0
 export const DEFAULT_ENGINE_OPTIONS = {
-  ambientColor: new Vec3(0.88, 0.88, 0.88),
-  directionalLightIntensity: 0.24,
+  ambientColor: new Vec3(0.12, 0.148, 0.194),
+  directionalLightDirection: new Vec3(-0.087, -0.384, 0.919),
+  directionalLightIntensity: 2.0,
   minSpecularIntensity: 0.3,
   rimLightIntensity: 0.4,
   cameraDistance: 26.6,
@@ -45,7 +50,6 @@ export const DEFAULT_ENGINE_OPTIONS = {
   cameraFov: Math.PI / 4,
   onRaycast: undefined,
   physicsOptions: { constraintSolverKeywords: ["胸"] },
-  shadowLightDirection: new Vec3(0.12, -1, 0.16),
 }
 
 export interface EngineStats {
@@ -139,6 +143,7 @@ export class Engine {
 
   // Ambient light settings
   private ambientColor!: Vec3
+  private directionalLightDirection!: Vec3
   private directionalLightIntensity!: number
   private minSpecularIntensity!: number
   // Rim light settings
@@ -160,7 +165,6 @@ export class Engine {
 
   private onRaycast?: RaycastCallback
   private physicsOptions: PhysicsOptions = DEFAULT_ENGINE_OPTIONS.physicsOptions
-  private shadowLightDirection: Vec3 = DEFAULT_ENGINE_OPTIONS.shadowLightDirection
   private lastTouchTime = 0
   private readonly DOUBLE_TAP_DELAY = 300
   // GPU picking
@@ -204,6 +208,8 @@ export class Engine {
     this.canvas = canvas
     if (options) {
       this.ambientColor = options.ambientColor ?? DEFAULT_ENGINE_OPTIONS.ambientColor
+      this.directionalLightDirection =
+        options.directionalLightDirection ?? DEFAULT_ENGINE_OPTIONS.directionalLightDirection
       this.directionalLightIntensity =
         options.directionalLightIntensity ?? DEFAULT_ENGINE_OPTIONS.directionalLightIntensity
       this.minSpecularIntensity = options.minSpecularIntensity ?? DEFAULT_ENGINE_OPTIONS.minSpecularIntensity
@@ -213,7 +219,6 @@ export class Engine {
       this.cameraFov = options.cameraFov ?? DEFAULT_ENGINE_OPTIONS.cameraFov
       this.onRaycast = options.onRaycast
       this.physicsOptions = options.physicsOptions ?? DEFAULT_ENGINE_OPTIONS.physicsOptions
-      this.shadowLightDirection = options.shadowLightDirection ?? DEFAULT_ENGINE_OPTIONS.shadowLightDirection
     }
   }
 
@@ -1544,12 +1549,16 @@ export class Engine {
     })
   }
 
-  // Shadow uses a fixed orthographic projection, independent of the visible light direction
+  // Shadow is cast from the visible sun direction — same vector as directionalLightDirection.
   private shadowLightVPDirty = true
   private updateShadowLightVP() {
     if (!this.shadowLightVPDirty) return
     this.shadowLightVPDirty = false
-    const dir = new Vec3(this.shadowLightDirection.x, this.shadowLightDirection.y, this.shadowLightDirection.z)
+    const dir = new Vec3(
+      this.directionalLightDirection.x,
+      this.directionalLightDirection.y,
+      this.directionalLightDirection.z
+    )
     dir.normalize()
     const target = new Vec3(0, 11, 0)
     const eye = new Vec3(target.x - dir.x * 72, target.y - dir.y * 72, target.z - dir.z * 72)

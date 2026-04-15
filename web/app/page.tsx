@@ -193,7 +193,6 @@ export default function Home() {
     }
     try {
       const engine = new Engine(canvasRef.current, {
-        ambientColor: new Vec3(0.9, 0.9, 0.99),
         cameraDistance: 31.5,
         cameraTarget: new Vec3(0, 11.5, 0),
         onRaycast: (modelName: string, material: string | null, screenX: number, screenY: number) => {
@@ -207,7 +206,7 @@ export default function Home() {
       })
       engineRef.current = engine
       await engine.init()
-      const m1 = await engine.loadModel("reze", "/models/reze/reze.pmx")
+      const m1 = await engine.loadModel("reze", "/models/塞尔凯特/塞尔凯特.pmx")
 
       modelRef.current = m1
 
