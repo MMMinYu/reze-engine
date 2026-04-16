@@ -1,4 +1,4 @@
-// M_Face material shader — hand-ported from M_Face node graph trace.
+// M_Face — WGSL trace of 仿深空之眼渲染预设v1.0_by_小绿毛猫_material_graph_dump.json "M_Face"; VALTORGB stops from m_graphs (dump omits curve keys).
 
 import { NODES_WGSL } from "./nodes"
 
@@ -47,22 +47,6 @@ struct LightVP { viewProj: mat4x4f, };
 @group(2) @binding(0) var diffuseTexture: texture_2d<f32>;
 @group(2) @binding(1) var<uniform> material: MaterialUniforms;
 
-// Filmic tonemap — 14-point LUT with log2 indexing
-fn filmic(x: f32) -> f32 {
-  var lut = array<f32, 14>(
-    0.0067, 0.0141, 0.0272, 0.0499, 0.0885, 0.1512, 0.2462,
-    0.3753, 0.5273, 0.6776, 0.8031, 0.8929, 0.9495, 0.9814
-  );
-  let t = clamp(log2(max(x, 1e-10)) + 10.0, 0.0, 13.0);
-  let i = u32(t);
-  let j = min(i + 1u, 13u);
-  return mix(lut[i], lut[j], t - f32(i));
-}
-
-fn tonemap(hdr: vec3f) -> vec3f {
-  return vec3f(filmic(hdr.x), filmic(hdr.y), filmic(hdr.z));
-}
-
 // 3x3 PCF shadow sampling, 4096 map, normal-bias 0.08, depth-bias 0.001
 fn sampleShadow(worldPos: vec3f, n: vec3f) -> f32 {
   let biasedPos = worldPos + n * 0.08;
@@ -83,6 +67,12 @@ fn sampleShadow(worldPos: vec3f, n: vec3f) -> f32 {
 const PI_F: f32 = 3.141592653589793;
 const F0_FACE: f32 = 0.04; // specular=0.5 → F0 = 0.08*0.5 = 0.04
 const FACE_ROUGHNESS: f32 = 0.3;
+// Dump M_Face unlinked defaults (math op enum not serialized — warm clamp chain still from m_graphs)
+const FACE_RIM2_POW: f32 = 0.6300000548362732;
+const FACE_RIM2_BG: vec3f = vec3f(1.0, 0.4684903025627136, 0.3698573112487793);
+const FACE_WARM_AO_MUL: f32 = 0.30000001192092896; // 运算.004 MULTIPLY after invert (was 0.5 in older trace)
+const FACE_BRIGHT_TEX_THRESH: f32 = 0.9300000071525574; // 运算.005 GREATER_THAN Value_001
+const FACE_MIX_NPR: f32 = 0.5; // 混合着色器.001 Fac
 
 fn ggx_d_face(ndoth: f32, a2: f32) -> f32 {
   let denom = ndoth * ndoth * (a2 - 1.0) + 1.0;
@@ -142,15 +132,15 @@ fn fresnel_schlick_face(cosTheta: f32, f0: f32) -> f32 {
   let shadow = sampleShadow(input.worldPos, n);
 
   // ═══ SOURCES ═══
-  // DiffuseBSDF(white) → ShaderToRGB, shadow-modulated
-  let ndotl_raw = shader_to_rgb_diffuse(n, l) * shadow;
-  // ramp.008 CONSTANT [0→black, 0.2966→white]
-  let toon = ramp_constant(ndotl_raw, 0.0, vec4f(0,0,0,1), 0.2966, vec4f(1,1,1,1)).r;
+  // DiffuseBSDF(white) → ShaderToRGB (energy-matched); shadow on direct only
+  let ndotl_raw = shader_to_rgb_diffuse(n, l, sun, light.ambientColor.xyz, shadow);
+  // ramp.008 CONSTANT — edge AA avoids binary fac shimmer / white specks on terminator (fwidth + smoothstep)
+  let toon = ramp_constant_edge_aa(ndotl_raw, 0.2966, vec4f(0,0,0,1), vec4f(1,1,1,1)).r;
   let ao = ao_fake(n, v);
 
   // ═══ TOON COLOR ═══
-  let shadow_tint = hue_sat(0.46, 2.0, 0.35, 1.0, tex_color); // HueSat.002
-  let lit_tint = hue_sat(0.46, 1.6, 1.5, 1.0, tex_color); // HueSat.001
+  let shadow_tint = hue_sat(0.46000000834465027, 2.0, 0.3499999940395355, 1.0, tex_color); // HueSat.002
+  let lit_tint = hue_sat(0.46000000834465027, 1.600000023841858, 1.5, 1.0, tex_color); // HueSat.001
   let toon_color = mix_blend(toon, shadow_tint, lit_tint); // Mix.004
   let bc = bright_contrast(toon_color, 0.1, 0.2);
 
@@ -165,7 +155,7 @@ fn fresnel_schlick_face(cosTheta: f32, f0: f32) -> f32 {
 
   // ═══ WARM EMISSION ═══
   let ao_inv = invert_f(1.0, ao_ramp);
-  let warm_str = ao_inv * 0.5; // 运算.004(MULTIPLY, default=0.5)
+  let warm_str = ao_inv * FACE_WARM_AO_MUL; // 反转 → 运算.004 MULTIPLY Value_001
   let warm_input = clamp(toon * 0.5 + 0.5, 0.0, 1.0); // 运算.001→运算.006→Clamp
   // ramp.003 CARDINAL [0.2409→warm dark, 0.4663→warm light]
   let warm_color = ramp_cardinal(warm_input, 0.2409,
@@ -176,18 +166,17 @@ fn fresnel_schlick_face(cosTheta: f32, f0: f32) -> f32 {
   // ═══ RIM 1 ═══
   // Fresnel(IOR=2.0) × LayerWeight.001(Facing, Blend=0.24)
   let rim1_str = fresnel(2.0, n, v) * layer_weight_facing(0.24, n, v);
-  let rim1 = vec3f(0.9842, 0.611, 0.5736) * rim1_str; // Emission(Color, Strength)
+  let rim1 = vec3f(0.984157919883728, 0.6110184788703918, 0.5736401677131653) * rim1_str;
 
   // ═══ RIM 2 ═══
   // Fresnel.001(IOR=1.45) × LayerWeight.002(Fresnel output, Blend=0.61)
   let rim2_raw = fresnel(1.45, n, v) * layer_weight_fresnel(0.61, n, v);
-  let rim2_fac = math_power(rim2_raw, 0.5); // 运算.007(POWER, 0.5)
-  // MixShader.002: (1-fac)*emission3 + fac*background
-  let rim2_mixed = mix(emission3, vec3f(1.0, 0.4685, 0.3699), rim2_fac);
+  let rim2_fac = math_power(rim2_raw, FACE_RIM2_POW);
+  // MixShader.002: Shader=Emission.003, Shader_001=背景
+  let rim2_mixed = mix(emission3, FACE_RIM2_BG, rim2_fac);
 
-  // ═══ BRIGHT GATE ═══
-  // reroute.005 carries tex_color → GREATER_THAN(tex_color.r, 0.5)
-  let tex_gate = math_greater_than(tex_color.r, 0.5);
+  // 转接点.005(tex) → 运算.005 GREATER_THAN Value_001
+  let tex_gate = math_greater_than(tex_color.r, FACE_BRIGHT_TEX_THRESH);
   let bright_emit = vec3f(tex_gate) * 3.0; // Emission.002(Strength=3.0)
 
   // ═══ NPR STACK (AddShader chain) ═══
@@ -198,9 +187,9 @@ fn fresnel_schlick_face(cosTheta: f32, f0: f32) -> f32 {
   // ═══ PRINCIPLED BSDF ═══
   // Noise-based bump normal
   let gen = mapping_point(input.worldPos, vec3f(0.0), vec3f(0.0), vec3f(1.0, 1.0, 1.5));
-  let noise_val = tex_noise(gen, 1.0, 2.0, 0.5);
+  let noise_val = tex_noise(gen, 1.0, 2.0, 0.5, 0.0);
   let noise_ramp = ramp_linear(noise_val, 0.0, vec4f(0,0,0,1), 1.0, vec4f(1,1,1,1)).r;
-  let bumped_n = bump(0.3246, noise_ramp, n, input.worldPos);
+  let bumped_n = bump_lh(0.324644535779953, noise_ramp, n, input.worldPos); // 凹凸 Strength; LH bump
 
   // Mix.001(Factor=noise_ramp, A=bc, B=dark red)
   let principled_base = mix_blend(noise_ramp, bc, vec3f(0.6832, 0.1947, 0.1373));
@@ -220,15 +209,16 @@ fn fresnel_schlick_face(cosTheta: f32, f0: f32) -> f32 {
   let D = ggx_d_face(p_ndoth, a2);
   let G = smith_g1_face(p_ndotl, a2) * smith_g1_face(p_ndotv, a2);
   let F = fresnel_schlick_face(p_vdoth, F0_FACE);
-  let spec = (D * G * F) / max(4.0 * p_ndotl * p_ndotv, 0.001);
+  // Kill GGX fireflies when N·L→0 (bump + hard cel boundary); smoothstep barely widens dark region
+  let spec_vis = smoothstep(0.0, 0.06, p_ndotl);
+  let spec = (D * G * F) / max(4.0 * p_ndotl * p_ndotv, 0.02) * spec_vis;
   let kd = (1.0 - F) * principled_base / PI_F;
   let direct = (kd + spec) * sun * p_ndotl * shadow;
   let ambient = principled_base * light.ambientColor.xyz;
   let principled = ambient + direct + p_emission + vec3f(sss);
 
-  // ═══ FINAL MIX ═══
-  // MixShader.001: (1-0.5)*Principled + 0.5*NPR
-  let final_color = mix(principled, npr_stack, 0.5);
+  // 混合着色器.001: Shader=相加着色器.001, Shader_001=原理化BSDF — Fac blends toward second
+  let final_color = mix(npr_stack, principled, FACE_MIX_NPR);
 
   return vec4f(final_color, alpha);
 }

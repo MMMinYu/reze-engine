@@ -85,6 +85,13 @@ fn ramp_constant(f: f32, p0: f32, c0: vec4f, p1: f32, c1: vec4f) -> vec4f {
   return select(c0, c1, f >= p1);
 }
 
+// CONSTANT ramp with screen-space edge AA — kills sparkle where fwidth(f) straddles a hard step (NPR terminator)
+fn ramp_constant_edge_aa(f: f32, edge: f32, c0: vec4f, c1: vec4f) -> vec4f {
+  let w = max(fwidth(f) * 1.75, 6e-6);
+  let t = smoothstep(edge - w, edge + w, f);
+  return mix(c0, c1, t);
+}
+
 fn ramp_linear(f: f32, p0: f32, c0: vec4f, p1: f32, c1: vec4f) -> vec4f {
   let t = saturate((f - p0) / max(p1 - p0, 1e-6));
   return mix(c0, c1, t);
@@ -125,6 +132,16 @@ fn mix_lighten(fac: f32, a: vec3f, b: vec3f) -> vec3f {
   return mix(a, max(a, b), fac);
 }
 
+// Blender Mix (Color) blend LINEAR_LIGHT: result = mix(A, A + 2*B - 1, Fac)
+fn mix_linear_light(fac: f32, a: vec3f, b: vec3f) -> vec3f {
+  return mix(a, a + 2.0 * b - vec3f(1.0), fac);
+}
+
+// Luminance for Shader→RGB scalar gates (linear RGB, Rec.709 weights)
+fn luminance_rec709_linear(c: vec3f) -> f32 {
+  return dot(max(c, vec3f(0.0)), vec3f(0.2126, 0.7152, 0.0722));
+}
+
 // ─── FRESNEL node ───────────────────────────────────────────────────
 // Schlick approximation matching Blender's Fresnel node
 
@@ -153,12 +170,15 @@ fn layer_weight_facing(blend: f32, n: vec3f, v: vec3f) -> f32 {
   return 1.0 - facing;
 }
 
-// ─── SHADER_TO_RGB ──────────────────────────────────────────────────
-// Core NPR trick: captures diffuse BSDF → RGB as a luminance scalar.
-// In our hand-port this is simply a half-lambert or N·L depending on context.
+// ─── SHADER_TO_RGB (white DiffuseBSDF) ──────────────────────────────
+// Eevee captures lit diffuse: (albedo/π)*sun*N·L*shadow + ambient (linear). Albedo=1.
+// Matches default.ts direct term scale so VALTORGB thresholds from Blender JSON stay valid.
 
-fn shader_to_rgb_diffuse(n: vec3f, l: vec3f) -> f32 {
-  return max(dot(n, l), 0.0);
+fn shader_to_rgb_diffuse(n: vec3f, l: vec3f, sun_rgb: vec3f, ambient_rgb: vec3f, shadow: f32) -> f32 {
+  const PI_S: f32 = 3.141592653589793;
+  let ndotl = max(dot(n, l), 0.0);
+  let rgb = sun_rgb * (ndotl * shadow / PI_S) + ambient_rgb;
+  return luminance_rec709_linear(rgb);
 }
 
 // ─── AMBIENT_OCCLUSION node (faked) ─────────────────────────────────
@@ -180,6 +200,16 @@ fn bump(strength: f32, height: f32, normal: vec3f, world_pos: vec3f) -> vec3f {
   let dpdx_pos = dpdx(world_pos);
   let dpdy_pos = dpdy(world_pos);
   let perturbed = normalize(normal) - strength * (dhdx * normalize(cross(dpdy_pos, normal)) + dhdy * normalize(cross(normal, dpdx_pos)));
+  return normalize(perturbed);
+}
+
+// LH engine + WebGPU fragment Y: flip dhdy contribution so height peaks read as outward bumps vs Blender reference
+fn bump_lh(strength: f32, height: f32, normal: vec3f, world_pos: vec3f) -> vec3f {
+  let dhdx = dpdx(height);
+  let dhdy = dpdy(height);
+  let dpdx_pos = dpdx(world_pos);
+  let dpdy_pos = dpdy(world_pos);
+  let perturbed = normalize(normal) - strength * (dhdx * normalize(cross(dpdy_pos, normal)) - dhdy * normalize(cross(normal, dpdx_pos)));
   return normalize(perturbed);
 }
 
@@ -214,8 +244,13 @@ fn _noise3(p: vec3f) -> f32 {
     u.z);
 }
 
-fn tex_noise(p: vec3f, scale: f32, detail: f32, roughness: f32) -> f32 {
-  let coords = p * scale;
+fn tex_noise(p: vec3f, scale: f32, detail: f32, roughness: f32, distortion: f32) -> f32 {
+  var q = p;
+  if (abs(distortion) > 1e-6) {
+    let w = _noise3(p * scale * 1.37 + vec3f(2.31, 5.17, 8.09));
+    q = p + (w * 2.0 - 1.0) * distortion;
+  }
+  let coords = q * scale;
   var value = 0.0;
   var amplitude = 1.0;
   var frequency = 1.0;

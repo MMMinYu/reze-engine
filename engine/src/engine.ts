@@ -55,10 +55,55 @@ export type CameraOptions = {
   fov?: number
 }
 
+/** EEVEE Bloom panel (3D Viewport > Render > Bloom). `sceneLinearBoost` only scales luminance for the threshold/knee test — bloom color is reconstructed from unscaled scene RGB (matches EEVEE energy; avoids wash at high intensity). */
+export type BloomOptions = {
+  enabled: boolean
+  threshold: number
+  knee: number
+  radius: number
+  color: Vec3
+  intensity: number
+  clamp: number
+  sceneLinearBoost: number
+  /** Widen blur σ vs internal radius→σ heuristic (EEVEE “large bloom” uses multi-downsample; use ~1.2–1.8 to approximate wider 光圈). */
+  blurSpread: number
+}
+
+export const DEFAULT_BLOOM_OPTIONS: BloomOptions = {
+  enabled: true,
+  threshold: 0.5,
+  knee: 0.5,
+  radius: 4.0,
+  color: new Vec3(1.0, 0.7247558832168579, 0.6487361788749695),
+  intensity: 0.05,
+  clamp: 0.0,
+  sceneLinearBoost: 4.0,
+  blurSpread: 1.35,
+}
+
+/** Blender Color Management / View (rendering.txt: Filmic, exposure, gamma). `look` is reserved for future curve tweaks. */
+export type ViewTransformOptions = {
+  /** Stops applied before Filmic: `linear *= 2^exposure` (Blender default often ~−0.3). */
+  exposure: number
+  /** After Filmic, display gamma (`pow(rgb, 1/gamma)`). */
+  gamma: number
+  look: "default" | "medium_high_contrast"
+}
+
+export const DEFAULT_VIEW_TRANSFORM: ViewTransformOptions = {
+  exposure: -0.30000001192092896,
+  gamma: 1.0,
+  look: "medium_high_contrast",
+}
+
 export type EngineOptions = {
   world?: WorldOptions
   sun?: SunOptions
   camera?: CameraOptions
+  /** Initial EEVEE-style bloom; tune at runtime with `setBloomOptions`. */
+  bloom?: Partial<BloomOptions>
+  /** View transform (exposure/gamma) applied in composite before/after Filmic. */
+  view?: Partial<ViewTransformOptions>
   onRaycast?: RaycastCallback
   physicsOptions?: PhysicsOptions
 }
@@ -167,6 +212,28 @@ export class Engine {
   private compositePipeline!: GPURenderPipeline
   private compositeBindGroupLayout!: GPUBindGroupLayout
   private compositeBindGroup!: GPUBindGroup
+  private compositeUniformBuffer!: GPUBuffer
+  private readonly compositeUniformData = new Float32Array(4)
+
+  // EEVEE-style bloom: half-res 2×2 downsample → luminance soft-threshold → separable Gaussian → add before Filmic.
+  // Simplified vs Blender (no mip pyramid); sceneLinearBoost affects threshold input only, not bloom radiance.
+  private bloomSampler!: GPUSampler
+  private bloomUniformBuffer!: GPUBuffer
+  private bloomBlurUniformBuffer!: GPUBuffer
+  private readonly bloomUniformData = new Float32Array(12)
+  private readonly bloomBlurUniformData = new Float32Array(4)
+  private bloomExtractPipeline!: GPURenderPipeline
+  private bloomBlurHPipeline!: GPURenderPipeline
+  private bloomBlurVPipeline!: GPURenderPipeline
+  private bloomExtractBindGroupLayout!: GPUBindGroupLayout
+  private bloomBlurBindGroupLayout!: GPUBindGroupLayout
+  private bloomExtractBindGroup!: GPUBindGroup
+  private bloomBlurHBindGroup!: GPUBindGroup
+  private bloomBlurVBindGroup!: GPUBindGroup
+  private bloomTex0!: GPUTexture
+  private bloomTex1!: GPUTexture
+  /** Single-attachment pass; colorAttachments[0].view set per bloom step. */
+  private bloomPassDescriptor!: GPURenderPassDescriptor
 
   // Ground properties (shadow only)
   private groundVertexBuffer?: GPUBuffer
@@ -223,6 +290,8 @@ export class Engine {
   }
   private animationFrameId: number | null = null
   private renderLoopCallback: (() => void) | null = null
+  private bloomSettings!: BloomOptions
+  private viewTransform!: ViewTransformOptions
 
   constructor(canvas: HTMLCanvasElement, options?: EngineOptions) {
     this.canvas = canvas
@@ -243,6 +312,116 @@ export class Engine {
     }
     this.onRaycast = options?.onRaycast
     this.physicsOptions = options?.physicsOptions ?? d.physicsOptions
+    this.bloomSettings = Engine.mergeBloomDefaults(options?.bloom)
+    this.viewTransform = Engine.mergeViewTransformDefaults(options?.view)
+  }
+
+  /** Merge partial bloom with EEVEE defaults (same as constructor). */
+  static mergeBloomDefaults(partial?: Partial<BloomOptions>): BloomOptions {
+    const d = DEFAULT_BLOOM_OPTIONS
+    const c = partial?.color
+    return {
+      enabled: partial?.enabled ?? d.enabled,
+      threshold: partial?.threshold ?? d.threshold,
+      knee: partial?.knee ?? d.knee,
+      radius: partial?.radius ?? d.radius,
+      color: c ? new Vec3(c.x, c.y, c.z) : new Vec3(d.color.x, d.color.y, d.color.z),
+      intensity: partial?.intensity ?? d.intensity,
+      clamp: partial?.clamp ?? d.clamp,
+      sceneLinearBoost: partial?.sceneLinearBoost ?? d.sceneLinearBoost,
+      blurSpread: partial?.blurSpread ?? d.blurSpread,
+    }
+  }
+
+  static mergeViewTransformDefaults(partial?: Partial<ViewTransformOptions>): ViewTransformOptions {
+    const d = DEFAULT_VIEW_TRANSFORM
+    return {
+      exposure: partial?.exposure ?? d.exposure,
+      gamma: partial?.gamma ?? d.gamma,
+      look: partial?.look ?? d.look,
+    }
+  }
+
+  /** Current bloom settings (Blender names; tint is a copied `Vec3`). */
+  getBloomOptions(): BloomOptions {
+    const b = this.bloomSettings
+    return {
+      enabled: b.enabled,
+      threshold: b.threshold,
+      knee: b.knee,
+      radius: b.radius,
+      color: new Vec3(b.color.x, b.color.y, b.color.z),
+      intensity: b.intensity,
+      clamp: b.clamp,
+      sceneLinearBoost: b.sceneLinearBoost,
+      blurSpread: b.blurSpread,
+    }
+  }
+
+  getViewTransformOptions(): ViewTransformOptions {
+    const v = this.viewTransform
+    return { exposure: v.exposure, gamma: v.gamma, look: v.look }
+  }
+
+  setViewTransformOptions(patch: Partial<ViewTransformOptions>): void {
+    const v = this.viewTransform
+    if (patch.exposure !== undefined) v.exposure = patch.exposure
+    if (patch.gamma !== undefined) v.gamma = patch.gamma
+    if (patch.look !== undefined) v.look = patch.look
+    if (this.device && this.compositeUniformBuffer) {
+      this.writeCompositeViewUniforms()
+    }
+  }
+
+  private writeCompositeViewUniforms(): void {
+    const v = this.viewTransform
+    const u = this.compositeUniformData
+    u[0] = v.exposure
+    u[1] = Math.max(v.gamma, 1e-4)
+    u[2] = 0.0
+    u[3] = 0.0
+    this.device.queue.writeBuffer(this.compositeUniformBuffer, 0, u)
+  }
+
+  /** Patch bloom; GPU uniforms update immediately if `init()` has run. */
+  setBloomOptions(patch: Partial<BloomOptions>): void {
+    const b = this.bloomSettings
+    if (patch.enabled !== undefined) b.enabled = patch.enabled
+    if (patch.threshold !== undefined) b.threshold = patch.threshold
+    if (patch.knee !== undefined) b.knee = patch.knee
+    if (patch.radius !== undefined) b.radius = patch.radius
+    if (patch.color !== undefined) {
+      b.color.x = patch.color.x
+      b.color.y = patch.color.y
+      b.color.z = patch.color.z
+    }
+    if (patch.intensity !== undefined) b.intensity = patch.intensity
+    if (patch.clamp !== undefined) b.clamp = patch.clamp
+    if (patch.sceneLinearBoost !== undefined) b.sceneLinearBoost = patch.sceneLinearBoost
+    if (patch.blurSpread !== undefined) b.blurSpread = patch.blurSpread
+    if (this.device && this.bloomUniformBuffer) {
+      this.writeBloomUniforms(this.canvas.width, this.canvas.height)
+    }
+  }
+
+  private writeBloomUniforms(fullW: number, fullH: number): void {
+    const b = this.bloomSettings
+    const effIntensity = b.enabled ? b.intensity : 0.0
+    const effBoost = b.enabled ? Math.max(b.sceneLinearBoost, 1.0) : 1.0
+    const bu = this.bloomUniformData
+    bu[0] = fullW
+    bu[1] = fullH
+    bu[2] = b.threshold
+    bu[3] = b.knee
+    bu[4] = b.color.x
+    bu[5] = b.color.y
+    bu[6] = b.color.z
+    bu[7] = effIntensity
+    bu[8] = b.radius
+    bu[9] = b.clamp
+    bu[10] = effBoost
+    bu[11] = 0.0
+    this.device.queue.writeBuffer(this.bloomUniformBuffer, 0, bu)
   }
 
   // Step 1: Get WebGPU device and context
@@ -815,12 +994,179 @@ export class Engine {
       },
     })
 
-    // ─── Composite pass: sample HDR scene, apply Filmic tonemap, write swapchain ───
-    // Final tonemap lives here so future bloom/postfx stack runs on linear HDR.
+    // ─── Bloom (EEVEE-style): half-res extract + 9-tap separable blur, then composite ───
+    this.bloomSampler = this.device.createSampler({
+      label: "bloom sampler",
+      magFilter: "linear",
+      minFilter: "linear",
+      addressModeU: "clamp-to-edge",
+      addressModeV: "clamp-to-edge",
+    })
+    this.bloomUniformBuffer = this.device.createBuffer({
+      label: "bloom uniforms",
+      size: 48,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    })
+    this.bloomBlurUniformBuffer = this.device.createBuffer({
+      label: "bloom blur separable uniforms",
+      size: 16,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    })
+
+    this.bloomExtractBindGroupLayout = this.device.createBindGroupLayout({
+      label: "bloom extract layout",
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "unfilterable-float" } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+      ],
+    })
+    this.bloomBlurBindGroupLayout = this.device.createBindGroupLayout({
+      label: "bloom blur layout",
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+      ],
+    })
+
+    const bloomFullscreenVs = /* wgsl */ `
+      @vertex fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
+        let x = f32((vi & 1u) << 2u) - 1.0;
+        let y = f32((vi & 2u) << 1u) - 1.0;
+        return vec4f(x, y, 0.0, 1.0);
+      }
+    `
+
+    const bloomExtractShader = this.device.createShaderModule({
+      label: "bloom extract",
+      code: `${bloomFullscreenVs}
+        @group(0) @binding(0) var hdrTex: texture_2d<f32>;
+        @group(0) @binding(1) var<uniform> bloomU: array<vec4<f32>, 3>;
+
+        fn luminance(c: vec3f) -> f32 {
+          return dot(max(c, vec3f(0.0)), vec3f(0.2126, 0.7152, 0.0722));
+        }
+
+        @fragment fn fs(@builtin(position) p: vec4f) -> @location(0) vec4f {
+          let fullW = i32(bloomU[0].x);
+          let fullH = i32(bloomU[0].y);
+          let threshold = bloomU[0].z;
+          let knee = bloomU[0].w;
+          let tint = bloomU[1].xyz;
+          let intensity = bloomU[1].w;
+          let clampV = bloomU[2].y;
+          let px = vec2<i32>(p.xy - vec2f(0.5));
+          var acc = vec3f(0.0);
+          var w = 0.0;
+          for (var dy = 0; dy < 2; dy++) {
+            for (var dx = 0; dx < 2; dx++) {
+              let hc = vec2<i32>(px.x * 2 + dx, px.y * 2 + dy);
+              if (hc.x < fullW && hc.y < fullH && hc.x >= 0 && hc.y >= 0) {
+                let h = textureLoad(hdrTex, hc, 0);
+                let a = max(h.a, 1e-6);
+                acc += h.rgb / a;
+                w += 1.0;
+              }
+            }
+          }
+          let straight = acc / max(w, 1.0);
+          let sceneBoost = max(bloomU[2].z, 1.0);
+          // Boost only luminance for gate (viewport exposure); blo uses straight so intensity≈Blender (no extra boost³ wash)
+          let lum = luminance(straight * sceneBoost);
+          let soft = clamp(lum - threshold + knee, 0.0, 2.0 * knee);
+          let q = soft * soft / (4.0 * max(knee, 1e-4) + 1e-6);
+          let contrib = select(max(lum - threshold, 0.0), q, knee > 1e-4 && lum < threshold + knee);
+          let mask = contrib / max(lum, 1e-4);
+          var blo = straight * mask * intensity * tint;
+          if (clampV > 0.0) { blo = min(blo, vec3f(clampV)); }
+          return vec4f(max(blo, vec3f(0.0)), 1.0);
+        }
+      `,
+    })
+
+    const bloomBlurShader = this.device.createShaderModule({
+      label: "bloom blur separable",
+      code: `${bloomFullscreenVs}
+        @group(0) @binding(0) var srcTex: texture_2d<f32>;
+        @group(0) @binding(1) var srcSamp: sampler;
+        @group(0) @binding(2) var<uniform> blurU: vec4<f32>;
+
+        fn gauss_w(i: i32, sigma: f32) -> f32 {
+          let x = f32(i);
+          return exp(-(x * x) / (2.0 * sigma * sigma));
+        }
+
+        @fragment fn fs(@builtin(position) p: vec4f) -> @location(0) vec4f {
+          let dims = vec2f(textureDimensions(srcTex));
+          let uv = (p.xy - vec2f(0.5)) / max(dims, vec2f(1.0));
+          let sigma = max(blurU.x, 0.35);
+          var col = vec3f(0.0);
+          var wsum = 0.0;
+          for (var i = -4; i <= 4; i++) {
+            let o = f32(i) * blurU.yz;
+            let w = gauss_w(i, sigma);
+            col += textureSampleLevel(srcTex, srcSamp, uv + o, 0.0).rgb * w;
+            wsum += w;
+          }
+          return vec4f(col / max(wsum, 1e-6), 1.0);
+        }
+      `,
+    })
+
+    const bloomExtractLayout = this.device.createPipelineLayout({
+      bindGroupLayouts: [this.bloomExtractBindGroupLayout],
+    })
+    const bloomBlurLayout = this.device.createPipelineLayout({
+      bindGroupLayouts: [this.bloomBlurBindGroupLayout],
+    })
+
+    this.bloomExtractPipeline = this.device.createRenderPipeline({
+      label: "bloom extract pipeline",
+      layout: bloomExtractLayout,
+      vertex: { module: bloomExtractShader, entryPoint: "vs" },
+      fragment: {
+        module: bloomExtractShader,
+        entryPoint: "fs",
+        targets: [{ format: Engine.HDR_FORMAT }],
+      },
+      primitive: { topology: "triangle-list" },
+    })
+    this.bloomBlurHPipeline = this.device.createRenderPipeline({
+      label: "bloom blur H",
+      layout: bloomBlurLayout,
+      vertex: { module: bloomBlurShader, entryPoint: "vs" },
+      fragment: {
+        module: bloomBlurShader,
+        entryPoint: "fs",
+        targets: [{ format: Engine.HDR_FORMAT }],
+      },
+      primitive: { topology: "triangle-list" },
+    })
+    this.bloomBlurVPipeline = this.device.createRenderPipeline({
+      label: "bloom blur V",
+      layout: bloomBlurLayout,
+      vertex: { module: bloomBlurShader, entryPoint: "vs" },
+      fragment: {
+        module: bloomBlurShader,
+        entryPoint: "fs",
+        targets: [{ format: Engine.HDR_FORMAT }],
+      },
+      primitive: { topology: "triangle-list" },
+    })
+
+    // ─── Composite: HDR + bloom → Filmic → swapchain (premultiplied) ───
+    this.compositeUniformBuffer = this.device.createBuffer({
+      label: "composite view uniforms",
+      size: 16,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    })
     this.compositeBindGroupLayout = this.device.createBindGroupLayout({
       label: "composite bind group layout",
       entries: [
         { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "unfilterable-float" } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
       ],
     })
 
@@ -828,9 +1174,10 @@ export class Engine {
       label: "composite shader",
       code: /* wgsl */ `
         @group(0) @binding(0) var hdrTex: texture_2d<f32>;
+        @group(0) @binding(1) var bloomTex: texture_2d<f32>;
+        @group(0) @binding(2) var bloomSamp: sampler;
+        @group(0) @binding(3) var<uniform> viewU: vec4<f32>;
 
-        // Filmic LUT matching default.ts / material shaders — keeps tonemap identical
-        // to before the HDR refactor so pixel output is unchanged.
         fn filmic(x: f32) -> f32 {
           var lut = array<f32, 14>(
             0.0067, 0.0141, 0.0272, 0.0499, 0.0885, 0.1512, 0.2462,
@@ -842,7 +1189,6 @@ export class Engine {
           return mix(lut[i], lut[j], t - f32(i));
         }
 
-        // Fullscreen triangle — covers NDC [-1,1] with a single triangle using no VBO.
         @vertex fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
           let x = f32((vi & 1u) << 2u) - 1.0;
           let y = f32((vi & 2u) << 1u) - 1.0;
@@ -850,14 +1196,18 @@ export class Engine {
         }
 
         @fragment fn fs(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
-          // HDR target stores premultiplied RGB (src-alpha blending).
-          // Tonemap in straight space, then re-premultiply for the premultiplied
-          // swapchain.
           let hdr = textureLoad(hdrTex, vec2<i32>(fragCoord.xy), 0);
           let a = max(hdr.a, 1e-6);
           let straight = hdr.rgb / a;
-          let tm = vec3f(filmic(straight.r), filmic(straight.g), filmic(straight.b));
-          return vec4f(tm * hdr.a, hdr.a);
+          let fullSz = vec2f(textureDimensions(hdrTex));
+          let bloomUv = (fragCoord.xy + vec2f(0.5)) / max(fullSz, vec2f(1.0));
+          let bloom = textureSampleLevel(bloomTex, bloomSamp, bloomUv, 0.0).rgb;
+          let combined = straight + bloom;
+          let exposed = combined * exp2(viewU.x);
+          let tm = vec3f(filmic(exposed.r), filmic(exposed.g), filmic(exposed.b));
+          let g = max(viewU.y, 1e-4);
+          let disp = pow(max(tm, vec3f(0.0)), vec3f(1.0 / g));
+          return vec4f(disp * hdr.a, hdr.a);
         }
       `,
     })
@@ -873,6 +1223,18 @@ export class Engine {
       },
       primitive: { topology: "triangle-list" },
     })
+
+    this.bloomPassDescriptor = {
+      label: "bloom pass",
+      colorAttachments: [
+        {
+          view: undefined as unknown as GPUTextureView,
+          clearValue: { r: 0, g: 0, b: 0, a: 0 },
+          loadOp: "clear",
+          storeOp: "store",
+        },
+      ],
+    } as GPURenderPassDescriptor
 
     // GPU picking: encode (modelIndex, materialIndex) as color
     const pickShaderModule = this.device.createShaderModule({
@@ -1008,6 +1370,21 @@ export class Engine {
         usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
       })
 
+      const bw = Math.max(1, Math.floor(width / 2))
+      const bh = Math.max(1, Math.floor(height / 2))
+      this.bloomTex0 = this.device.createTexture({
+        label: "bloom ping 0",
+        size: [bw, bh],
+        format: Engine.HDR_FORMAT,
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+      })
+      this.bloomTex1 = this.device.createTexture({
+        label: "bloom ping 1",
+        size: [bw, bh],
+        format: Engine.HDR_FORMAT,
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+      })
+
       this.depthTexture = this.device.createTexture({
         label: "depth texture",
         size: [width, height],
@@ -1053,14 +1430,48 @@ export class Engine {
         ],
       }
 
-      // Rebind composite to new HDR resolve texture.
-      if (this.compositeBindGroupLayout) {
+      this.writeBloomUniforms(width, height)
+
+      if (this.compositeBindGroupLayout && this.bloomExtractBindGroupLayout) {
+        this.bloomExtractBindGroup = this.device.createBindGroup({
+          label: "bloom extract bind group",
+          layout: this.bloomExtractBindGroupLayout,
+          entries: [
+            { binding: 0, resource: this.hdrResolveTexture.createView() },
+            { binding: 1, resource: { buffer: this.bloomUniformBuffer } },
+          ],
+        })
+        this.bloomBlurHBindGroup = this.device.createBindGroup({
+          label: "bloom blur H bind group",
+          layout: this.bloomBlurBindGroupLayout,
+          entries: [
+            { binding: 0, resource: this.bloomTex0.createView() },
+            { binding: 1, resource: this.bloomSampler },
+            { binding: 2, resource: { buffer: this.bloomBlurUniformBuffer } },
+          ],
+        })
+        this.bloomBlurVBindGroup = this.device.createBindGroup({
+          label: "bloom blur V bind group",
+          layout: this.bloomBlurBindGroupLayout,
+          entries: [
+            { binding: 0, resource: this.bloomTex1.createView() },
+            { binding: 1, resource: this.bloomSampler },
+            { binding: 2, resource: { buffer: this.bloomBlurUniformBuffer } },
+          ],
+        })
         this.compositeBindGroup = this.device.createBindGroup({
           label: "composite bind group",
           layout: this.compositeBindGroupLayout,
-          entries: [{ binding: 0, resource: this.hdrResolveTexture.createView() }],
+          entries: [
+            { binding: 0, resource: this.hdrResolveTexture.createView() },
+            { binding: 1, resource: this.bloomTex0.createView() },
+            { binding: 2, resource: this.bloomSampler },
+            { binding: 3, resource: { buffer: this.compositeUniformBuffer } },
+          ],
         })
       }
+
+      this.writeCompositeViewUniforms()
 
       this.camera.aspect = width / height
 
@@ -2076,7 +2487,54 @@ export class Engine {
     if (this.hasGround) this.renderGround(pass)
     pass.end()
 
-    // Composite: sample HDR scene texture, apply Filmic tonemap, write to swapchain.
+    // Bloom: half-res extract → separable Gaussian (σ from EEVEE radius) → composite adds bloom before Filmic.
+    if (this.bloomExtractBindGroup && this.bloomBlurHBindGroup && this.bloomBlurVBindGroup && this.compositeBindGroup) {
+      const bloomAtt = this.bloomPassDescriptor.colorAttachments as GPURenderPassColorAttachment[]
+      bloomAtt[0].view = this.bloomTex0.createView()
+      const b0 = encoder.beginRenderPass(this.bloomPassDescriptor)
+      b0.setPipeline(this.bloomExtractPipeline)
+      b0.setBindGroup(0, this.bloomExtractBindGroup)
+      b0.draw(3)
+      b0.end()
+
+      const doBlur = this.bloomSettings.enabled && this.bloomSettings.intensity > 1e-7
+      if (doBlur) {
+        const bw = Math.max(1, Math.floor(this.canvas.width))
+        const bh = Math.max(1, Math.floor(this.canvas.height))
+        const halfW = Math.max(1, Math.floor(bw / 2))
+        const halfH = Math.max(1, Math.floor(bh / 2))
+        // Heuristic σ from EEVEE radius + blurSpread (EEVEE uses pyramid blur — widen σ to approximate 大光圈 footprint)
+        const radius = this.bloomUniformData[8]
+        const spread = Math.max(0.05, this.bloomSettings.blurSpread)
+        const sigma = Math.max(0.28, radius * 0.26) * spread
+        const blurU = this.bloomBlurUniformData
+        blurU[0] = sigma
+        blurU[1] = 1.0 / halfW
+        blurU[2] = 0.0
+        blurU[3] = 0.0
+        this.device.queue.writeBuffer(this.bloomBlurUniformBuffer, 0, blurU)
+
+        bloomAtt[0].view = this.bloomTex1.createView()
+        const b1 = encoder.beginRenderPass(this.bloomPassDescriptor)
+        b1.setPipeline(this.bloomBlurHPipeline)
+        b1.setBindGroup(0, this.bloomBlurHBindGroup)
+        b1.draw(3)
+        b1.end()
+
+        blurU[1] = 0.0
+        blurU[2] = 1.0 / halfH
+        this.device.queue.writeBuffer(this.bloomBlurUniformBuffer, 0, blurU)
+
+        bloomAtt[0].view = this.bloomTex0.createView()
+        const b2 = encoder.beginRenderPass(this.bloomPassDescriptor)
+        b2.setPipeline(this.bloomBlurVPipeline)
+        b2.setBindGroup(0, this.bloomBlurVBindGroup)
+        b2.draw(3)
+        b2.end()
+      }
+    }
+
+    // Composite: HDR + bloom → Filmic tonemap → swapchain.
     const compositeAttachment = (this.compositePassDescriptor.colorAttachments as GPURenderPassColorAttachment[])[0]
     compositeAttachment.view = this.context.getCurrentTexture().createView()
     const cpass = encoder.beginRenderPass(this.compositePassDescriptor)

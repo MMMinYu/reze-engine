@@ -1,5 +1,4 @@
-// Hand-ported M_Smooth_Cloth material shader.
-// Traced from m_graphs.json (M_Smooth_Cloth node graph).
+// M_Smooth_Cloth — dump socket order + m_graphs ramps/overlay/noise-bump (dump omits 噪波→凹凸 subtree).
 
 import { NODES_WGSL } from "./nodes"
 
@@ -48,21 +47,6 @@ struct LightVP { viewProj: mat4x4f, };
 @group(2) @binding(0) var diffuseTexture: texture_2d<f32>;
 @group(2) @binding(1) var<uniform> material: MaterialUniforms;
 
-fn filmic(x: f32) -> f32 {
-  var lut = array<f32, 14>(
-    0.0067, 0.0141, 0.0272, 0.0499, 0.0885, 0.1512, 0.2462,
-    0.3753, 0.5273, 0.6776, 0.8031, 0.8929, 0.9495, 0.9814
-  );
-  let t = clamp(log2(max(x, 1e-10)) + 10.0, 0.0, 13.0);
-  let i = u32(t);
-  let j = min(i + 1u, 13u);
-  return mix(lut[i], lut[j], t - f32(i));
-}
-
-fn tonemap(hdr: vec3f) -> vec3f {
-  return vec3f(filmic(hdr.x), filmic(hdr.y), filmic(hdr.z));
-}
-
 fn sampleShadow(worldPos: vec3f, n: vec3f) -> f32 {
   let biasedPos = worldPos + n * 0.08;
   let lclip = lightVP.viewProj * vec4f(biasedPos, 1.0);
@@ -80,8 +64,12 @@ fn sampleShadow(worldPos: vec3f, n: vec3f) -> f32 {
 }
 
 const PI_C: f32 = 3.141592653589793;
-const F0_CLOTH: f32 = 0.064; // Specular=0.8 → F0 = 0.08 * 0.8
+const F0_CLOTH: f32 = 0.064; // Specular=0.8 → 0.08*0.8
 const CLOTH_ROUGHNESS: f32 = 0.5;
+const CLOTH_TOON_EDGE: f32 = 0.2966;
+const CLOTH_MIX04_MUL: f32 = 0.5; // 运算.004 MULTIPLY Value_001 (dump)
+const NPR_EMIT_STR: f32 = 18.200000762939453;
+const NPR_MIX_SHADER_FAC: f32 = 0.8999999761581421;
 
 fn ggx_d_cloth(ndoth: f32, a2: f32) -> f32 {
   let denom = ndoth * ndoth * (a2 - 1.0) + 1.0;
@@ -123,84 +111,72 @@ fn fresnel_schlick_cloth(cosTheta: f32, f0: f32) -> f32 {
   return output;
 }
 
-// ─── Fragment: M_Smooth_Cloth NPR pipeline ──────────────────────────
-// Signal flow:
-//   tex_color → HueSat.002(V=0.2) = dark_tex
-//   DiffuseBSDF(white) → ShaderToRGB → ramp.008 CONSTANT [0→black,0.2966→white] = toon
-//   toon*0.5 → Mix.004(Factor, A=dark_tex, B=tex_color) = toon_mix
-//   Bevel.Z → Mix.003(Factor=bevel_z, A=toon_mix, B=dark_tex) = edge_mixed
-//   edge_mixed → HueSat.004(S=0.8,V=2.0) = bright_version
-//   AO → ramp.001 LINEAR [0→white,0.8808→black] → ao_factor
-//   Mix.002 OVERLAY(ao_factor, A=edge_mixed, B=bright_version) = npr_color
-//   Emission.005(npr_color, Strength=18.2)
-//   Principled: base=HueSat(V=0.8) on tex_color, roughness=0.5, specular=0.8, no bump, no emission
-//   MixShader.001(Fac=0.9, First=Emission.005, Second=Principled) → OUTPUT
-//   = 10% NPR emission + 90% Principled
-
 @fragment fn fs(input: VertexOutput) -> @location(0) vec4f {
-  let alpha = material.alpha;
-  if (alpha < 0.001) { discard; }
-
   let n = normalize(input.normal);
   let v = normalize(camera.viewPos - input.worldPos);
   let l = -light.lights[0].direction.xyz;
   let sun = light.lights[0].color.xyz * light.lights[0].color.w;
-
-  let tex_color = textureSample(diffuseTexture, diffuseSampler, input.uv).rgb;
+  let amb = light.ambientColor.xyz;
   let shadow = sampleShadow(input.worldPos, n);
 
-  // ═══ 1. TOON MASK ═══
-  let ndotl_raw = shader_to_rgb_diffuse(n, l) * shadow;
-  let toon = ramp_constant(ndotl_raw, 0.0, vec4f(0,0,0,1), 0.2966, vec4f(1,1,1,1)).r;
+  let tex_s = textureSample(diffuseTexture, diffuseSampler, input.uv);
+  let tex_rgb = tex_s.rgb;
+  let out_alpha = material.alpha * tex_s.a;
+  if (out_alpha < 0.001) { discard; }
 
-  // ═══ 2. TOON COLOR ═══
-  let dark_tex = hue_sat(0.5, 1.0, 0.2, 1.0, tex_color); // HueSat.002 — very dark variant
-  let toon_fac = toon * 0.5; // 运算.004(MULTIPLY, default=0.5)
-  let toon_mix = mix_blend(toon_fac, dark_tex, tex_color); // Mix.004: A=dark, B=original
+  // Shader→RGB → 颜色渐变.008 CONSTANT — AA like face (same terminator artifact class)
+  let lum_shade = shader_to_rgb_diffuse(n, l, sun, amb, shadow);
+  let ramp008 = ramp_constant_edge_aa(lum_shade, CLOTH_TOON_EDGE, vec4f(0,0,0,1), vec4f(1,1,1,1));
+  let toon_r = ramp008.r;
+  // 颜色渐变.008 → 运算.004 MULTIPLY 0.5 → 混合.004 Factor
+  let mix04_fac = math_multiply(toon_r, CLOTH_MIX04_MUL);
 
-  // ═══ 3. BEVEL / EDGE MIX ═══
-  // Blender Z-up, engine Y-up: Blender "Z" (up) maps to engine "Y".
+  // 混合.004: A=色相/饱和度/明度.002, B=纹理
+  let dark_tex = hue_sat(0.5, 1.0, 0.19999998807907104, 1.0, tex_rgb);
+  let mix04 = mix_blend(mix04_fac, dark_tex, tex_rgb);
+
+  // 倒角.001→Z → 混合.003 Factor; A=混合.004, B=色相/饱和度/明度.002
   let bevel_z = clamp(n.y, 0.0, 1.0);
-  let edge_mixed = mix_blend(bevel_z, toon_mix, dark_tex); // Mix.003: A=toon_mix, B=dark_tex
+  let mix03 = mix_blend(bevel_z, mix04, dark_tex);
 
-  // ═══ 4. BRIGHT VERSION ═══
-  let bright_version = hue_sat(0.5, 0.8, 2.0, 1.0, edge_mixed); // HueSat.004 — boosted value
-
-  // ═══ 5. AO GATING ═══
+  // 环境光遮蔽 → 颜色渐变.001 LINEAR → 混合.001 (白/黑) → 混合.002 OVERLAY Fac
   let ao = ao_fake(n, v);
-  let ao_ramp = ramp_linear(ao, 0.0, vec4f(1,1,1,1), 0.8808, vec4f(0,0,0,1)).r; // ramp.001 LINEAR [0→white, 0.8808→black]
-  let ao_factor = mix(1.0, 0.0, ao_ramp); // Mix.001: A=white(1.0), B=black(0.0)
+  let ao_ramp_c = ramp_linear(ao, 0.0, vec4f(1,1,1,1), 0.8808, vec4f(0,0,0,1));
+  let mix01_fac = ao_ramp_c.r;
+  let mix01_rgb = mix(vec3f(1.0), vec3f(0.0), mix01_fac);
 
-  // ═══ 6. NPR COLOR (OVERLAY blend) ═══
-  let npr_color = mix_overlay(ao_factor, edge_mixed, bright_version); // Mix.002 OVERLAY
+  // 混合.002 OVERLAY: Fac=混合.001, A=混合.003, B=色相/饱和度/明度.004
+  let hue004 = hue_sat(0.5, 0.800000011920929, 2.0, 1.0, mix03);
+  let overlay_fac = mix01_rgb.r;
+  let npr_rgb = mix_overlay(overlay_fac, mix03, hue004);
+  let npr_emission = npr_rgb * NPR_EMIT_STR;
 
-  // ═══ 7. NPR EMISSION ═══
-  let npr_emission = npr_color * 18.2; // Emission.005(Strength=18.2)
-
-  // ═══ 8. PRINCIPLED BSDF (no bump, no emission) ═══
-  let principled_base = hue_sat(0.5, 1.0, 0.8, 1.0, tex_color); // HueSat(V=0.8) — slightly dimmer
-
-  let p_ndotl = max(dot(n, l), 0.0);
-  let p_ndotv = max(dot(n, v), 0.001);
+  // 原理化BSDF: 噪波(Scale=17.7)→颜色渐变→凹凸 Strength=1 → Normal (m_graphs; bump_lh)
+  let principled_base = hue_sat(0.5, 1.0, 0.800000011920929, 1.0, tex_rgb);
+  let noise_uv = mapping_point(vec3f(input.uv, 0.0), vec3f(0.0), vec3f(0.0), vec3f(1.0));
+  let nv = tex_noise(noise_uv, 17.7, 2.0, 0.5, 0.0);
+  let nh = ramp_linear(nv, 0.0, vec4f(0.6351, 0.6351, 0.6351, 1.0), 1.0, vec4f(0.5139, 0.5139, 0.5139, 1.0)).r;
+  let pn = bump_lh(1.0, nh, n, input.worldPos);
+  let p_ndotl = max(dot(pn, l), 0.0);
+  let p_ndotv = max(dot(pn, v), 0.001);
   let h = normalize(l + v);
-  let p_ndoth = max(dot(n, h), 0.0);
+  let p_ndoth = max(dot(pn, h), 0.0);
   let p_vdoth = max(dot(v, h), 0.0);
   let a2 = CLOTH_ROUGHNESS * CLOTH_ROUGHNESS;
   let D = ggx_d_cloth(p_ndoth, a2);
   let G = smith_g1_cloth(p_ndotl, a2) * smith_g1_cloth(p_ndotv, a2);
   let F = fresnel_schlick_cloth(p_vdoth, F0_CLOTH);
-  let spec = (D * G * F) / max(4.0 * p_ndotl * p_ndotv, 0.001);
+  let spec_vis = smoothstep(0.0, 0.06, p_ndotl);
+  let spec = (D * G * F) / max(4.0 * p_ndotl * p_ndotv, 0.02) * spec_vis;
   let kd = (1.0 - F) * principled_base / PI_C;
   let direct = (kd + spec) * sun * p_ndotl * shadow;
-  let ambient = principled_base * light.ambientColor.xyz;
-  let principled = ambient + direct; // no emission contribution (strength=0)
+  let ambient = principled_base * amb;
+  let principled = ambient + direct;
 
-  // ═══ 9. FINAL MIX ═══
-  // MixShader.001(Fac=0.9, First=NPR_emission, Second=Principled)
-  // Blender: (1-Fac)*First + Fac*Second = 0.1*NPR_emission + 0.9*Principled
-  let final_color = mix(npr_emission, principled, 0.9);
+  // 混合着色器.001: Shader=自发光.005, Shader_001=原理化BSDF, Fac=0.9
+  let final_color = mix(npr_emission, principled, NPR_MIX_SHADER_FAC);
 
-  return vec4f(final_color, alpha);
+  return vec4f(final_color, out_alpha);
 }
 
 `
