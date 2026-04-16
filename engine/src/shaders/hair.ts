@@ -189,7 +189,9 @@ fn fresnel_schlick_hair(cosTheta: f32, f0: f32) -> f32 {
   let spec = (D * G * F) / max(4.0 * p_ndotl * p_ndotv, 0.001);
   let kd = (1.0 - F) * bc / PI_H;
   let direct = (kd + spec) * sun * p_ndotl * shadow;
-  let ambient = bc * light.ambientColor.xyz;
+  // Ambient specular via Karis split-sum DFG — replaces (1-r) hack with the UE4 curve fit.
+  let env_spec = env_brdf_approx(vec3f(F0_HAIR), HAIR_ROUGHNESS, p_ndotv);
+  let ambient = bc * light.ambientColor.xyz + env_spec * light.ambientColor.xyz;
   let principled = ambient + direct;
 
   // 混合着色器.001 Fac=0.2: first socket=相加着色器, second=原理化BSDF

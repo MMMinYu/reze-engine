@@ -327,4 +327,17 @@ fn normal_map(strength: f32, map_color: vec3f, normal: vec3f, tangent: vec3f, bi
   return normalize(mix(normal, perturbed, strength));
 }
 
+// ─── Split-sum environment BRDF (Karis 2013, UE4) ───────────────────
+// Curve-fit replacement for the DFG LUT: returns F_ambient = F0 * scale + bias
+// for use as  env_spec = env_brdf_approx(F0, r, ndotv) * probe_radiance.
+
+fn env_brdf_approx(F0: vec3f, roughness: f32, ndotv: f32) -> vec3f {
+  let c0 = vec4f(-1.0, -0.0275, -0.572, 0.022);
+  let c1 = vec4f(1.0, 0.0425, 1.04, -0.04);
+  let r = roughness * c0 + c1;
+  let a004 = min(r.x * r.x, exp2(-9.28 * ndotv)) * r.x + r.y;
+  let AB = vec2f(-1.04, 1.04) * a004 + r.zw;
+  return F0 * AB.x + vec3f(AB.y);
+}
+
 `;

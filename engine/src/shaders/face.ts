@@ -209,10 +209,12 @@ fn fresnel_schlick_face(cosTheta: f32, f0: f32) -> f32 {
   let D = ggx_d_face(p_ndoth, a2);
   let G = smith_g1_face(p_ndotl, a2) * smith_g1_face(p_ndotv, a2);
   let F = fresnel_schlick_face(p_vdoth, F0_FACE);
-  let spec = (D * G * F) / max(4.0 * p_ndotl * p_ndotv, 0.02);
+  let spec = (D * G * F) / max(4.0 * p_ndotl * p_ndotv, 0.001);
   let kd = (1.0 - F) * principled_base / PI_F;
   let direct = (kd + spec) * sun * p_ndotl * shadow;
-  let ambient = principled_base * light.ambientColor.xyz;
+  // Ambient specular via Karis split-sum DFG — replaces (1-r) hack with the UE4 curve fit.
+  let env_spec = env_brdf_approx(vec3f(F0_FACE), FACE_ROUGHNESS, p_ndotv);
+  let ambient = principled_base * light.ambientColor.xyz + env_spec * light.ambientColor.xyz;
   let principled = ambient + direct + p_emission + vec3f(sss);
 
   // 混合着色器.001: Shader=相加着色器.001, Shader_001=原理化BSDF — Fac blends toward second

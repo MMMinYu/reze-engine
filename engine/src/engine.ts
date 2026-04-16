@@ -17,6 +17,8 @@ import { DEFAULT_SHADER_WGSL } from "./shaders/default"
 import { FACE_SHADER_WGSL } from "./shaders/face"
 import { HAIR_SHADER_WGSL } from "./shaders/hair"
 import { CLOTH_SMOOTH_SHADER_WGSL } from "./shaders/cloth_smooth"
+import { CLOTH_ROUGH_SHADER_WGSL } from "./shaders/cloth_rough"
+import { METAL_SHADER_WGSL } from "./shaders/metal"
 import { BODY_SHADER_WGSL } from "./shaders/body"
 import { EYE_SHADER_WGSL } from "./shaders/eye"
 import { resolvePreset, type MaterialPreset, type MaterialPresetMap } from "./shaders/classify"
@@ -188,6 +190,8 @@ export class Engine {
   private facePipeline!: GPURenderPipeline
   private hairPipeline!: GPURenderPipeline
   private clothSmoothPipeline!: GPURenderPipeline
+  private clothRoughPipeline!: GPURenderPipeline
+  private metalPipeline!: GPURenderPipeline
   private bodyPipeline!: GPURenderPipeline
   private eyePipeline!: GPURenderPipeline
   private groundShadowPipeline!: GPURenderPipeline
@@ -577,6 +581,16 @@ export class Engine {
       code: CLOTH_SMOOTH_SHADER_WGSL,
     })
 
+    const clothRoughShaderModule = this.device.createShaderModule({
+      label: "cloth rough NPR shader",
+      code: CLOTH_ROUGH_SHADER_WGSL,
+    })
+
+    const metalShaderModule = this.device.createShaderModule({
+      label: "metal NPR shader",
+      code: METAL_SHADER_WGSL,
+    })
+
     const bodyShaderModule = this.device.createShaderModule({
       label: "body NPR shader",
       code: BODY_SHADER_WGSL,
@@ -670,6 +684,34 @@ export class Engine {
       label: "cloth smooth NPR pipeline",
       layout: mainPipelineLayout,
       shaderModule: clothSmoothShaderModule,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTarget: standardBlend,
+      cullMode: "none",
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        depthWriteEnabled: true,
+        depthCompare: "less-equal",
+      },
+    })
+
+    this.clothRoughPipeline = this.createRenderPipeline({
+      label: "cloth rough NPR pipeline",
+      layout: mainPipelineLayout,
+      shaderModule: clothRoughShaderModule,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTarget: standardBlend,
+      cullMode: "none",
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        depthWriteEnabled: true,
+        depthCompare: "less-equal",
+      },
+    })
+
+    this.metalPipeline = this.createRenderPipeline({
+      label: "metal NPR pipeline",
+      layout: mainPipelineLayout,
+      shaderModule: metalShaderModule,
       vertexBuffers: fullVertexBuffers,
       fragmentTarget: standardBlend,
       cullMode: "none",
@@ -2673,6 +2715,8 @@ export class Engine {
     if (preset === "face") return this.facePipeline
     if (preset === "hair") return this.hairPipeline
     if (preset === "cloth_smooth") return this.clothSmoothPipeline
+    if (preset === "cloth_rough") return this.clothRoughPipeline
+    if (preset === "metal") return this.metalPipeline
     if (preset === "body") return this.bodyPipeline
     if (preset === "eye") return this.eyePipeline
     return this.modelPipeline

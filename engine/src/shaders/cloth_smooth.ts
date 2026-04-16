@@ -66,6 +66,9 @@ fn sampleShadow(worldPos: vec3f, n: vec3f) -> f32 {
 const PI_C: f32 = 3.141592653589793;
 const F0_CLOTH: f32 = 0.064; // Specular=0.8 → 0.08*0.8
 const CLOTH_ROUGHNESS: f32 = 0.5;
+// EEVEE's reflection probe + SSR contribute a sharper component on top of the direct GGX lobe.
+// Without IBL we approximate by tightening the direct-spec roughness; ambient keeps full r for energy.
+const CLOTH_DIRECT_ROUGHNESS: f32 = 0.3;
 const CLOTH_TOON_EDGE: f32 = 0.2966;
 const CLOTH_MIX04_MUL: f32 = 0.5; // 运算.004 MULTIPLY Value_001 (dump)
 const NPR_EMIT_STR: f32 = 18.200000762939453;
@@ -160,14 +163,17 @@ fn fresnel_schlick_cloth(cosTheta: f32, f0: f32) -> f32 {
   let h = normalize(l + v);
   let p_ndoth = max(dot(n, h), 0.0);
   let p_vdoth = max(dot(v, h), 0.0);
-  let a2 = CLOTH_ROUGHNESS * CLOTH_ROUGHNESS;
-  let D = ggx_d_cloth(p_ndoth, a2);
-  let G = smith_g1_cloth(p_ndotl, a2) * smith_g1_cloth(p_ndotv, a2);
+  let a2_direct = CLOTH_DIRECT_ROUGHNESS * CLOTH_DIRECT_ROUGHNESS;
+  let D = ggx_d_cloth(p_ndoth, a2_direct);
+  let G = smith_g1_cloth(p_ndotl, a2_direct) * smith_g1_cloth(p_ndotv, a2_direct);
   let F = fresnel_schlick_cloth(p_vdoth, F0_CLOTH);
-  let spec = (D * G * F) / max(4.0 * p_ndotl * p_ndotv, 0.02);
+  let spec = (D * G * F) / max(4.0 * p_ndotl * p_ndotv, 0.001);
   let kd = (1.0 - F) * principled_base / PI_C;
   let direct = (kd + spec) * sun * p_ndotl * shadow;
-  let ambient = principled_base * amb;
+  // Ambient specular via Karis split-sum DFG — uses authored roughness so energy balance
+  // matches the material; direct lobe keeps the tightened CLOTH_DIRECT_ROUGHNESS.
+  let env_spec = env_brdf_approx(vec3f(F0_CLOTH), CLOTH_ROUGHNESS, p_ndotv);
+  let ambient = principled_base * amb + env_spec * amb;
   let principled = ambient + direct;
 
   // 混合着色器.001: Shader=自发光.005, Shader_001=原理化BSDF, Fac=0.9

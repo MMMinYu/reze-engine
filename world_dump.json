@@ -1,0 +1,401 @@
+{
+  "blender_version": "3.6.12",
+  "blend_filepath": "/Users/amyang/Downloads/仿深空之眼渲染预设v1.0_by_小绿毛猫/仿深空之眼渲染预设v1.0_by_小绿毛猫.blend",
+  "scene_name": "Scene",
+  "world": {
+    "name": "World",
+    "use_nodes": true,
+    "color": [
+      0.05087608844041824,
+      0.05087608844041824,
+      0.05087608844041824
+    ],
+    "node_tree": {
+      "nodes": {
+        "Background": {
+          "bl_idname": "ShaderNodeBackground",
+          "unlinked_input_defaults": {
+            "Color": [
+              0.40140241384506226,
+              0.4943971037864685,
+              0.6470189094543457,
+              1.0
+            ],
+            "Strength": 0.30000001192092896,
+            "Weight": 0.0
+          }
+        },
+        "几何数据": {
+          "bl_idname": "ShaderNodeNewGeometry",
+          "unlinked_input_defaults": {}
+        },
+        "World Output": {
+          "bl_idname": "ShaderNodeOutputWorld",
+          "unlinked_input_defaults": {}
+        },
+        "运算.003": {
+          "bl_idname": "ShaderNodeMath",
+          "unlinked_input_defaults": {
+            "Value_001": 0.0,
+            "Value_002": 0.5
+          }
+        },
+        "分离 XYZ": {
+          "bl_idname": "ShaderNodeSeparateXYZ",
+          "unlinked_input_defaults": {}
+        },
+        "运算.002": {
+          "bl_idname": "ShaderNodeMath",
+          "unlinked_input_defaults": {
+            "Value_001": 1.3599997758865356,
+            "Value_002": 0.5
+          }
+        },
+        "相加着色器": {
+          "bl_idname": "ShaderNodeAddShader",
+          "unlinked_input_defaults": {}
+        },
+        "运算.004": {
+          "bl_idname": "ShaderNodeMath",
+          "unlinked_input_defaults": {
+            "Value_001": 30.099998474121094,
+            "Value_002": 0.5
+          }
+        },
+        "运算.005": {
+          "bl_idname": "ShaderNodeMath",
+          "unlinked_input_defaults": {
+            "Value_002": 0.5
+          }
+        },
+        "原理化体积": {
+          "bl_idname": "ShaderNodeVolumePrincipled",
+          "unlinked_input_defaults": {
+            "Color": [
+              0.3969619870185852,
+              0.5688139796257019,
+              0.7886160016059875,
+              1.0
+            ],
+            "Color Attribute": "",
+            "Density Attribute": "density",
+            "Anisotropy": 0.0,
+            "Absorption Color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "Emission Color": [
+              0.49309369921684265,
+              0.708257257938385,
+              0.9838604927062988,
+              1.0
+            ],
+            "Blackbody Intensity": 0.0,
+            "Blackbody Tint": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "Temperature": 1000.0,
+            "Temperature Attribute": "temperature",
+            "Weight": 0.0
+          }
+        },
+        "转接点": {
+          "bl_idname": "NodeReroute",
+          "unlinked_input_defaults": {}
+        },
+        "运算.001": {
+          "bl_idname": "ShaderNodeMath",
+          "unlinked_input_defaults": {
+            "Value": 9.999999747378752e-05,
+            "Value_002": 0.5
+          }
+        },
+        "颜色渐变": {
+          "bl_idname": "ShaderNodeValToRGB",
+          "unlinked_input_defaults": {
+            "Fac": 0.5
+          }
+        },
+        "浮点曲线": {
+          "bl_idname": "ShaderNodeFloatCurve",
+          "unlinked_input_defaults": {
+            "Factor": 1.0
+          }
+        },
+        "运算.006": {
+          "bl_idname": "ShaderNodeMath",
+          "unlinked_input_defaults": {
+            "Value_002": 0.5
+          }
+        },
+        "色相/饱和度/明度": {
+          "bl_idname": "ShaderNodeHueSaturation",
+          "unlinked_input_defaults": {
+            "Hue": 0.5,
+            "Saturation": 0.20000000298023224,
+            "Value": 0.800000011920929,
+            "Fac": 1.0,
+            "Color": [
+              0.013702086172997952,
+              0.017641957849264145,
+              0.038204375654459,
+              1.0
+            ]
+          }
+        }
+      },
+      "links": [
+        {
+          "from_node": "Background",
+          "from_socket_id": "Background",
+          "from_socket_name": "Background",
+          "to_node": "相加着色器",
+          "to_socket_id": "Shader",
+          "to_socket_name": "Shader"
+        },
+        {
+          "from_node": "几何数据",
+          "from_socket_id": "Position",
+          "from_socket_name": "Position",
+          "to_node": "分离 XYZ",
+          "to_socket_id": "Vector",
+          "to_socket_name": "Vector"
+        },
+        {
+          "from_node": "运算.003",
+          "from_socket_id": "Value",
+          "from_socket_name": "Value",
+          "to_node": "运算.002",
+          "to_socket_id": "Value",
+          "to_socket_name": "Value"
+        },
+        {
+          "from_node": "分离 XYZ",
+          "from_socket_id": "Y",
+          "from_socket_name": "Y",
+          "to_node": "运算.003",
+          "to_socket_id": "Value",
+          "to_socket_name": "Value"
+        },
+        {
+          "from_node": "原理化体积",
+          "from_socket_id": "Volume",
+          "from_socket_name": "Volume",
+          "to_node": "World Output",
+          "to_socket_id": "Volume",
+          "to_socket_name": "Volume"
+        },
+        {
+          "from_node": "转接点",
+          "from_socket_id": "Output",
+          "from_socket_name": "Output",
+          "to_node": "原理化体积",
+          "to_socket_id": "Density",
+          "to_socket_name": "Density"
+        },
+        {
+          "from_node": "分离 XYZ",
+          "from_socket_id": "Y",
+          "from_socket_name": "Y",
+          "to_node": "运算.004",
+          "to_socket_id": "Value",
+          "to_socket_name": "Value"
+        },
+        {
+          "from_node": "运算.002",
+          "from_socket_id": "Value",
+          "from_socket_name": "Value",
+          "to_node": "运算.005",
+          "to_socket_id": "Value",
+          "to_socket_name": "Value"
+        },
+        {
+          "from_node": "运算.004",
+          "from_socket_id": "Value",
+          "from_socket_name": "Value",
+          "to_node": "运算.005",
+          "to_socket_id": "Value_001",
+          "to_socket_name": "Value"
+        },
+        {
+          "from_node": "相加着色器",
+          "from_socket_id": "Shader",
+          "from_socket_name": "Shader",
+          "to_node": "World Output",
+          "to_socket_id": "Surface",
+          "to_socket_name": "Surface"
+        },
+        {
+          "from_node": "转接点",
+          "from_socket_id": "Output",
+          "from_socket_name": "Output",
+          "to_node": "原理化体积",
+          "to_socket_id": "Emission Strength",
+          "to_socket_name": "Emission Strength"
+        },
+        {
+          "from_node": "运算.005",
+          "from_socket_id": "Value",
+          "from_socket_name": "Value",
+          "to_node": "运算.001",
+          "to_socket_id": "Value_001",
+          "to_socket_name": "Value"
+        },
+        {
+          "from_node": "运算.006",
+          "from_socket_id": "Value",
+          "from_socket_name": "Value",
+          "to_node": "转接点",
+          "to_socket_id": "Input",
+          "to_socket_name": "Input"
+        },
+        {
+          "from_node": "运算.001",
+          "from_socket_id": "Value",
+          "from_socket_name": "Value",
+          "to_node": "运算.006",
+          "to_socket_id": "Value",
+          "to_socket_name": "Value"
+        },
+        {
+          "from_node": "浮点曲线",
+          "from_socket_id": "Value",
+          "from_socket_name": "Value",
+          "to_node": "运算.006",
+          "to_socket_id": "Value_001",
+          "to_socket_name": "Value"
+        },
+        {
+          "from_node": "分离 XYZ",
+          "from_socket_id": "Z",
+          "from_socket_name": "Z",
+          "to_node": "浮点曲线",
+          "to_socket_id": "Value",
+          "to_socket_name": "Value"
+        }
+      ]
+    }
+  },
+  "exported_world_images": [],
+  "viewport_shading": {
+    "areas": [
+      {
+        "type": "SOLID",
+        "use_scene_world": false,
+        "use_scene_world_render": true,
+        "use_scene_lights": false,
+        "use_scene_lights_render": true,
+        "studio_light": "Default",
+        "studiolight_rotate_z": 0.0,
+        "studiolight_intensity": 1.0,
+        "studiolight_background_alpha": 0.0,
+        "studiolight_background_blur": 0.5
+      }
+    ]
+  },
+  "color_management": {
+    "display_device": "sRGB",
+    "view_transform": "Filmic",
+    "look": "Medium High Contrast",
+    "exposure": -0.30000001192092896,
+    "gamma": 1.0,
+    "use_curve_mapping": false,
+    "sequencer_colorspace": "sRGB"
+  },
+  "eevee": {
+    "engine": "BLENDER_EEVEE",
+    "resolution_x": 3840,
+    "resolution_y": 2160,
+    "resolution_percentage": 100,
+    "use_bloom": true,
+    "bloom_threshold": 0.5,
+    "bloom_knee": 0.5,
+    "bloom_radius": 4.0,
+    "bloom_color": [
+      1.0,
+      0.7247558832168579,
+      0.6487361788749695
+    ],
+    "bloom_intensity": 0.05000000074505806,
+    "bloom_clamp": 0.0,
+    "use_ssr": false,
+    "use_ssr_halfres": true,
+    "use_ssr_refraction": false,
+    "ssr_quality": 0.25,
+    "ssr_max_roughness": 0.5,
+    "ssr_thickness": 0.20000000298023224,
+    "ssr_border_fade": 0.07500000298023224,
+    "ssr_firefly_fac": 10.0,
+    "use_gtao": true,
+    "gtao_distance": 0.20000000298023224,
+    "gtao_factor": 0.6000000238418579,
+    "gtao_quality": 0.25,
+    "use_gtao_bent_normals": true,
+    "use_gtao_bounce": true,
+    "taa_samples": 8,
+    "taa_render_samples": 16,
+    "use_taa_reprojection": true,
+    "use_soft_shadows": true,
+    "shadow_cube_size": "4096",
+    "shadow_cascade_size": "4096",
+    "use_shadow_high_bitdepth": true,
+    "use_volumetric_shadows": false,
+    "volumetric_start": 0.10000000149011612,
+    "volumetric_end": 250.0,
+    "gi_auto_bake": false,
+    "gi_cubemap_resolution": "512",
+    "gi_visibility_resolution": "32",
+    "gi_diffuse_bounces": 3,
+    "gi_cubemap_display_size": 0.30000001192092896,
+    "gi_irradiance_smoothing": 0.10000000149011612,
+    "gi_glossy_clamp": 0.0,
+    "gi_filter_quality": 3.0,
+    "gi_show_cubemaps": false,
+    "gi_show_irradiance": false
+  },
+  "lights": [
+    {
+      "object_name": "阳光",
+      "type": "SUN",
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "energy": 2.0,
+      "use_shadow": true,
+      "world_matrix": [
+        [
+          1.5218875408172607,
+          7.822812080383301,
+          0.6981874108314514,
+          -0.22977398335933685
+        ],
+        [
+          -2.9069173336029053,
+          1.221725344657898,
+          -7.35236120223999,
+          -9.50031852722168
+        ],
+        [
+          -7.296142101287842,
+          1.1449867486953735,
+          3.0749497413635254,
+          16.10621452331543
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "angle": 0.01745329238474369
+    }
+  ]
+}
