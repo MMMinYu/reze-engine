@@ -209,12 +209,19 @@ export default function Home() {
 
       modelRef.current = m1
 
+      engine.setMaterialPresets("reze", {
+        face: ["脸"],
+        body: ["皮肤"],
+        hair: ["头发", "hair_f"],
+        cloth_smooth: ["衣服", "裙子", "裙带", "裙布", "外套", "外套饰", "裤子", "裤子0", "腿环", "发饰"],
+      })
+
       engine.addGround()
 
       engine.runRenderLoop(() => setStats(engine.getStats()))
 
       await m1.loadVmd(IRIS_ANIM, "/animations/IRIS OUT.vmd")
-      m1.show(IRIS_ANIM)
+      // m1.show(IRIS_ANIM)
       console.log(m1.getMaterials())
 
       m1.setMorphWeight("抗穿模", 0.5)

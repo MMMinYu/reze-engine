@@ -15,7 +15,10 @@ import {
 } from "./asset-reader"
 import { DEFAULT_SHADER_WGSL } from "./shaders/default"
 import { FACE_SHADER_WGSL } from "./shaders/face"
-import { classifyMaterial, type MaterialPreset } from "./shaders/classify"
+import { HAIR_SHADER_WGSL } from "./shaders/hair"
+import { CLOTH_SMOOTH_SHADER_WGSL } from "./shaders/cloth_smooth"
+import { BODY_SHADER_WGSL } from "./shaders/body"
+import { resolvePreset, type MaterialPreset, type MaterialPresetMap } from "./shaders/classify"
 
 export type RaycastCallback = (modelName: string, material: string | null, screenX: number, screenY: number) => void
 
@@ -61,7 +64,7 @@ export type EngineOptions = {
 }
 
 export const DEFAULT_ENGINE_OPTIONS = {
-  world: { color: new Vec3(0.4, 0.494, 0.647), strength: 1 },
+  world: { color: new Vec3(0.8, 0.8, 0.8), strength: 1 },
   sun: { color: new Vec3(1.0, 1.0, 1.0), strength: 2.0, direction: new Vec3(0, -0.5, 1) },
   camera: { distance: 26.6, target: new Vec3(0, 12.5, 0), fov: Math.PI / 4 },
   onRaycast: undefined,
@@ -109,6 +112,7 @@ interface ModelInstance {
   pickPerInstanceBindGroup: GPUBindGroup
   pickDrawCalls: PickDrawCall[]
   hiddenMaterials: Set<string>
+  materialPresets: MaterialPresetMap | undefined
   physics: Physics | null
   vertexBufferNeedsUpdate: boolean
 }
@@ -141,6 +145,9 @@ export class Engine {
   private depthTexture!: GPUTexture
   private modelPipeline!: GPURenderPipeline
   private facePipeline!: GPURenderPipeline
+  private hairPipeline!: GPURenderPipeline
+  private clothSmoothPipeline!: GPURenderPipeline
+  private bodyPipeline!: GPURenderPipeline
   private groundShadowPipeline!: GPURenderPipeline
   private groundShadowBindGroupLayout!: GPUBindGroupLayout
   private outlinePipeline!: GPURenderPipeline
@@ -365,6 +372,21 @@ export class Engine {
       code: FACE_SHADER_WGSL,
     })
 
+    const hairShaderModule = this.device.createShaderModule({
+      label: "hair NPR shader",
+      code: HAIR_SHADER_WGSL,
+    })
+
+    const clothSmoothShaderModule = this.device.createShaderModule({
+      label: "cloth smooth NPR shader",
+      code: CLOTH_SMOOTH_SHADER_WGSL,
+    })
+
+    const bodyShaderModule = this.device.createShaderModule({
+      label: "body NPR shader",
+      code: BODY_SHADER_WGSL,
+    })
+
     // group 0: per-frame (camera + light + sampler + shadow) — bound once per pass
     this.mainPerFrameBindGroupLayout = this.device.createBindGroupLayout({
       label: "main per-frame bind group layout",
@@ -420,6 +442,48 @@ export class Engine {
       label: "face NPR pipeline",
       layout: mainPipelineLayout,
       shaderModule: faceShaderModule,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTarget: standardBlend,
+      cullMode: "none",
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        depthWriteEnabled: true,
+        depthCompare: "less-equal",
+      },
+    })
+
+    this.hairPipeline = this.createRenderPipeline({
+      label: "hair NPR pipeline",
+      layout: mainPipelineLayout,
+      shaderModule: hairShaderModule,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTarget: standardBlend,
+      cullMode: "none",
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        depthWriteEnabled: true,
+        depthCompare: "less-equal",
+      },
+    })
+
+    this.clothSmoothPipeline = this.createRenderPipeline({
+      label: "cloth smooth NPR pipeline",
+      layout: mainPipelineLayout,
+      shaderModule: clothSmoothShaderModule,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTarget: standardBlend,
+      cullMode: "none",
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        depthWriteEnabled: true,
+        depthCompare: "less-equal",
+      },
+    })
+
+    this.bodyPipeline = this.createRenderPipeline({
+      label: "body NPR pipeline",
+      layout: mainPipelineLayout,
+      shaderModule: bodyShaderModule,
       vertexBuffers: fullVertexBuffers,
       fragmentTarget: standardBlend,
       cullMode: "none",
@@ -715,7 +779,7 @@ export class Engine {
           let aspect = camera.projection[1][1] / camera.projection[0][0];
           let pixelDir = normalize(vec2f(clipNormal.x * aspect, clipNormal.y));
           let ndcDir = vec2f(pixelDir.x / aspect, pixelDir.y);
-          let edgeScale = 0.0018;
+          let edgeScale = 0.0016;
           let offset = ndcDir * material.edgeSize * edgeScale * clipPos.w;
           output.position = vec4f(clipPos.xy + offset, clipPos.z, clipPos.w);
           return output;
@@ -1100,7 +1164,7 @@ export class Engine {
       firstIndex: 0,
       bindGroup: this.groundShadowBindGroup!,
       materialName: "Ground",
-      preset: "rough_cloth",
+      preset: "cloth_rough",
     }
   }
 
@@ -1232,6 +1296,15 @@ export class Engine {
         inst.vertexBufferNeedsUpdate = true
         return
       }
+    }
+  }
+
+  setMaterialPresets(modelName: string, presets: MaterialPresetMap): void {
+    const inst = this.modelInstances.get(modelName)
+    if (!inst) return
+    inst.materialPresets = presets
+    for (const dc of inst.drawCalls) {
+      dc.preset = resolvePreset(dc.materialName, presets)
     }
   }
 
@@ -1397,6 +1470,7 @@ export class Engine {
       pickPerInstanceBindGroup,
       pickDrawCalls: [],
       hiddenMaterials: new Set(),
+      materialPresets: undefined,
       physics,
       vertexBufferNeedsUpdate: false,
     }
@@ -1598,7 +1672,7 @@ export class Engine {
       })
 
       const type: DrawCallType = isTransparent ? "transparent" : "opaque"
-      const preset = classifyMaterial(mat.name)
+      const preset = resolvePreset(mat.name, inst.materialPresets)
       inst.drawCalls.push({
         type,
         count: indexCount,
@@ -1937,15 +2011,11 @@ export class Engine {
     }
   }
 
-  /**
-   * Route a material to a render pipeline based on its preset.
-   * All materials currently use the default Principled BSDF pipeline (baseline-matching mode);
-   * per-preset NPR pipelines (face, hair, eye) will dispatch here as they land.
-   *
-   * Example, once enabled:
-   *   if (preset === "face") return this.facePipeline
-   */
-  private pipelineForPreset(_preset: MaterialPreset): GPURenderPipeline {
+  private pipelineForPreset(preset: MaterialPreset): GPURenderPipeline {
+    if (preset === "face") return this.facePipeline
+    if (preset === "hair") return this.hairPipeline
+    if (preset === "cloth_smooth") return this.clothSmoothPipeline
+    if (preset === "body") return this.bodyPipeline
     return this.modelPipeline
   }
 

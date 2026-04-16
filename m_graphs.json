@@ -1,0 +1,6523 @@
+{
+  "M_Body": {
+    "nodes": {
+      "\u94b3\u5236.001": {
+        "type": "CLAMP",
+        "params": {
+          "Min": 0.0,
+          "Max": 1.0
+        }
+      },
+      "\u8fd0\u7b97.006": {
+        "type": "MATH",
+        "params": {
+          "Value": 0.5
+        },
+        "operation": "ADD"
+      },
+      "\u8fd0\u7b97.004": {
+        "type": "MATH",
+        "params": {
+          "Value": 0.5
+        },
+        "operation": "MULTIPLY"
+      },
+      "\u53cd\u8f6c": {
+        "type": "INVERT",
+        "params": {
+          "Fac": 1.0
+        }
+      },
+      "\u989c\u8272\u6e10\u53d8.003": {
+        "type": "VALTORGB",
+        "interpolation": "CARDINAL",
+        "stops": [
+          {
+            "pos": 0.2409,
+            "color": [
+              0.2426,
+              0.068,
+              0.0588,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.4663,
+            "color": [
+              0.6677,
+              0.5024,
+              0.5126,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u8f6c\u63a5\u70b9.012": {
+        "type": "REROUTE"
+      },
+      "\u989c\u8272\u6e10\u53d8": {
+        "type": "VALTORGB",
+        "interpolation": "CONSTANT",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.5995,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u73af\u5883\u5149\u906e\u853d (AO)": {
+        "type": "AMBIENT_OCCLUSION",
+        "params": {
+          "Color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "Distance": 1.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u81ea\u53d1\u5149(\u53d1\u5c04).001": {
+        "type": "EMISSION",
+        "params": {
+          "Weight": 0.0
+        }
+      },
+      "\u6df7\u5408\u7740\u8272\u5668.002": {
+        "type": "MIX_SHADER"
+      },
+      "\u8f6c\u63a5\u70b9.007": {
+        "type": "REROUTE"
+      },
+      "\u8f6c\u63a5\u70b9.005": {
+        "type": "REROUTE"
+      },
+      "\u6f2b\u5c04 BSDF.002": {
+        "type": "BSDF_DIFFUSE",
+        "params": {
+          "Color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "Roughness": 0.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Weight": 0.0
+        }
+      },
+      "Shader --> RGB": {
+        "type": "SHADERTORGB"
+      },
+      "\u989c\u8272\u6e10\u53d8.008": {
+        "type": "VALTORGB",
+        "interpolation": "CONSTANT",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.2966,
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u6df7\u5408.004": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "B": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "blend_type": "MIX"
+      },
+      "\u4eae\u5ea6 / \u5bf9\u6bd4\u5ea6": {
+        "type": "BRIGHTCONTRAST",
+        "params": {
+          "Bright": 0.1,
+          "Contrast": 0.2
+        }
+      },
+      "\u76f8\u52a0\u7740\u8272\u5668": {
+        "type": "ADD_SHADER"
+      },
+      "\u989c\u8272\u6e10\u53d8.005": {
+        "type": "VALTORGB",
+        "interpolation": "LINEAR",
+        "stops": [
+          {
+            "pos": 0.003,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 1.0,
+            "color": [
+              0.0786,
+              0.0786,
+              0.0786,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u566a\u6ce2\u7eb9\u7406": {
+        "type": "TEX_NOISE",
+        "params": {
+          "W": 0.0,
+          "Scale": 1.0,
+          "Detail": 2.0,
+          "Roughness": 0.5,
+          "Distortion": 0.0
+        }
+      },
+      "\u989c\u8272\u6e10\u53d8.007": {
+        "type": "VALTORGB",
+        "interpolation": "LINEAR",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 1.0,
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u6620\u5c04.001": {
+        "type": "MAPPING",
+        "params": {
+          "Location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1.0,
+            1.0,
+            1.5
+          ]
+        }
+      },
+      "\u7eb9\u7406\u5750\u6807.001": {
+        "type": "TEX_COORD"
+      },
+      "\u73af\u5883\u5149\u906e\u853d (AO).002": {
+        "type": "AMBIENT_OCCLUSION",
+        "params": {
+          "Color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "Distance": 1.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u8f6c\u63a5\u70b9.013": {
+        "type": "REROUTE"
+      },
+      "\u6df7\u5408.001": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "B": [
+            0.6832,
+            0.1947,
+            0.1373,
+            1.0
+          ]
+        },
+        "blend_type": "MIX"
+      },
+      "\u8f6c\u63a5\u70b9.011": {
+        "type": "REROUTE"
+      },
+      "\u539f\u7406\u5316BSDF": {
+        "type": "BSDF_PRINCIPLED",
+        "params": {
+          "Subsurface Radius": [
+            1.0,
+            0.2,
+            0.1
+          ],
+          "Subsurface Color": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "Subsurface IOR": 1.4,
+          "Subsurface Anisotropy": 0.0,
+          "Metallic": 0.0,
+          "Specular": 0.5,
+          "Specular Tint": 0.0,
+          "Roughness": 0.3,
+          "Anisotropic": 0.0,
+          "Anisotropic Rotation": 0.0,
+          "Sheen": 0.0,
+          "Sheen Tint": 0.5,
+          "Clearcoat": 0.0,
+          "Clearcoat Roughness": 0.03,
+          "IOR": 1.45,
+          "Transmission": 0.0,
+          "Transmission Roughness": 0.0,
+          "Emission Strength": 0.2,
+          "Alpha": 1.0,
+          "Clearcoat Normal": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Tangent": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Weight": 0.0
+        }
+      },
+      "\u51f9\u51f8": {
+        "type": "BUMP",
+        "params": {
+          "Strength": 0.3246,
+          "Distance": 1.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u6750\u8d28\u8f93\u51fa": {
+        "type": "OUTPUT_MATERIAL",
+        "params": {
+          "Displacement": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Thickness": 0.0
+        }
+      },
+      "\u6df7\u5408\u7740\u8272\u5668.001": {
+        "type": "MIX_SHADER",
+        "params": {
+          "Fac": 0.5
+        }
+      },
+      "\u76f8\u52a0\u7740\u8272\u5668.001": {
+        "type": "ADD_SHADER"
+      },
+      "\u8f6c\u63a5\u70b9.003": {
+        "type": "REROUTE"
+      },
+      "\u6df7\u5408.003": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "B": [
+            0.8302,
+            0.3346,
+            0.2795,
+            1.0
+          ]
+        },
+        "blend_type": "MIX"
+      },
+      "\u989c\u8272\u6e10\u53d8.010": {
+        "type": "VALTORGB",
+        "interpolation": "EASE",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.5052,
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u80cc\u666f": {
+        "type": "BACKGROUND",
+        "params": {
+          "Color": [
+            1.0,
+            0.4304,
+            0.3316,
+            1.0
+          ],
+          "Strength": 1.0,
+          "Weight": 0.0
+        }
+      },
+      "\u5c42\u6743\u91cd.002": {
+        "type": "LAYER_WEIGHT",
+        "params": {
+          "Blend": 0.2,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u8fd0\u7b97.007": {
+        "type": "MATH",
+        "params": {
+          "Value": 0.5
+        },
+        "operation": "POWER"
+      },
+      "\u81ea\u53d1\u5149(\u53d1\u5c04)": {
+        "type": "EMISSION",
+        "params": {
+          "Color": [
+            0.9842,
+            0.611,
+            0.5736,
+            1.0
+          ],
+          "Weight": 0.0
+        }
+      },
+      "\u6f2b\u5c04 BSDF.001": {
+        "type": "BSDF_DIFFUSE",
+        "params": {
+          "Roughness": 0.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Weight": 0.0
+        }
+      },
+      "\u8fd0\u7b97": {
+        "type": "MATH",
+        "params": {
+          "Value": 0.5
+        },
+        "operation": "MULTIPLY"
+      },
+      "\u83f2\u6d85\u5c14": {
+        "type": "FRESNEL",
+        "params": {
+          "IOR": 2.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u5c42\u6743\u91cd.001": {
+        "type": "LAYER_WEIGHT",
+        "params": {
+          "Blend": 0.24,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u56fe\u50cf\u7eb9\u7406": {
+        "type": "TEX_IMAGE"
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.004": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.48,
+          "Saturation": 1.0,
+          "Value": 0.5,
+          "Fac": 1.0
+        }
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.003": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.5,
+          "Saturation": 1.0,
+          "Value": 0.5,
+          "Fac": 1.0
+        }
+      },
+      "\u81ea\u53d1\u5149(\u53d1\u5c04).003": {
+        "type": "EMISSION",
+        "params": {
+          "Strength": 4.0,
+          "Weight": 0.0
+        }
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.001": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.5,
+          "Saturation": 1.5,
+          "Value": 1.0,
+          "Fac": 1.0
+        }
+      },
+      "\u6620\u5c04": {
+        "type": "MAPPING",
+        "params": {
+          "Location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "\u7eb9\u7406\u5750\u6807": {
+        "type": "TEX_COORD"
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.5,
+          "Saturation": 2.0,
+          "Value": 0.35,
+          "Fac": 1.0
+        }
+      }
+    },
+    "links": [
+      {
+        "from": "\u83f2\u6d85\u5c14.Fac",
+        "to": "\u8fd0\u7b97.Value"
+      },
+      {
+        "from": "\u6620\u5c04.Vector",
+        "to": "\u56fe\u50cf\u7eb9\u7406.Vector"
+      },
+      {
+        "from": "\u7eb9\u7406\u5750\u6807.UV",
+        "to": "\u6620\u5c04.Vector"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.012.Output",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.Color"
+      },
+      {
+        "from": "\u73af\u5883\u5149\u906e\u853d (AO).Color",
+        "to": "\u989c\u8272\u6e10\u53d8.Fac"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.003.Color",
+        "to": "\u81ea\u53d1\u5149(\u53d1\u5c04).001.Color"
+      },
+      {
+        "from": "\u76f8\u52a0\u7740\u8272\u5668.Shader",
+        "to": "\u76f8\u52a0\u7740\u8272\u5668.001.Shader"
+      },
+      {
+        "from": "\u81ea\u53d1\u5149(\u53d1\u5c04).Emission",
+        "to": "\u76f8\u52a0\u7740\u8272\u5668.Shader"
+      },
+      {
+        "from": "\u8fd0\u7b97.004.Value",
+        "to": "\u81ea\u53d1\u5149(\u53d1\u5c04).001.Strength"
+      },
+      {
+        "from": "\u53cd\u8f6c.Color",
+        "to": "\u8fd0\u7b97.004.Value"
+      },
+      {
+        "from": "\u5c42\u6743\u91cd.001.Facing",
+        "to": "\u8fd0\u7b97.Value"
+      },
+      {
+        "from": "\u8fd0\u7b97.Value",
+        "to": "\u81ea\u53d1\u5149(\u53d1\u5c04).Strength"
+      },
+      {
+        "from": "\u94b3\u5236.001.Result",
+        "to": "\u989c\u8272\u6e10\u53d8.003.Fac"
+      },
+      {
+        "from": "\u8fd0\u7b97.006.Value",
+        "to": "\u94b3\u5236.001.Value"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.Color",
+        "to": "\u6df7\u5408.003.Factor"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.Color",
+        "to": "\u53cd\u8f6c.Color"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.012.Output",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.001.Color"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.005.Output",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.003.Color"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.003.Color",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.004.Color"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.004.Color",
+        "to": "\u8f6c\u63a5\u70b9.003.Input"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.012.Output",
+        "to": "\u8f6c\u63a5\u70b9.005.Input"
+      },
+      {
+        "from": "\u81ea\u53d1\u5149(\u53d1\u5c04).001.Emission",
+        "to": "\u76f8\u52a0\u7740\u8272\u5668.001.Shader"
+      },
+      {
+        "from": "\u539f\u7406\u5316BSDF.BSDF",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.001.Shader"
+      },
+      {
+        "from": "\u76f8\u52a0\u7740\u8272\u5668.001.Shader",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.001.Shader"
+      },
+      {
+        "from": "\u73af\u5883\u5149\u906e\u853d (AO).002.Color",
+        "to": "\u989c\u8272\u6e10\u53d8.005.Fac"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.005.Color",
+        "to": "\u539f\u7406\u5316BSDF.Subsurface"
+      },
+      {
+        "from": "\u56fe\u50cf\u7eb9\u7406.Color",
+        "to": "\u8f6c\u63a5\u70b9.012.Input"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.007.Output",
+        "to": "\u8f6c\u63a5\u70b9.013.Input"
+      },
+      {
+        "from": "\u6620\u5c04.001.Vector",
+        "to": "\u566a\u6ce2\u7eb9\u7406.Vector"
+      },
+      {
+        "from": "\u566a\u6ce2\u7eb9\u7406.Color",
+        "to": "\u989c\u8272\u6e10\u53d8.007.Fac"
+      },
+      {
+        "from": "\u51f9\u51f8.Normal",
+        "to": "\u539f\u7406\u5316BSDF.Normal"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.007.Color",
+        "to": "\u51f9\u51f8.Height"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.007.Color",
+        "to": "\u6df7\u5408.001.Factor"
+      },
+      {
+        "from": "\u7eb9\u7406\u5750\u6807.001.Generated",
+        "to": "\u6620\u5c04.001.Vector"
+      },
+      {
+        "from": "\u8fd0\u7b97.Value",
+        "to": "\u6f2b\u5c04 BSDF.001.Color"
+      },
+      {
+        "from": "\u6f2b\u5c04 BSDF.002.BSDF",
+        "to": "Shader --> RGB.Shader"
+      },
+      {
+        "from": "Shader --> RGB.Color",
+        "to": "\u989c\u8272\u6e10\u53d8.008.Fac"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.013.Output",
+        "to": "\u8f6c\u63a5\u70b9.011.Input"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.001.Color",
+        "to": "\u6df7\u5408.004.B"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.008.Color",
+        "to": "\u6df7\u5408.004.Factor"
+      },
+      {
+        "from": "\u4eae\u5ea6 / \u5bf9\u6bd4\u5ea6.Color",
+        "to": "\u8f6c\u63a5\u70b9.007.Input"
+      },
+      {
+        "from": "\u6df7\u5408.003.Result",
+        "to": "\u81ea\u53d1\u5149(\u53d1\u5c04).003.Color"
+      },
+      {
+        "from": "\u6df7\u5408.001.Result",
+        "to": "\u539f\u7406\u5316BSDF.Base Color"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.011.Output",
+        "to": "\u6df7\u5408.001.A"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.011.Output",
+        "to": "\u539f\u7406\u5316BSDF.Emission"
+      },
+      {
+        "from": "\u81ea\u53d1\u5149(\u53d1\u5c04).003.Emission",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.002.Shader"
+      },
+      {
+        "from": "\u6df7\u5408\u7740\u8272\u5668.002.Shader",
+        "to": "\u76f8\u52a0\u7740\u8272\u5668.Shader"
+      },
+      {
+        "from": "\u6df7\u5408.004.Result",
+        "to": "\u4eae\u5ea6 / \u5bf9\u6bd4\u5ea6.Color"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.010.Color",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.002.Fac"
+      },
+      {
+        "from": "\u5c42\u6743\u91cd.002.Facing",
+        "to": "\u8fd0\u7b97.007.Value"
+      },
+      {
+        "from": "\u8fd0\u7b97.007.Value",
+        "to": "\u989c\u8272\u6e10\u53d8.010.Fac"
+      },
+      {
+        "from": "\u80cc\u666f.Background",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.002.Shader"
+      },
+      {
+        "from": "\u6df7\u5408\u7740\u8272\u5668.001.Shader",
+        "to": "\u6750\u8d28\u8f93\u51fa.Surface"
+      },
+      {
+        "from": "\u4eae\u5ea6 / \u5bf9\u6bd4\u5ea6.Color",
+        "to": "\u6df7\u5408.003.A"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.008.Color",
+        "to": "\u8fd0\u7b97.006.Value"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.Color",
+        "to": "\u6df7\u5408.004.A"
+      }
+    ]
+  },
+  "M_Face": {
+    "nodes": {
+      "\u94b3\u5236.001": {
+        "type": "CLAMP",
+        "params": {
+          "Min": 0.0,
+          "Max": 1.0
+        }
+      },
+      "\u8fd0\u7b97.006": {
+        "type": "MATH",
+        "params": {
+          "Value": 0.5
+        },
+        "operation": "ADD"
+      },
+      "\u53cd\u8f6c": {
+        "type": "INVERT",
+        "params": {
+          "Fac": 1.0
+        }
+      },
+      "\u989c\u8272\u6e10\u53d8.003": {
+        "type": "VALTORGB",
+        "interpolation": "CARDINAL",
+        "stops": [
+          {
+            "pos": 0.2409,
+            "color": [
+              0.2426,
+              0.068,
+              0.0588,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.4663,
+            "color": [
+              0.6677,
+              0.5024,
+              0.5126,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u8f6c\u63a5\u70b9.012": {
+        "type": "REROUTE"
+      },
+      "\u6df7\u5408\u7740\u8272\u5668.002": {
+        "type": "MIX_SHADER"
+      },
+      "\u81ea\u53d1\u5149(\u53d1\u5c04)": {
+        "type": "EMISSION",
+        "params": {
+          "Color": [
+            0.9842,
+            0.611,
+            0.5736,
+            1.0
+          ],
+          "Weight": 0.0
+        }
+      },
+      "\u6f2b\u5c04 BSDF.001": {
+        "type": "BSDF_DIFFUSE",
+        "params": {
+          "Roughness": 0.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Weight": 0.0
+        }
+      },
+      "\u8fd0\u7b97": {
+        "type": "MATH",
+        "params": {
+          "Value": 0.5
+        },
+        "operation": "MULTIPLY"
+      },
+      "\u83f2\u6d85\u5c14": {
+        "type": "FRESNEL",
+        "params": {
+          "IOR": 2.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u5c42\u6743\u91cd.001": {
+        "type": "LAYER_WEIGHT",
+        "params": {
+          "Blend": 0.24,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u76f8\u52a0\u7740\u8272\u5668": {
+        "type": "ADD_SHADER"
+      },
+      "\u76f8\u52a0\u7740\u8272\u5668.002": {
+        "type": "ADD_SHADER"
+      },
+      "\u6df7\u5408.003": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "B": [
+            0.8302,
+            0.3346,
+            0.2795,
+            1.0
+          ]
+        },
+        "blend_type": "MIX"
+      },
+      "\u6df7\u5408.004": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "B": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "blend_type": "MIX"
+      },
+      "\u6f2b\u5c04 BSDF.002": {
+        "type": "BSDF_DIFFUSE",
+        "params": {
+          "Color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "Roughness": 0.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Weight": 0.0
+        }
+      },
+      "Shader --> RGB": {
+        "type": "SHADERTORGB"
+      },
+      "\u73af\u5883\u5149\u906e\u853d (AO)": {
+        "type": "AMBIENT_OCCLUSION",
+        "params": {
+          "Color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "Distance": 1.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u989c\u8272\u6e10\u53d8": {
+        "type": "VALTORGB",
+        "interpolation": "CONSTANT",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.5995,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u8f6c\u63a5\u70b9": {
+        "type": "REROUTE"
+      },
+      "\u989c\u8272\u6e10\u53d8.008": {
+        "type": "VALTORGB",
+        "interpolation": "CONSTANT",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.2966,
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u8fd0\u7b97.001": {
+        "type": "MATH",
+        "params": {
+          "Value": 0.5
+        },
+        "operation": "MULTIPLY"
+      },
+      "\u81ea\u53d1\u5149(\u53d1\u5c04).001": {
+        "type": "EMISSION",
+        "params": {
+          "Weight": 0.0
+        }
+      },
+      "\u8fd0\u7b97.004": {
+        "type": "MATH",
+        "params": {
+          "Value": 0.5
+        },
+        "operation": "MULTIPLY"
+      },
+      "\u989c\u8272\u6e10\u53d8.009": {
+        "type": "VALTORGB",
+        "interpolation": "CONSTANT",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              1.0,
+              0.2165,
+              0.1137,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.2746,
+            "color": [
+              1.0,
+              0.6525,
+              0.5877,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.003": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.5,
+          "Saturation": 1.0,
+          "Value": 0.5,
+          "Fac": 1.0
+        }
+      },
+      "RGB": {
+        "type": "RGB"
+      },
+      "\u8f6c\u63a5\u70b9.001": {
+        "type": "REROUTE"
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.004": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.48,
+          "Saturation": 1.0,
+          "Value": 0.5,
+          "Fac": 1.0
+        }
+      },
+      "\u5c42\u6743\u91cd.002": {
+        "type": "LAYER_WEIGHT",
+        "params": {
+          "Blend": 0.61,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u8fd0\u7b97.007": {
+        "type": "MATH",
+        "params": {
+          "Value": 0.5
+        },
+        "operation": "POWER"
+      },
+      "\u80cc\u666f": {
+        "type": "BACKGROUND",
+        "params": {
+          "Color": [
+            1.0,
+            0.4685,
+            0.3699,
+            1.0
+          ],
+          "Strength": 1.0,
+          "Weight": 0.0
+        }
+      },
+      "\u83f2\u6d85\u5c14.001": {
+        "type": "FRESNEL",
+        "params": {
+          "IOR": 1.45,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u8fd0\u7b97.003": {
+        "type": "MATH",
+        "params": {
+          "Value": 0.5
+        },
+        "operation": "MULTIPLY"
+      },
+      "\u8f6c\u63a5\u70b9.010": {
+        "type": "REROUTE"
+      },
+      "\u8f6c\u63a5\u70b9.005": {
+        "type": "REROUTE"
+      },
+      "\u8fd0\u7b97.005": {
+        "type": "MATH",
+        "params": {
+          "Value": 0.5
+        },
+        "operation": "GREATER_THAN"
+      },
+      "\u8f6c\u63a5\u70b9.007": {
+        "type": "REROUTE"
+      },
+      "\u76f8\u52a0\u7740\u8272\u5668.001": {
+        "type": "ADD_SHADER"
+      },
+      "\u989c\u8272\u6e10\u53d8.005": {
+        "type": "VALTORGB",
+        "interpolation": "LINEAR",
+        "stops": [
+          {
+            "pos": 0.003,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 1.0,
+            "color": [
+              0.0786,
+              0.0786,
+              0.0786,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u566a\u6ce2\u7eb9\u7406": {
+        "type": "TEX_NOISE",
+        "params": {
+          "W": 0.0,
+          "Scale": 1.0,
+          "Detail": 2.0,
+          "Roughness": 0.5,
+          "Distortion": 0.0
+        }
+      },
+      "\u989c\u8272\u6e10\u53d8.007": {
+        "type": "VALTORGB",
+        "interpolation": "LINEAR",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 1.0,
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u51f9\u51f8": {
+        "type": "BUMP",
+        "params": {
+          "Strength": 0.3246,
+          "Distance": 1.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u6620\u5c04.001": {
+        "type": "MAPPING",
+        "params": {
+          "Location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1.0,
+            1.0,
+            1.5
+          ]
+        }
+      },
+      "\u7eb9\u7406\u5750\u6807.001": {
+        "type": "TEX_COORD"
+      },
+      "\u73af\u5883\u5149\u906e\u853d (AO).002": {
+        "type": "AMBIENT_OCCLUSION",
+        "params": {
+          "Color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "Distance": 1.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u6df7\u5408.001": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "B": [
+            0.6832,
+            0.1947,
+            0.1373,
+            1.0
+          ]
+        },
+        "blend_type": "MIX"
+      },
+      "\u8f6c\u63a5\u70b9.011": {
+        "type": "REROUTE"
+      },
+      "\u539f\u7406\u5316BSDF": {
+        "type": "BSDF_PRINCIPLED",
+        "params": {
+          "Subsurface Radius": [
+            1.0,
+            0.2,
+            0.1
+          ],
+          "Subsurface Color": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "Subsurface IOR": 1.4,
+          "Subsurface Anisotropy": 0.0,
+          "Metallic": 0.0,
+          "Specular": 0.5,
+          "Specular Tint": 0.0,
+          "Roughness": 0.3,
+          "Anisotropic": 0.0,
+          "Anisotropic Rotation": 0.0,
+          "Sheen": 0.0,
+          "Sheen Tint": 0.5,
+          "Clearcoat": 0.0,
+          "Clearcoat Roughness": 0.03,
+          "IOR": 1.45,
+          "Transmission": 0.0,
+          "Transmission Roughness": 0.0,
+          "Emission Strength": 0.2,
+          "Alpha": 1.0,
+          "Clearcoat Normal": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Tangent": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Weight": 0.0
+        }
+      },
+      "\u8f6c\u63a5\u70b9.008": {
+        "type": "REROUTE"
+      },
+      "\u6750\u8d28\u8f93\u51fa": {
+        "type": "OUTPUT_MATERIAL",
+        "params": {
+          "Displacement": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Thickness": 0.0
+        }
+      },
+      "\u6df7\u5408\u7740\u8272\u5668.001": {
+        "type": "MIX_SHADER",
+        "params": {
+          "Fac": 0.5
+        }
+      },
+      "\u4eae\u5ea6 / \u5bf9\u6bd4\u5ea6": {
+        "type": "BRIGHTCONTRAST",
+        "params": {
+          "Bright": 0.1,
+          "Contrast": 0.2
+        }
+      },
+      "\u56fe\u50cf\u7eb9\u7406": {
+        "type": "TEX_IMAGE"
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.001": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.46,
+          "Saturation": 1.6,
+          "Value": 1.5,
+          "Fac": 1.0
+        }
+      },
+      "\u81ea\u53d1\u5149(\u53d1\u5c04).003": {
+        "type": "EMISSION",
+        "params": {
+          "Strength": 2.5,
+          "Weight": 0.0
+        }
+      },
+      "\u81ea\u53d1\u5149(\u53d1\u5c04).002": {
+        "type": "EMISSION",
+        "params": {
+          "Strength": 3.0,
+          "Weight": 0.0
+        }
+      },
+      "\u6620\u5c04": {
+        "type": "MAPPING",
+        "params": {
+          "Location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "\u7eb9\u7406\u5750\u6807": {
+        "type": "TEX_COORD"
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.002": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.46,
+          "Saturation": 2.0,
+          "Value": 0.35,
+          "Fac": 1.0
+        }
+      }
+    },
+    "links": [
+      {
+        "from": "\u83f2\u6d85\u5c14.Fac",
+        "to": "\u8fd0\u7b97.Value"
+      },
+      {
+        "from": "\u6620\u5c04.Vector",
+        "to": "\u56fe\u50cf\u7eb9\u7406.Vector"
+      },
+      {
+        "from": "\u7eb9\u7406\u5750\u6807.UV",
+        "to": "\u6620\u5c04.Vector"
+      },
+      {
+        "from": "\u73af\u5883\u5149\u906e\u853d (AO).Color",
+        "to": "\u989c\u8272\u6e10\u53d8.Fac"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.003.Color",
+        "to": "\u81ea\u53d1\u5149(\u53d1\u5c04).001.Color"
+      },
+      {
+        "from": "\u76f8\u52a0\u7740\u8272\u5668.Shader",
+        "to": "\u76f8\u52a0\u7740\u8272\u5668.001.Shader"
+      },
+      {
+        "from": "\u81ea\u53d1\u5149(\u53d1\u5c04).Emission",
+        "to": "\u76f8\u52a0\u7740\u8272\u5668.Shader"
+      },
+      {
+        "from": "\u83f2\u6d85\u5c14.001.Fac",
+        "to": "\u8fd0\u7b97.003.Value"
+      },
+      {
+        "from": "\u8fd0\u7b97.004.Value",
+        "to": "\u81ea\u53d1\u5149(\u53d1\u5c04).001.Strength"
+      },
+      {
+        "from": "\u53cd\u8f6c.Color",
+        "to": "\u8fd0\u7b97.004.Value"
+      },
+      {
+        "from": "\u5c42\u6743\u91cd.001.Facing",
+        "to": "\u8fd0\u7b97.Value"
+      },
+      {
+        "from": "\u8fd0\u7b97.Value",
+        "to": "\u81ea\u53d1\u5149(\u53d1\u5c04).Strength"
+      },
+      {
+        "from": "\u94b3\u5236.001.Result",
+        "to": "\u989c\u8272\u6e10\u53d8.003.Fac"
+      },
+      {
+        "from": "\u8fd0\u7b97.006.Value",
+        "to": "\u94b3\u5236.001.Value"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.Color",
+        "to": "\u6df7\u5408.003.Factor"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.Color",
+        "to": "\u53cd\u8f6c.Color"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.012.Output",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.001.Color"
+      },
+      {
+        "from": "\u8fd0\u7b97.003.Value",
+        "to": "\u8fd0\u7b97.007.Value"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.012.Output",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.002.Color"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.005.Output",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.003.Color"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.003.Color",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.004.Color"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.012.Output",
+        "to": "\u8f6c\u63a5\u70b9.005.Input"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.008.Output",
+        "to": "\u76f8\u52a0\u7740\u8272\u5668.001.Shader"
+      },
+      {
+        "from": "\u539f\u7406\u5316BSDF.BSDF",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.001.Shader"
+      },
+      {
+        "from": "\u76f8\u52a0\u7740\u8272\u5668.001.Shader",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.001.Shader"
+      },
+      {
+        "from": "\u73af\u5883\u5149\u906e\u853d (AO).002.Color",
+        "to": "\u989c\u8272\u6e10\u53d8.005.Fac"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.005.Color",
+        "to": "\u539f\u7406\u5316BSDF.Subsurface"
+      },
+      {
+        "from": "\u56fe\u50cf\u7eb9\u7406.Color",
+        "to": "\u8f6c\u63a5\u70b9.012.Input"
+      },
+      {
+        "from": "\u6620\u5c04.001.Vector",
+        "to": "\u566a\u6ce2\u7eb9\u7406.Vector"
+      },
+      {
+        "from": "\u566a\u6ce2\u7eb9\u7406.Color",
+        "to": "\u989c\u8272\u6e10\u53d8.007.Fac"
+      },
+      {
+        "from": "\u51f9\u51f8.Normal",
+        "to": "\u539f\u7406\u5316BSDF.Normal"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.007.Color",
+        "to": "\u51f9\u51f8.Height"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.007.Color",
+        "to": "\u6df7\u5408.001.Factor"
+      },
+      {
+        "from": "\u7eb9\u7406\u5750\u6807.001.Generated",
+        "to": "\u6620\u5c04.001.Vector"
+      },
+      {
+        "from": "\u8fd0\u7b97.Value",
+        "to": "\u6f2b\u5c04 BSDF.001.Color"
+      },
+      {
+        "from": "\u4eae\u5ea6 / \u5bf9\u6bd4\u5ea6.Color",
+        "to": "\u6df7\u5408.003.A"
+      },
+      {
+        "from": "\u6f2b\u5c04 BSDF.002.BSDF",
+        "to": "Shader --> RGB.Shader"
+      },
+      {
+        "from": "Shader --> RGB.Color",
+        "to": "\u989c\u8272\u6e10\u53d8.008.Fac"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.Output",
+        "to": "\u989c\u8272\u6e10\u53d8.009.Fac"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.007.Output",
+        "to": "\u8f6c\u63a5\u70b9.011.Input"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.001.Color",
+        "to": "\u6df7\u5408.004.B"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.Output",
+        "to": "\u6df7\u5408.004.Factor"
+      },
+      {
+        "from": "\u4eae\u5ea6 / \u5bf9\u6bd4\u5ea6.Color",
+        "to": "\u8f6c\u63a5\u70b9.007.Input"
+      },
+      {
+        "from": "\u6df7\u5408.001.Result",
+        "to": "\u539f\u7406\u5316BSDF.Base Color"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.011.Output",
+        "to": "\u6df7\u5408.001.A"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.011.Output",
+        "to": "\u539f\u7406\u5316BSDF.Emission"
+      },
+      {
+        "from": "\u81ea\u53d1\u5149(\u53d1\u5c04).003.Emission",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.002.Shader"
+      },
+      {
+        "from": "\u76f8\u52a0\u7740\u8272\u5668.002.Shader",
+        "to": "\u76f8\u52a0\u7740\u8272\u5668.Shader"
+      },
+      {
+        "from": "\u8fd0\u7b97.007.Value",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.002.Fac"
+      },
+      {
+        "from": "\u80cc\u666f.Background",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.002.Shader"
+      },
+      {
+        "from": "\u5c42\u6743\u91cd.002.Fresnel",
+        "to": "\u8fd0\u7b97.003.Value"
+      },
+      {
+        "from": "\u6df7\u5408.004.Result",
+        "to": "\u4eae\u5ea6 / \u5bf9\u6bd4\u5ea6.Color"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.010.Output",
+        "to": "\u81ea\u53d1\u5149(\u53d1\u5c04).002.Color"
+      },
+      {
+        "from": "\u81ea\u53d1\u5149(\u53d1\u5c04).001.Emission",
+        "to": "\u8f6c\u63a5\u70b9.008.Input"
+      },
+      {
+        "from": "\u6df7\u5408\u7740\u8272\u5668.002.Shader",
+        "to": "\u76f8\u52a0\u7740\u8272\u5668.002.Shader"
+      },
+      {
+        "from": "\u81ea\u53d1\u5149(\u53d1\u5c04).002.Emission",
+        "to": "\u76f8\u52a0\u7740\u8272\u5668.002.Shader"
+      },
+      {
+        "from": "\u8fd0\u7b97.005.Value",
+        "to": "\u8f6c\u63a5\u70b9.010.Input"
+      },
+      {
+        "from": "\u6df7\u5408\u7740\u8272\u5668.001.Shader",
+        "to": "\u6750\u8d28\u8f93\u51fa.Surface"
+      },
+      {
+        "from": "\u6df7\u5408.003.Result",
+        "to": "\u81ea\u53d1\u5149(\u53d1\u5c04).003.Color"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.008.Color",
+        "to": "\u8fd0\u7b97.001.Value"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.008.Color",
+        "to": "\u8f6c\u63a5\u70b9.Input"
+      },
+      {
+        "from": "\u8fd0\u7b97.001.Value",
+        "to": "\u8fd0\u7b97.006.Value"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.004.Color",
+        "to": "\u8f6c\u63a5\u70b9.001.Input"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.005.Output",
+        "to": "\u8fd0\u7b97.005.Value"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.002.Color",
+        "to": "\u6df7\u5408.004.A"
+      }
+    ]
+  },
+  "M_Face new": {
+    "nodes": {
+      "RGB": {
+        "type": "RGB"
+      },
+      "\u8f6c\u63a5\u70b9.006": {
+        "type": "REROUTE"
+      },
+      "\u8f6c\u63a5\u70b9.004": {
+        "type": "REROUTE"
+      },
+      "\u8f6c\u63a5\u70b9.007": {
+        "type": "REROUTE"
+      },
+      "\u8f6c\u63a5\u70b9.008": {
+        "type": "REROUTE"
+      },
+      "\u94b3\u5236.001": {
+        "type": "CLAMP",
+        "params": {
+          "Min": 0.0,
+          "Max": 1.0
+        }
+      },
+      "\u8fd0\u7b97.006": {
+        "type": "MATH",
+        "params": {
+          "Value": 0.5
+        },
+        "operation": "ADD"
+      },
+      "\u8fd0\u7b97.004": {
+        "type": "MATH",
+        "params": {
+          "Value": 0.5
+        },
+        "operation": "MULTIPLY"
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.001": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.5,
+          "Saturation": 1.5,
+          "Value": 1.0,
+          "Fac": 1.0
+        }
+      },
+      "\u81ea\u53d1\u5149(\u53d1\u5c04)": {
+        "type": "EMISSION",
+        "params": {
+          "Color": [
+            0.6531,
+            0.5704,
+            0.5055,
+            1.0
+          ],
+          "Weight": 0.0
+        }
+      },
+      "\u8fd0\u7b97": {
+        "type": "MATH",
+        "params": {
+          "Value": 0.5
+        },
+        "operation": "MULTIPLY"
+      },
+      "\u5c42\u6743\u91cd.001": {
+        "type": "LAYER_WEIGHT",
+        "params": {
+          "Blend": 0.24,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u83f2\u6d85\u5c14": {
+        "type": "FRESNEL",
+        "params": {
+          "IOR": 2.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u76f8\u52a0\u7740\u8272\u5668": {
+        "type": "ADD_SHADER"
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.003": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.5,
+          "Saturation": 2.0,
+          "Value": 0.5,
+          "Fac": 1.0
+        }
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.004": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.48,
+          "Saturation": 2.0,
+          "Value": 0.5,
+          "Fac": 1.0
+        }
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.5,
+          "Saturation": 1.0,
+          "Value": 0.5,
+          "Fac": 1.0
+        }
+      },
+      "\u6df7\u5408": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "B": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "blend_type": "MIX"
+      },
+      "\u5408\u5e76 XYZ": {
+        "type": "COMBXYZ",
+        "params": {
+          "Z": -0.5
+        }
+      },
+      "\u8fd0\u7b97.001": {
+        "type": "MATH",
+        "params": {
+          "Value": 0.5
+        },
+        "operation": "ADD"
+      },
+      "\u503c(\u660e\u5ea6).001": {
+        "type": "VALUE"
+      },
+      "\u53cd\u8f6c": {
+        "type": "INVERT",
+        "params": {
+          "Fac": 1.0
+        }
+      },
+      "\u503c(\u660e\u5ea6)": {
+        "type": "VALUE"
+      },
+      "\u94b3\u5236": {
+        "type": "CLAMP",
+        "params": {
+          "Min": 0.0,
+          "Max": 0.0
+        }
+      },
+      "\u5c42\u6743\u91cd.004": {
+        "type": "LAYER_WEIGHT",
+        "params": {
+          "Blend": 1.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u83f2\u6d85\u5c14.003": {
+        "type": "FRESNEL",
+        "params": {
+          "IOR": 1.8,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u8fd0\u7b97.015": {
+        "type": "MATH",
+        "params": {
+          "Value": 0.5
+        },
+        "operation": "MULTIPLY"
+      },
+      "\u989c\u8272\u6e10\u53d8.004": {
+        "type": "VALTORGB",
+        "interpolation": "LINEAR",
+        "stops": [
+          {
+            "pos": 0.5699,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.7591,
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u8fd0\u7b97.016": {
+        "type": "MATH",
+        "params": {
+          "Value": 0.5
+        },
+        "operation": "POWER"
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.002": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.48,
+          "Saturation": 1.5,
+          "Value": 1.0,
+          "Fac": 1.0
+        }
+      },
+      "\u76f8\u52a0\u7740\u8272\u5668.001": {
+        "type": "ADD_SHADER"
+      },
+      "\u8f6c\u63a5\u70b9.001": {
+        "type": "REROUTE"
+      },
+      "\u8f6c\u63a5\u70b9.002": {
+        "type": "REROUTE"
+      },
+      "\u8f6c\u63a5\u70b9.003": {
+        "type": "REROUTE"
+      },
+      "\u8f6c\u63a5\u70b9": {
+        "type": "REROUTE"
+      },
+      "\u6df7\u5408\u7740\u8272\u5668": {
+        "type": "MIX_SHADER"
+      },
+      "\u6f2b\u5c04 BSDF": {
+        "type": "BSDF_DIFFUSE",
+        "params": {
+          "Color": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "Roughness": 0.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Weight": 0.0
+        }
+      },
+      "\u5012\u89d2": {
+        "type": "BEVEL",
+        "params": {
+          "Radius": 0.03,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u77e2\u91cf\u8fd0\u7b97": {
+        "type": "VECT_MATH",
+        "params": {
+          "Vector": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": 1.0
+        }
+      },
+      "\u76f8\u52a0\u7740\u8272\u5668.005": {
+        "type": "ADD_SHADER"
+      },
+      "\u989c\u8272\u6e10\u53d8.003": {
+        "type": "VALTORGB",
+        "interpolation": "CARDINAL",
+        "stops": [
+          {
+            "pos": 0.2409,
+            "color": [
+              0.2426,
+              0.068,
+              0.0588,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.4663,
+            "color": [
+              0.6677,
+              0.5024,
+              0.5126,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u989c\u8272\u6e10\u53d8.002": {
+        "type": "VALTORGB",
+        "interpolation": "CONSTANT",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              0.6454,
+              0.262,
+              0.2192,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.2332,
+            "color": [
+              0.7124,
+              0.4715,
+              0.4196,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u73af\u5883\u5149\u906e\u853d (AO)": {
+        "type": "AMBIENT_OCCLUSION",
+        "params": {
+          "Color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "Distance": 1.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u8fd0\u7b97.007": {
+        "type": "MATH",
+        "params": {
+          "Value": 0.5
+        },
+        "operation": "MULTIPLY"
+      },
+      "\u8fd0\u7b97.003": {
+        "type": "MATH",
+        "params": {
+          "Value": 0.5
+        },
+        "operation": "MULTIPLY"
+      },
+      "\u5c42\u6743\u91cd.002": {
+        "type": "LAYER_WEIGHT",
+        "params": {
+          "Blend": 1.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u83f2\u6d85\u5c14.001": {
+        "type": "FRESNEL",
+        "params": {
+          "IOR": 1.7,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u989c\u8272\u6e10\u53d8.001": {
+        "type": "VALTORGB",
+        "interpolation": "CONSTANT",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.7409,
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u73af\u5883\u5149\u906e\u853d (AO).001": {
+        "type": "AMBIENT_OCCLUSION",
+        "params": {
+          "Color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "Distance": 1.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u81ea\u53d1\u5149(\u53d1\u5c04).002": {
+        "type": "EMISSION",
+        "params": {
+          "Weight": 0.0
+        }
+      },
+      "\u989c\u8272\u6e10\u53d8": {
+        "type": "VALTORGB",
+        "interpolation": "CONSTANT",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.5995,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u81ea\u53d1\u5149(\u53d1\u5c04).001": {
+        "type": "EMISSION",
+        "params": {
+          "Weight": 0.0
+        }
+      },
+      "\u6df7\u5408.003": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "B": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "blend_type": "MIX"
+      },
+      "\u8f6c\u63a5\u70b9.010": {
+        "type": "REROUTE"
+      },
+      "\u8f6c\u63a5\u70b9.012": {
+        "type": "REROUTE"
+      },
+      "\u56fe\u50cf\u7eb9\u7406": {
+        "type": "TEX_IMAGE"
+      },
+      "\u7eb9\u7406\u5750\u6807": {
+        "type": "TEX_COORD"
+      },
+      "\u6620\u5c04": {
+        "type": "MAPPING",
+        "params": {
+          "Location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "\u8f6c\u63a5\u70b9.005": {
+        "type": "REROUTE"
+      },
+      "\u8f6c\u63a5\u70b9.011": {
+        "type": "REROUTE"
+      },
+      "\u989c\u8272\u6e10\u53d8.005": {
+        "type": "VALTORGB",
+        "interpolation": "LINEAR",
+        "stops": [
+          {
+            "pos": 0.003,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 1.0,
+            "color": [
+              0.0786,
+              0.0786,
+              0.0786,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u73af\u5883\u5149\u906e\u853d (AO).002": {
+        "type": "AMBIENT_OCCLUSION",
+        "params": {
+          "Color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "Distance": 1.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u8f6c\u63a5\u70b9.013": {
+        "type": "REROUTE"
+      },
+      "\u539f\u7406\u5316BSDF": {
+        "type": "BSDF_PRINCIPLED",
+        "params": {
+          "Subsurface Radius": [
+            1.0,
+            0.2,
+            0.1
+          ],
+          "Subsurface Color": [
+            0.8,
+            0.8,
+            0.8,
+            1.0
+          ],
+          "Subsurface IOR": 1.4,
+          "Subsurface Anisotropy": 0.0,
+          "Metallic": 0.4275,
+          "Specular": 0.9793,
+          "Specular Tint": 0.0,
+          "Roughness": 0.2461,
+          "Anisotropic": 0.0,
+          "Anisotropic Rotation": 0.0,
+          "Sheen": 0.0,
+          "Sheen Tint": 0.5,
+          "Clearcoat": 0.0,
+          "Clearcoat Roughness": 0.03,
+          "IOR": 1.45,
+          "Transmission": 0.0,
+          "Transmission Roughness": 0.0,
+          "Emission Strength": 0.0,
+          "Alpha": 1.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Clearcoat Normal": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Tangent": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Weight": 0.0
+        }
+      },
+      "\u6df7\u5408\u7740\u8272\u5668.001": {
+        "type": "MIX_SHADER",
+        "params": {
+          "Fac": 0.3081
+        }
+      },
+      "\u6750\u8d28\u8f93\u51fa": {
+        "type": "OUTPUT_MATERIAL",
+        "params": {
+          "Displacement": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Thickness": 0.0
+        }
+      },
+      "\u8f6c\u63a5\u70b9.009": {
+        "type": "REROUTE"
+      },
+      "\u76f8\u52a0\u7740\u8272\u5668.002": {
+        "type": "ADD_SHADER"
+      }
+    },
+    "links": [
+      {
+        "from": "\u83f2\u6d85\u5c14.Fac",
+        "to": "\u8fd0\u7b97.Value"
+      },
+      {
+        "from": "\u6620\u5c04.Vector",
+        "to": "\u56fe\u50cf\u7eb9\u7406.Vector"
+      },
+      {
+        "from": "\u7eb9\u7406\u5750\u6807.UV",
+        "to": "\u6620\u5c04.Vector"
+      },
+      {
+        "from": "\u5408\u5e76 XYZ.Vector",
+        "to": "\u77e2\u91cf\u8fd0\u7b97.Vector"
+      },
+      {
+        "from": "\u503c(\u660e\u5ea6).Value",
+        "to": "\u5408\u5e76 XYZ.Y"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.006.Output",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.Color"
+      },
+      {
+        "from": "\u77e2\u91cf\u8fd0\u7b97.Value",
+        "to": "\u8fd0\u7b97.001.Value"
+      },
+      {
+        "from": "\u73af\u5883\u5149\u906e\u853d (AO).Color",
+        "to": "\u989c\u8272\u6e10\u53d8.Fac"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.003.Color",
+        "to": "\u81ea\u53d1\u5149(\u53d1\u5c04).001.Color"
+      },
+      {
+        "from": "\u76f8\u52a0\u7740\u8272\u5668.Shader",
+        "to": "\u76f8\u52a0\u7740\u8272\u5668.001.Shader"
+      },
+      {
+        "from": "\u81ea\u53d1\u5149(\u53d1\u5c04).Emission",
+        "to": "\u76f8\u52a0\u7740\u8272\u5668.Shader"
+      },
+      {
+        "from": "\u83f2\u6d85\u5c14.001.Fac",
+        "to": "\u8fd0\u7b97.003.Value"
+      },
+      {
+        "from": "\u5c42\u6743\u91cd.002.Fresnel",
+        "to": "\u8fd0\u7b97.003.Value"
+      },
+      {
+        "from": "\u81ea\u53d1\u5149(\u53d1\u5c04).002.Emission",
+        "to": "\u76f8\u52a0\u7740\u8272\u5668.002.Shader"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.009.Output",
+        "to": "\u76f8\u52a0\u7740\u8272\u5668.002.Shader"
+      },
+      {
+        "from": "\u76f8\u52a0\u7740\u8272\u5668.002.Shader",
+        "to": "\u76f8\u52a0\u7740\u8272\u5668.Shader"
+      },
+      {
+        "from": "\u8fd0\u7b97.004.Value",
+        "to": "\u81ea\u53d1\u5149(\u53d1\u5c04).001.Strength"
+      },
+      {
+        "from": "\u53cd\u8f6c.Color",
+        "to": "\u8fd0\u7b97.004.Value"
+      },
+      {
+        "from": "\u83f2\u6d85\u5c14.003.Fac",
+        "to": "\u8fd0\u7b97.015.Value"
+      },
+      {
+        "from": "\u5c42\u6743\u91cd.004.Fresnel",
+        "to": "\u8fd0\u7b97.015.Value"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.004.Color",
+        "to": "\u8fd0\u7b97.016.Value"
+      },
+      {
+        "from": "\u8fd0\u7b97.015.Value",
+        "to": "\u989c\u8272\u6e10\u53d8.004.Fac"
+      },
+      {
+        "from": "\u8fd0\u7b97.016.Value",
+        "to": "\u94b3\u5236.Value"
+      },
+      {
+        "from": "\u76f8\u52a0\u7740\u8272\u5668.001.Shader",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.Shader"
+      },
+      {
+        "from": "\u6f2b\u5c04 BSDF.BSDF",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.Shader"
+      },
+      {
+        "from": "\u94b3\u5236.Result",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.Fac"
+      },
+      {
+        "from": "\u5c42\u6743\u91cd.001.Facing",
+        "to": "\u8fd0\u7b97.Value"
+      },
+      {
+        "from": "\u8fd0\u7b97.Value",
+        "to": "\u81ea\u53d1\u5149(\u53d1\u5c04).Strength"
+      },
+      {
+        "from": "\u503c(\u660e\u5ea6).001.Value",
+        "to": "\u5408\u5e76 XYZ.X"
+      },
+      {
+        "from": "\u77e2\u91cf\u8fd0\u7b97.Value",
+        "to": "\u8fd0\u7b97.006.Value"
+      },
+      {
+        "from": "\u94b3\u5236.001.Result",
+        "to": "\u989c\u8272\u6e10\u53d8.003.Fac"
+      },
+      {
+        "from": "\u8fd0\u7b97.006.Value",
+        "to": "\u94b3\u5236.001.Value"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.Color",
+        "to": "\u6df7\u5408.003.Factor"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.Color",
+        "to": "\u53cd\u8f6c.Color"
+      },
+      {
+        "from": "\u8fd0\u7b97.001.Value",
+        "to": "\u989c\u8272\u6e10\u53d8.002.Fac"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.002.Color",
+        "to": "\u6df7\u5408.A"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.001.Color",
+        "to": "\u6df7\u5408.B"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.008.Output",
+        "to": "\u6df7\u5408.Factor"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.012.Output",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.001.Color"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.002.Color",
+        "to": "\u8f6c\u63a5\u70b9.001.Input"
+      },
+      {
+        "from": "\u6df7\u5408.Result",
+        "to": "\u8f6c\u63a5\u70b9.002.Input"
+      },
+      {
+        "from": "\u8fd0\u7b97.007.Value",
+        "to": "\u81ea\u53d1\u5149(\u53d1\u5c04).002.Strength"
+      },
+      {
+        "from": "\u8fd0\u7b97.003.Value",
+        "to": "\u8fd0\u7b97.007.Value"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.Color",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.002.Color"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.005.Output",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.003.Color"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.003.Color",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.004.Color"
+      },
+      {
+        "from": "RGB.Color",
+        "to": "\u8f6c\u63a5\u70b9.Input"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.004.Output",
+        "to": "\u8f6c\u63a5\u70b9.003.Input"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.004.Color",
+        "to": "\u8f6c\u63a5\u70b9.004.Input"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.012.Output",
+        "to": "\u8f6c\u63a5\u70b9.005.Input"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.012.Output",
+        "to": "\u8f6c\u63a5\u70b9.006.Input"
+      },
+      {
+        "from": "\u8fd0\u7b97.001.Value",
+        "to": "\u8f6c\u63a5\u70b9.007.Input"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.007.Output",
+        "to": "\u8f6c\u63a5\u70b9.008.Input"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.002.Output",
+        "to": "\u6df7\u5408.003.A"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.Output",
+        "to": "\u6df7\u5408.003.B"
+      },
+      {
+        "from": "\u76f8\u52a0\u7740\u8272\u5668.005.Shader",
+        "to": "\u76f8\u52a0\u7740\u8272\u5668.001.Shader"
+      },
+      {
+        "from": "\u5012\u89d2.Normal",
+        "to": "\u77e2\u91cf\u8fd0\u7b97.Vector"
+      },
+      {
+        "from": "\u81ea\u53d1\u5149(\u53d1\u5c04).001.Emission",
+        "to": "\u76f8\u52a0\u7740\u8272\u5668.005.Shader"
+      },
+      {
+        "from": "\u539f\u7406\u5316BSDF.BSDF",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.001.Shader"
+      },
+      {
+        "from": "\u6df7\u5408\u7740\u8272\u5668.Shader",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.001.Shader"
+      },
+      {
+        "from": "\u73af\u5883\u5149\u906e\u853d (AO).001.Color",
+        "to": "\u989c\u8272\u6e10\u53d8.001.Fac"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.001.Color",
+        "to": "\u81ea\u53d1\u5149(\u53d1\u5c04).002.Color"
+      },
+      {
+        "from": "\u73af\u5883\u5149\u906e\u853d (AO).002.Color",
+        "to": "\u989c\u8272\u6e10\u53d8.005.Fac"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.005.Color",
+        "to": "\u539f\u7406\u5316BSDF.Subsurface"
+      },
+      {
+        "from": "\u6df7\u5408\u7740\u8272\u5668.001.Shader",
+        "to": "\u6750\u8d28\u8f93\u51fa.Surface"
+      },
+      {
+        "from": "\u6df7\u5408.003.Result",
+        "to": "\u8f6c\u63a5\u70b9.009.Input"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.011.Output",
+        "to": "\u539f\u7406\u5316BSDF.Emission"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.009.Output",
+        "to": "\u8f6c\u63a5\u70b9.010.Input"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.010.Output",
+        "to": "\u8f6c\u63a5\u70b9.011.Input"
+      },
+      {
+        "from": "\u56fe\u50cf\u7eb9\u7406.Color",
+        "to": "\u8f6c\u63a5\u70b9.012.Input"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.013.Output",
+        "to": "\u539f\u7406\u5316BSDF.Base Color"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.005.Output",
+        "to": "\u8f6c\u63a5\u70b9.013.Input"
+      }
+    ]
+  },
+  "M_Hair": {
+    "nodes": {
+      "\u8f6c\u63a5\u70b9.006": {
+        "type": "REROUTE"
+      },
+      "\u8f6c\u63a5\u70b9.007": {
+        "type": "REROUTE"
+      },
+      "\u6f2b\u5c04 BSDF.002": {
+        "type": "BSDF_DIFFUSE",
+        "params": {
+          "Color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "Roughness": 0.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Weight": 0.0
+        }
+      },
+      "Shader --> RGB": {
+        "type": "SHADERTORGB"
+      },
+      "\u989c\u8272\u6e10\u53d8.008": {
+        "type": "VALTORGB",
+        "interpolation": "CONSTANT",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.2966,
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u8f6c\u63a5\u70b9.012": {
+        "type": "REROUTE"
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.001": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.5,
+          "Saturation": 1.5,
+          "Value": 1.0,
+          "Fac": 1.0
+        }
+      },
+      "\u8fd0\u7b97.004": {
+        "type": "MATH",
+        "params": {
+          "Value": 0.5
+        },
+        "operation": "GREATER_THAN"
+      },
+      "\u6620\u5c04": {
+        "type": "MAPPING",
+        "params": {
+          "Location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "\u7eb9\u7406\u5750\u6807": {
+        "type": "TEX_COORD"
+      },
+      "\u56fe\u50cf\u7eb9\u7406": {
+        "type": "TEX_IMAGE"
+      },
+      "\u8fd0\u7b97.007": {
+        "type": "MATH",
+        "params": {
+          "Value": 0.5
+        },
+        "operation": "POWER"
+      },
+      "\u80cc\u666f": {
+        "type": "BACKGROUND",
+        "params": {
+          "Color": [
+            0.1673,
+            0.1673,
+            0.1673,
+            1.0
+          ],
+          "Strength": 1.0,
+          "Weight": 0.0
+        }
+      },
+      "\u5c42\u6743\u91cd.002": {
+        "type": "LAYER_WEIGHT",
+        "params": {
+          "Blend": 0.61,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u83f2\u6d85\u5c14.001": {
+        "type": "FRESNEL",
+        "params": {
+          "IOR": 1.45,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u8fd0\u7b97.003": {
+        "type": "MATH",
+        "params": {
+          "Value": 0.5
+        },
+        "operation": "MULTIPLY"
+      },
+      "\u6df7\u5408\u7740\u8272\u5668.002": {
+        "type": "MIX_SHADER"
+      },
+      "\u8f6c\u63a5\u70b9": {
+        "type": "REROUTE"
+      },
+      "\u8f6c\u63a5\u70b9.011": {
+        "type": "REROUTE"
+      },
+      "\u6620\u5c04.004": {
+        "type": "MAPPING",
+        "params": {
+          "Location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            20.0,
+            1.8,
+            1.0
+          ]
+        }
+      },
+      "\u7eb9\u7406\u5750\u6807.002": {
+        "type": "TEX_COORD"
+      },
+      "\u566a\u6ce2\u7eb9\u7406.002": {
+        "type": "TEX_NOISE",
+        "params": {
+          "W": 0.0,
+          "Scale": 5.0,
+          "Detail": 2.0,
+          "Roughness": 0.5,
+          "Distortion": 0.1
+        }
+      },
+      "\u76f8\u52a0\u7740\u8272\u5668": {
+        "type": "ADD_SHADER"
+      },
+      "\u539f\u7406\u5316BSDF": {
+        "type": "BSDF_PRINCIPLED",
+        "params": {
+          "Subsurface": 0.0,
+          "Subsurface Radius": [
+            1.0,
+            0.2,
+            0.1
+          ],
+          "Subsurface Color": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "Subsurface IOR": 1.4,
+          "Subsurface Anisotropy": 0.0,
+          "Metallic": 0.0,
+          "Specular": 1.0,
+          "Specular Tint": 0.0,
+          "Roughness": 0.3,
+          "Anisotropic": 0.0,
+          "Anisotropic Rotation": 0.0,
+          "Sheen": 0.0,
+          "Sheen Tint": 0.5,
+          "Clearcoat": 0.0,
+          "Clearcoat Roughness": 0.03,
+          "IOR": 1.45,
+          "Transmission": 0.0,
+          "Transmission Roughness": 0.0,
+          "Emission Strength": 0.0,
+          "Alpha": 1.0,
+          "Clearcoat Normal": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Tangent": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Weight": 0.0
+        }
+      },
+      "\u6cd5\u7ebf\u8d34\u56fe": {
+        "type": "NORMAL_MAP",
+        "params": {
+          "Strength": 0.1
+        }
+      },
+      "\u81ea\u53d1\u5149(\u53d1\u5c04)": {
+        "type": "EMISSION",
+        "params": {
+          "Strength": 0.1,
+          "Weight": 0.0
+        }
+      },
+      "\u6750\u8d28\u8f93\u51fa": {
+        "type": "OUTPUT_MATERIAL",
+        "params": {
+          "Displacement": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Thickness": 0.0
+        }
+      },
+      "\u989c\u8272\u6e10\u53d8.001": {
+        "type": "VALTORGB",
+        "interpolation": "CONSTANT",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.3756,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u73af\u5883\u5149\u906e\u853d (AO).001": {
+        "type": "AMBIENT_OCCLUSION",
+        "params": {
+          "Color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "Distance": 1.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u5206\u79bb XYZ.001": {
+        "type": "SEPXYZ"
+      },
+      "\u5012\u89d2.001": {
+        "type": "BEVEL",
+        "params": {
+          "Radius": 0.05,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u81ea\u53d1\u5149(\u53d1\u5c04).003": {
+        "type": "EMISSION",
+        "params": {
+          "Strength": 1.0,
+          "Weight": 0.0
+        }
+      },
+      "\u6df7\u5408.004": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "B": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "blend_type": "MIX"
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.5,
+          "Saturation": 1.2,
+          "Value": 0.5,
+          "Fac": 1.0
+        }
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.002": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.48,
+          "Saturation": 1.2,
+          "Value": 0.7,
+          "Fac": 1.0
+        }
+      },
+      "\u4eae\u5ea6 / \u5bf9\u6bd4\u5ea6": {
+        "type": "BRIGHTCONTRAST",
+        "params": {
+          "Bright": 0.1,
+          "Contrast": 0.2
+        }
+      },
+      "\u6df7\u5408.003": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "B": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "blend_type": "MIX"
+      },
+      "\u6df7\u5408.001": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "B": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "blend_type": "MIX"
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.004": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.5,
+          "Saturation": 0.8,
+          "Value": 0.1,
+          "Fac": 1.0
+        }
+      },
+      "\u6df7\u5408.002": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "B": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "blend_type": "MIX"
+      },
+      "\u6df7\u5408\u7740\u8272\u5668.001": {
+        "type": "MIX_SHADER",
+        "params": {
+          "Fac": 0.2
+        }
+      }
+    },
+    "links": [
+      {
+        "from": "\u6620\u5c04.Vector",
+        "to": "\u56fe\u50cf\u7eb9\u7406.Vector"
+      },
+      {
+        "from": "\u7eb9\u7406\u5750\u6807.UV",
+        "to": "\u6620\u5c04.Vector"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.006.Output",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.Color"
+      },
+      {
+        "from": "\u83f2\u6d85\u5c14.001.Fac",
+        "to": "\u8fd0\u7b97.003.Value"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.012.Output",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.001.Color"
+      },
+      {
+        "from": "\u8fd0\u7b97.003.Value",
+        "to": "\u8fd0\u7b97.007.Value"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.Color",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.002.Color"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.012.Output",
+        "to": "\u8f6c\u63a5\u70b9.006.Input"
+      },
+      {
+        "from": "\u539f\u7406\u5316BSDF.BSDF",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.001.Shader"
+      },
+      {
+        "from": "\u76f8\u52a0\u7740\u8272\u5668.Shader",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.001.Shader"
+      },
+      {
+        "from": "\u56fe\u50cf\u7eb9\u7406.Color",
+        "to": "\u8f6c\u63a5\u70b9.012.Input"
+      },
+      {
+        "from": "\u6f2b\u5c04 BSDF.002.BSDF",
+        "to": "Shader --> RGB.Shader"
+      },
+      {
+        "from": "Shader --> RGB.Color",
+        "to": "\u989c\u8272\u6e10\u53d8.008.Fac"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.007.Output",
+        "to": "\u8f6c\u63a5\u70b9.011.Input"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.001.Color",
+        "to": "\u6df7\u5408.004.B"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.008.Color",
+        "to": "\u6df7\u5408.004.Factor"
+      },
+      {
+        "from": "\u4eae\u5ea6 / \u5bf9\u6bd4\u5ea6.Color",
+        "to": "\u8f6c\u63a5\u70b9.007.Input"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.011.Output",
+        "to": "\u539f\u7406\u5316BSDF.Emission"
+      },
+      {
+        "from": "\u81ea\u53d1\u5149(\u53d1\u5c04).003.Emission",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.002.Shader"
+      },
+      {
+        "from": "\u8fd0\u7b97.007.Value",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.002.Fac"
+      },
+      {
+        "from": "\u80cc\u666f.Background",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.002.Shader"
+      },
+      {
+        "from": "\u5c42\u6743\u91cd.002.Fresnel",
+        "to": "\u8fd0\u7b97.003.Value"
+      },
+      {
+        "from": "\u6df7\u5408.004.Result",
+        "to": "\u4eae\u5ea6 / \u5bf9\u6bd4\u5ea6.Color"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.011.Output",
+        "to": "\u539f\u7406\u5316BSDF.Base Color"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.002.Color",
+        "to": "\u6df7\u5408.004.A"
+      },
+      {
+        "from": "\u6620\u5c04.004.Vector",
+        "to": "\u566a\u6ce2\u7eb9\u7406.002.Vector"
+      },
+      {
+        "from": "\u7eb9\u7406\u5750\u6807.002.UV",
+        "to": "\u6620\u5c04.004.Vector"
+      },
+      {
+        "from": "\u566a\u6ce2\u7eb9\u7406.002.Color",
+        "to": "\u6cd5\u7ebf\u8d34\u56fe.Color"
+      },
+      {
+        "from": "\u6cd5\u7ebf\u8d34\u56fe.Normal",
+        "to": "\u539f\u7406\u5316BSDF.Normal"
+      },
+      {
+        "from": "\u8fd0\u7b97.004.Value",
+        "to": "\u8f6c\u63a5\u70b9.Input"
+      },
+      {
+        "from": "\u6df7\u5408\u7740\u8272\u5668.002.Shader",
+        "to": "\u76f8\u52a0\u7740\u8272\u5668.Shader"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.Output",
+        "to": "\u81ea\u53d1\u5149(\u53d1\u5c04).Color"
+      },
+      {
+        "from": "\u81ea\u53d1\u5149(\u53d1\u5c04).Emission",
+        "to": "\u76f8\u52a0\u7740\u8272\u5668.Shader"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.012.Output",
+        "to": "\u8fd0\u7b97.004.Value"
+      },
+      {
+        "from": "\u73af\u5883\u5149\u906e\u853d (AO).001.Color",
+        "to": "\u989c\u8272\u6e10\u53d8.001.Fac"
+      },
+      {
+        "from": "\u5012\u89d2.001.Normal",
+        "to": "\u5206\u79bb XYZ.001.Vector"
+      },
+      {
+        "from": "\u5206\u79bb XYZ.001.Z",
+        "to": "\u6df7\u5408.003.Factor"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.001.Color",
+        "to": "\u6df7\u5408.001.Factor"
+      },
+      {
+        "from": "\u6df7\u5408.001.Result",
+        "to": "\u6df7\u5408.002.Factor"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.004.Color",
+        "to": "\u6df7\u5408.002.A"
+      },
+      {
+        "from": "\u6df7\u5408.003.Result",
+        "to": "\u6df7\u5408.002.B"
+      },
+      {
+        "from": "\u4eae\u5ea6 / \u5bf9\u6bd4\u5ea6.Color",
+        "to": "\u6df7\u5408.003.A"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.002.Color",
+        "to": "\u6df7\u5408.003.B"
+      },
+      {
+        "from": "\u6df7\u5408.003.Result",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.004.Color"
+      },
+      {
+        "from": "\u6df7\u5408.002.Result",
+        "to": "\u81ea\u53d1\u5149(\u53d1\u5c04).003.Color"
+      },
+      {
+        "from": "\u6df7\u5408\u7740\u8272\u5668.001.Shader",
+        "to": "\u6750\u8d28\u8f93\u51fa.Surface"
+      }
+    ]
+  },
+  "M_Metal": {
+    "nodes": {
+      "\u6df7\u5408.002": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "B": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "blend_type": "OVERLAY"
+      },
+      "\u6df7\u5408.004": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "B": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "blend_type": "MIX"
+      },
+      "\u6df7\u5408.001": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "B": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "blend_type": "MIX"
+      },
+      "\u73af\u5883\u5149\u906e\u853d (AO).001": {
+        "type": "AMBIENT_OCCLUSION",
+        "params": {
+          "Color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "Distance": 1.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u989c\u8272\u6e10\u53d8.001": {
+        "type": "VALTORGB",
+        "interpolation": "CONSTANT",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.3756,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.008": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.5,
+          "Saturation": 1.0,
+          "Value": 1.0,
+          "Fac": 1.0
+        }
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.004": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.5,
+          "Saturation": 1.0,
+          "Value": 2.0,
+          "Fac": 1.0
+        }
+      },
+      "\u8f6c\u63a5\u70b9.001": {
+        "type": "REROUTE"
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.007": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.5,
+          "Saturation": 1.0,
+          "Value": 0.8,
+          "Fac": 1.0
+        }
+      },
+      "\u7eb9\u7406\u5750\u6807": {
+        "type": "TEX_COORD"
+      },
+      "\u6df7\u5408.005": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "B": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "blend_type": "MULTIPLY"
+      },
+      "\u6df7\u5408\u7740\u8272\u5668.001": {
+        "type": "MIX_SHADER",
+        "params": {
+          "Fac": 0.6967
+        }
+      },
+      "\u8fd0\u7b97.004": {
+        "type": "MATH",
+        "params": {
+          "Value": 0.5
+        },
+        "operation": "MULTIPLY"
+      },
+      "\u6f2b\u5c04 BSDF.002": {
+        "type": "BSDF_DIFFUSE",
+        "params": {
+          "Color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "Roughness": 0.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Weight": 0.0
+        }
+      },
+      "Shader --> RGB": {
+        "type": "SHADERTORGB"
+      },
+      "\u989c\u8272\u6e10\u53d8.008": {
+        "type": "VALTORGB",
+        "interpolation": "CONSTANT",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.2966,
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u6750\u8d28\u8f93\u51fa.001": {
+        "type": "OUTPUT_MATERIAL",
+        "params": {
+          "Displacement": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Thickness": 0.0
+        }
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.002": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.5,
+          "Saturation": 1.0,
+          "Value": 0.2,
+          "Fac": 1.0
+        }
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.006": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.5,
+          "Saturation": 1.5,
+          "Value": 1.3,
+          "Fac": 1.0
+        }
+      },
+      "\u77e2\u91cf\u8fd0\u7b97.007": {
+        "type": "VECT_MATH",
+        "params": {
+          "Vector": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": 1.0
+        }
+      },
+      "\u6c83\u7f57\u8bfa\u4f0a\u7eb9\u7406": {
+        "type": "TEX_VORONOI",
+        "params": {
+          "W": 0.0,
+          "Scale": 4.3,
+          "Smoothness": 1.0,
+          "Exponent": 0.5,
+          "Randomness": 1.0
+        }
+      },
+      "\u989c\u8272\u6e10\u53d8": {
+        "type": "VALTORGB",
+        "interpolation": "LINEAR",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 1.0,
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.5,
+          "Saturation": 1.0,
+          "Value": 1.0,
+          "Fac": 1.0
+        }
+      },
+      "\u6620\u5c04": {
+        "type": "MAPPING",
+        "params": {
+          "Location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "\u56fe\u50cf\u7eb9\u7406.001": {
+        "type": "TEX_IMAGE"
+      },
+      "\u81ea\u53d1\u5149(\u53d1\u5c04).005": {
+        "type": "EMISSION",
+        "params": {
+          "Strength": 8.1,
+          "Weight": 0.0
+        }
+      },
+      "\u539f\u7406\u5316BSDF": {
+        "type": "BSDF_PRINCIPLED",
+        "params": {
+          "Subsurface": 0.0,
+          "Subsurface Radius": [
+            1.0,
+            0.2,
+            0.1
+          ],
+          "Subsurface Color": [
+            0.8,
+            0.8,
+            0.8,
+            1.0
+          ],
+          "Subsurface IOR": 1.3566,
+          "Subsurface Anisotropy": 0.0,
+          "Metallic": 1.0,
+          "Specular": 1.0,
+          "Specular Tint": 0.114,
+          "Roughness": 0.3,
+          "Anisotropic": 0.0,
+          "Anisotropic Rotation": 0.0,
+          "Sheen": 0.0,
+          "Sheen Tint": 0.5,
+          "Clearcoat": 0.0,
+          "Clearcoat Roughness": 0.03,
+          "IOR": 1.45,
+          "Transmission": 0.0,
+          "Transmission Roughness": 0.0,
+          "Emission": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "Emission Strength": 1.0,
+          "Alpha": 1.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Clearcoat Normal": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Tangent": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Weight": 0.0
+        }
+      }
+    },
+    "links": [
+      {
+        "from": "\u73af\u5883\u5149\u906e\u853d (AO).001.Color",
+        "to": "\u989c\u8272\u6e10\u53d8.001.Fac"
+      },
+      {
+        "from": "\u8fd0\u7b97.004.Value",
+        "to": "\u6df7\u5408.004.Factor"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.001.Output",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.002.Color"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.002.Color",
+        "to": "\u6df7\u5408.004.A"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.001.Output",
+        "to": "\u6df7\u5408.004.B"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.001.Color",
+        "to": "\u6df7\u5408.001.Factor"
+      },
+      {
+        "from": "\u6df7\u5408.001.Result",
+        "to": "\u6df7\u5408.002.Factor"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.008.Color",
+        "to": "\u6df7\u5408.002.A"
+      },
+      {
+        "from": "\u6df7\u5408.004.Result",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.004.Color"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.004.Color",
+        "to": "\u6df7\u5408.002.B"
+      },
+      {
+        "from": "\u6620\u5c04.Vector",
+        "to": "\u56fe\u50cf\u7eb9\u7406.001.Vector"
+      },
+      {
+        "from": "\u7eb9\u7406\u5750\u6807.UV",
+        "to": "\u6620\u5c04.Vector"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.007.Color",
+        "to": "\u8f6c\u63a5\u70b9.001.Input"
+      },
+      {
+        "from": "\u77e2\u91cf\u8fd0\u7b97.007.Vector",
+        "to": "\u6c83\u7f57\u8bfa\u4f0a\u7eb9\u7406.Vector"
+      },
+      {
+        "from": "\u6c83\u7f57\u8bfa\u4f0a\u7eb9\u7406.Color",
+        "to": "\u989c\u8272\u6e10\u53d8.Fac"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.Color",
+        "to": "\u6df7\u5408.005.Factor"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.001.Output",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.006.Color"
+      },
+      {
+        "from": "\u56fe\u50cf\u7eb9\u7406.001.Color",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.007.Color"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.Color",
+        "to": "\u6df7\u5408.005.A"
+      },
+      {
+        "from": "\u7eb9\u7406\u5750\u6807.Reflection",
+        "to": "\u77e2\u91cf\u8fd0\u7b97.007.Vector"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.006.Color",
+        "to": "\u6df7\u5408.005.B"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.Color",
+        "to": "\u539f\u7406\u5316BSDF.Base Color"
+      },
+      {
+        "from": "\u6df7\u5408.005.Result",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.Color"
+      },
+      {
+        "from": "\u81ea\u53d1\u5149(\u53d1\u5c04).005.Emission",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.001.Shader"
+      },
+      {
+        "from": "\u539f\u7406\u5316BSDF.BSDF",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.001.Shader"
+      },
+      {
+        "from": "\u6df7\u5408.004.Result",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.008.Color"
+      },
+      {
+        "from": "\u6df7\u5408.002.Result",
+        "to": "\u81ea\u53d1\u5149(\u53d1\u5c04).005.Color"
+      },
+      {
+        "from": "\u6df7\u5408\u7740\u8272\u5668.001.Shader",
+        "to": "\u6750\u8d28\u8f93\u51fa.001.Surface"
+      },
+      {
+        "from": "\u6f2b\u5c04 BSDF.002.BSDF",
+        "to": "Shader --> RGB.Shader"
+      },
+      {
+        "from": "Shader --> RGB.Color",
+        "to": "\u989c\u8272\u6e10\u53d8.008.Fac"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.008.Color",
+        "to": "\u8fd0\u7b97.004.Value"
+      }
+    ]
+  },
+  "M_Rough_Cloth": {
+    "nodes": {
+      "\u6df7\u5408.004": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "B": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "blend_type": "MIX"
+      },
+      "\u5012\u89d2.001": {
+        "type": "BEVEL",
+        "params": {
+          "Radius": 0.05,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u8fd0\u7b97.004": {
+        "type": "MATH",
+        "params": {
+          "Value": 0.5
+        },
+        "operation": "MULTIPLY"
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.5,
+          "Saturation": 1.0,
+          "Value": 0.8,
+          "Fac": 1.0
+        }
+      },
+      "\u6750\u8d28\u8f93\u51fa": {
+        "type": "OUTPUT_MATERIAL",
+        "params": {
+          "Displacement": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Thickness": 0.0
+        }
+      },
+      "\u8f6c\u63a5\u70b9.001": {
+        "type": "REROUTE"
+      },
+      "\u6620\u5c04": {
+        "type": "MAPPING",
+        "params": {
+          "Location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "\u7eb9\u7406\u5750\u6807": {
+        "type": "TEX_COORD"
+      },
+      "\u8f6c\u63a5\u70b9.002": {
+        "type": "REROUTE"
+      },
+      "\u6df7\u5408.001": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "B": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "blend_type": "MIX"
+      },
+      "\u73af\u5883\u5149\u906e\u853d (AO).001": {
+        "type": "AMBIENT_OCCLUSION",
+        "params": {
+          "Color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "Distance": 1.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u989c\u8272\u6e10\u53d8.001": {
+        "type": "VALTORGB",
+        "interpolation": "CONSTANT",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.3756,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u6f2b\u5c04 BSDF.002": {
+        "type": "BSDF_DIFFUSE",
+        "params": {
+          "Color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "Roughness": 0.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Weight": 0.0
+        }
+      },
+      "Shader --> RGB": {
+        "type": "SHADERTORGB"
+      },
+      "\u989c\u8272\u6e10\u53d8.008": {
+        "type": "VALTORGB",
+        "interpolation": "CONSTANT",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.2966,
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u989c\u8272\u6e10\u53d8": {
+        "type": "VALTORGB",
+        "interpolation": "LINEAR",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              0.6351,
+              0.6351,
+              0.6351,
+              1.0
+            ]
+          },
+          {
+            "pos": 1.0,
+            "color": [
+              0.5139,
+              0.5139,
+              0.5139,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u566a\u6ce2\u7eb9\u7406": {
+        "type": "TEX_NOISE",
+        "params": {
+          "W": 0.0,
+          "Scale": 17.7,
+          "Detail": 2.0,
+          "Roughness": 0.5,
+          "Distortion": 0.0
+        }
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.004": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.5,
+          "Saturation": 0.8,
+          "Value": 2.0,
+          "Fac": 1.0
+        }
+      },
+      "\u6620\u5c04.001": {
+        "type": "MAPPING",
+        "params": {
+          "Location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "\u7eb9\u7406\u5750\u6807.001": {
+        "type": "TEX_COORD"
+      },
+      "\u5206\u79bb XYZ.001": {
+        "type": "SEPXYZ"
+      },
+      "\u6df7\u5408.003": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "B": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "blend_type": "MIX"
+      },
+      "\u6df7\u5408.002": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "B": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "blend_type": "OVERLAY"
+      },
+      "\u6df7\u5408\u7740\u8272\u5668.001": {
+        "type": "MIX_SHADER",
+        "params": {
+          "Fac": 0.9
+        }
+      },
+      "\u51f9\u51f8": {
+        "type": "BUMP",
+        "params": {
+          "Strength": 1.0,
+          "Distance": 1.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.002": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.5,
+          "Saturation": 1.0,
+          "Value": 0.2,
+          "Fac": 1.0
+        }
+      },
+      "\u56fe\u50cf\u7eb9\u7406.001": {
+        "type": "TEX_IMAGE"
+      },
+      "\u539f\u7406\u5316BSDF": {
+        "type": "BSDF_PRINCIPLED",
+        "params": {
+          "Subsurface": 0.0,
+          "Subsurface Radius": [
+            1.0,
+            0.2,
+            0.1
+          ],
+          "Subsurface Color": [
+            0.8,
+            0.8,
+            0.8,
+            1.0
+          ],
+          "Subsurface IOR": 1.3566,
+          "Subsurface Anisotropy": 0.0,
+          "Metallic": 0.0,
+          "Specular": 0.8,
+          "Specular Tint": 0.0,
+          "Roughness": 0.8187,
+          "Anisotropic": 0.0,
+          "Anisotropic Rotation": 0.0,
+          "Sheen": 0.0,
+          "Sheen Tint": 0.5,
+          "Clearcoat": 0.0,
+          "Clearcoat Roughness": 0.03,
+          "IOR": 1.45,
+          "Transmission": 0.0,
+          "Transmission Roughness": 0.0,
+          "Emission Strength": 0.0,
+          "Alpha": 1.0,
+          "Clearcoat Normal": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Tangent": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Weight": 0.0
+        }
+      },
+      "\u81ea\u53d1\u5149(\u53d1\u5c04).005": {
+        "type": "EMISSION",
+        "params": {
+          "Strength": 18.2,
+          "Weight": 0.0
+        }
+      }
+    },
+    "links": [
+      {
+        "from": "\u73af\u5883\u5149\u906e\u853d (AO).001.Color",
+        "to": "\u989c\u8272\u6e10\u53d8.001.Fac"
+      },
+      {
+        "from": "\u8fd0\u7b97.004.Value",
+        "to": "\u6df7\u5408.004.Factor"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.001.Output",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.002.Color"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.002.Color",
+        "to": "\u6df7\u5408.004.A"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.001.Output",
+        "to": "\u6df7\u5408.004.B"
+      },
+      {
+        "from": "\u5012\u89d2.001.Normal",
+        "to": "\u5206\u79bb XYZ.001.Vector"
+      },
+      {
+        "from": "\u5206\u79bb XYZ.001.Z",
+        "to": "\u6df7\u5408.003.Factor"
+      },
+      {
+        "from": "\u6df7\u5408.004.Result",
+        "to": "\u6df7\u5408.003.A"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.001.Color",
+        "to": "\u6df7\u5408.001.Factor"
+      },
+      {
+        "from": "\u6df7\u5408.001.Result",
+        "to": "\u6df7\u5408.002.Factor"
+      },
+      {
+        "from": "\u6df7\u5408.003.Result",
+        "to": "\u6df7\u5408.002.A"
+      },
+      {
+        "from": "\u6df7\u5408.003.Result",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.004.Color"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.004.Color",
+        "to": "\u6df7\u5408.002.B"
+      },
+      {
+        "from": "\u6620\u5c04.Vector",
+        "to": "\u56fe\u50cf\u7eb9\u7406.001.Vector"
+      },
+      {
+        "from": "\u7eb9\u7406\u5750\u6807.UV",
+        "to": "\u6620\u5c04.Vector"
+      },
+      {
+        "from": "\u56fe\u50cf\u7eb9\u7406.001.Color",
+        "to": "\u8f6c\u63a5\u70b9.001.Input"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.Color",
+        "to": "\u539f\u7406\u5316BSDF.Base Color"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.002.Output",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.Color"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.002.Color",
+        "to": "\u6df7\u5408.003.B"
+      },
+      {
+        "from": "\u81ea\u53d1\u5149(\u53d1\u5c04).005.Emission",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.001.Shader"
+      },
+      {
+        "from": "\u539f\u7406\u5316BSDF.BSDF",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.001.Shader"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.001.Output",
+        "to": "\u8f6c\u63a5\u70b9.002.Input"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.Color",
+        "to": "\u539f\u7406\u5316BSDF.Emission"
+      },
+      {
+        "from": "\u6df7\u5408.002.Result",
+        "to": "\u81ea\u53d1\u5149(\u53d1\u5c04).005.Color"
+      },
+      {
+        "from": "\u6f2b\u5c04 BSDF.002.BSDF",
+        "to": "Shader --> RGB.Shader"
+      },
+      {
+        "from": "Shader --> RGB.Color",
+        "to": "\u989c\u8272\u6e10\u53d8.008.Fac"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.008.Color",
+        "to": "\u8fd0\u7b97.004.Value"
+      },
+      {
+        "from": "\u6620\u5c04.001.Vector",
+        "to": "\u566a\u6ce2\u7eb9\u7406.Vector"
+      },
+      {
+        "from": "\u7eb9\u7406\u5750\u6807.001.UV",
+        "to": "\u6620\u5c04.001.Vector"
+      },
+      {
+        "from": "\u566a\u6ce2\u7eb9\u7406.Color",
+        "to": "\u989c\u8272\u6e10\u53d8.Fac"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.Color",
+        "to": "\u51f9\u51f8.Height"
+      },
+      {
+        "from": "\u51f9\u51f8.Normal",
+        "to": "\u539f\u7406\u5316BSDF.Normal"
+      },
+      {
+        "from": "\u6df7\u5408\u7740\u8272\u5668.001.Shader",
+        "to": "\u6750\u8d28\u8f93\u51fa.Surface"
+      }
+    ]
+  },
+  "M_Skin": {
+    "nodes": {
+      "\u94b3\u5236.001": {
+        "type": "CLAMP",
+        "params": {
+          "Min": 0.0,
+          "Max": 1.0
+        }
+      },
+      "\u8fd0\u7b97.006": {
+        "type": "MATH",
+        "params": {
+          "Value": 0.5
+        },
+        "operation": "ADD"
+      },
+      "\u8fd0\u7b97.004": {
+        "type": "MATH",
+        "params": {
+          "Value": 0.5
+        },
+        "operation": "MULTIPLY"
+      },
+      "\u53cd\u8f6c": {
+        "type": "INVERT",
+        "params": {
+          "Fac": 1.0
+        }
+      },
+      "\u989c\u8272\u6e10\u53d8.003": {
+        "type": "VALTORGB",
+        "interpolation": "CARDINAL",
+        "stops": [
+          {
+            "pos": 0.2409,
+            "color": [
+              0.2426,
+              0.068,
+              0.0588,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.4663,
+            "color": [
+              0.6677,
+              0.5024,
+              0.5126,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u989c\u8272\u6e10\u53d8": {
+        "type": "VALTORGB",
+        "interpolation": "CONSTANT",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.5995,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u73af\u5883\u5149\u906e\u853d (AO)": {
+        "type": "AMBIENT_OCCLUSION",
+        "params": {
+          "Color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "Distance": 1.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u81ea\u53d1\u5149(\u53d1\u5c04).001": {
+        "type": "EMISSION",
+        "params": {
+          "Weight": 0.0
+        }
+      },
+      "\u6df7\u5408\u7740\u8272\u5668.002": {
+        "type": "MIX_SHADER"
+      },
+      "\u8f6c\u63a5\u70b9.007": {
+        "type": "REROUTE"
+      },
+      "\u6f2b\u5c04 BSDF.002": {
+        "type": "BSDF_DIFFUSE",
+        "params": {
+          "Color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "Roughness": 0.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Weight": 0.0
+        }
+      },
+      "Shader --> RGB": {
+        "type": "SHADERTORGB"
+      },
+      "\u989c\u8272\u6e10\u53d8.008": {
+        "type": "VALTORGB",
+        "interpolation": "CONSTANT",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.2966,
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u4eae\u5ea6 / \u5bf9\u6bd4\u5ea6": {
+        "type": "BRIGHTCONTRAST",
+        "params": {
+          "Bright": 0.1,
+          "Contrast": 0.2
+        }
+      },
+      "\u76f8\u52a0\u7740\u8272\u5668": {
+        "type": "ADD_SHADER"
+      },
+      "\u989c\u8272\u6e10\u53d8.005": {
+        "type": "VALTORGB",
+        "interpolation": "LINEAR",
+        "stops": [
+          {
+            "pos": 0.003,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 1.0,
+            "color": [
+              0.0786,
+              0.0786,
+              0.0786,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u566a\u6ce2\u7eb9\u7406": {
+        "type": "TEX_NOISE",
+        "params": {
+          "W": 0.0,
+          "Scale": 1.0,
+          "Detail": 2.0,
+          "Roughness": 0.5,
+          "Distortion": 0.0
+        }
+      },
+      "\u989c\u8272\u6e10\u53d8.007": {
+        "type": "VALTORGB",
+        "interpolation": "LINEAR",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 1.0,
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u6620\u5c04.001": {
+        "type": "MAPPING",
+        "params": {
+          "Location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1.0,
+            1.0,
+            1.5
+          ]
+        }
+      },
+      "\u7eb9\u7406\u5750\u6807.001": {
+        "type": "TEX_COORD"
+      },
+      "\u73af\u5883\u5149\u906e\u853d (AO).002": {
+        "type": "AMBIENT_OCCLUSION",
+        "params": {
+          "Color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "Distance": 1.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u8f6c\u63a5\u70b9.013": {
+        "type": "REROUTE"
+      },
+      "\u6df7\u5408.001": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "B": [
+            0.6832,
+            0.1947,
+            0.1373,
+            1.0
+          ]
+        },
+        "blend_type": "MIX"
+      },
+      "\u8f6c\u63a5\u70b9.011": {
+        "type": "REROUTE"
+      },
+      "\u539f\u7406\u5316BSDF": {
+        "type": "BSDF_PRINCIPLED",
+        "params": {
+          "Subsurface Radius": [
+            1.0,
+            0.2,
+            0.1
+          ],
+          "Subsurface Color": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "Subsurface IOR": 1.4,
+          "Subsurface Anisotropy": 0.0,
+          "Metallic": 0.0,
+          "Specular": 0.5,
+          "Specular Tint": 0.0,
+          "Roughness": 0.3,
+          "Anisotropic": 0.0,
+          "Anisotropic Rotation": 0.0,
+          "Sheen": 0.0,
+          "Sheen Tint": 0.5,
+          "Clearcoat": 0.0,
+          "Clearcoat Roughness": 0.03,
+          "IOR": 1.45,
+          "Transmission": 0.0,
+          "Transmission Roughness": 0.0,
+          "Emission Strength": 0.2,
+          "Alpha": 1.0,
+          "Clearcoat Normal": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Tangent": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Weight": 0.0
+        }
+      },
+      "\u51f9\u51f8": {
+        "type": "BUMP",
+        "params": {
+          "Strength": 0.3246,
+          "Distance": 1.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u6750\u8d28\u8f93\u51fa": {
+        "type": "OUTPUT_MATERIAL",
+        "params": {
+          "Displacement": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Thickness": 0.0
+        }
+      },
+      "\u6df7\u5408\u7740\u8272\u5668.001": {
+        "type": "MIX_SHADER",
+        "params": {
+          "Fac": 0.5
+        }
+      },
+      "\u76f8\u52a0\u7740\u8272\u5668.001": {
+        "type": "ADD_SHADER"
+      },
+      "\u6df7\u5408.003": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "B": [
+            0.8302,
+            0.3346,
+            0.2795,
+            1.0
+          ]
+        },
+        "blend_type": "MIX"
+      },
+      "\u989c\u8272\u6e10\u53d8.010": {
+        "type": "VALTORGB",
+        "interpolation": "EASE",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.5052,
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u80cc\u666f": {
+        "type": "BACKGROUND",
+        "params": {
+          "Color": [
+            1.0,
+            0.4304,
+            0.3316,
+            1.0
+          ],
+          "Strength": 1.0,
+          "Weight": 0.0
+        }
+      },
+      "\u5c42\u6743\u91cd.002": {
+        "type": "LAYER_WEIGHT",
+        "params": {
+          "Blend": 0.2,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u8fd0\u7b97.007": {
+        "type": "MATH",
+        "params": {
+          "Value": 0.5
+        },
+        "operation": "POWER"
+      },
+      "\u81ea\u53d1\u5149(\u53d1\u5c04)": {
+        "type": "EMISSION",
+        "params": {
+          "Color": [
+            0.9842,
+            0.611,
+            0.5736,
+            1.0
+          ],
+          "Weight": 0.0
+        }
+      },
+      "\u6f2b\u5c04 BSDF.001": {
+        "type": "BSDF_DIFFUSE",
+        "params": {
+          "Roughness": 0.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Weight": 0.0
+        }
+      },
+      "\u8fd0\u7b97": {
+        "type": "MATH",
+        "params": {
+          "Value": 0.5
+        },
+        "operation": "MULTIPLY"
+      },
+      "\u83f2\u6d85\u5c14": {
+        "type": "FRESNEL",
+        "params": {
+          "IOR": 2.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u5c42\u6743\u91cd.001": {
+        "type": "LAYER_WEIGHT",
+        "params": {
+          "Blend": 0.24,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u81ea\u53d1\u5149(\u53d1\u5c04).003": {
+        "type": "EMISSION",
+        "params": {
+          "Strength": 4.0,
+          "Weight": 0.0
+        }
+      },
+      "\u6df7\u5408.004": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            1.0,
+            0.1008,
+            0.0697,
+            1.0
+          ],
+          "B": [
+            0.8221,
+            0.4892,
+            0.4521,
+            1.0
+          ]
+        },
+        "blend_type": "MIX"
+      }
+    },
+    "links": [
+      {
+        "from": "\u83f2\u6d85\u5c14.Fac",
+        "to": "\u8fd0\u7b97.Value"
+      },
+      {
+        "from": "\u73af\u5883\u5149\u906e\u853d (AO).Color",
+        "to": "\u989c\u8272\u6e10\u53d8.Fac"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.003.Color",
+        "to": "\u81ea\u53d1\u5149(\u53d1\u5c04).001.Color"
+      },
+      {
+        "from": "\u76f8\u52a0\u7740\u8272\u5668.Shader",
+        "to": "\u76f8\u52a0\u7740\u8272\u5668.001.Shader"
+      },
+      {
+        "from": "\u81ea\u53d1\u5149(\u53d1\u5c04).Emission",
+        "to": "\u76f8\u52a0\u7740\u8272\u5668.Shader"
+      },
+      {
+        "from": "\u8fd0\u7b97.004.Value",
+        "to": "\u81ea\u53d1\u5149(\u53d1\u5c04).001.Strength"
+      },
+      {
+        "from": "\u53cd\u8f6c.Color",
+        "to": "\u8fd0\u7b97.004.Value"
+      },
+      {
+        "from": "\u5c42\u6743\u91cd.001.Facing",
+        "to": "\u8fd0\u7b97.Value"
+      },
+      {
+        "from": "\u8fd0\u7b97.Value",
+        "to": "\u81ea\u53d1\u5149(\u53d1\u5c04).Strength"
+      },
+      {
+        "from": "\u94b3\u5236.001.Result",
+        "to": "\u989c\u8272\u6e10\u53d8.003.Fac"
+      },
+      {
+        "from": "\u8fd0\u7b97.006.Value",
+        "to": "\u94b3\u5236.001.Value"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.Color",
+        "to": "\u6df7\u5408.003.Factor"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.Color",
+        "to": "\u53cd\u8f6c.Color"
+      },
+      {
+        "from": "\u81ea\u53d1\u5149(\u53d1\u5c04).001.Emission",
+        "to": "\u76f8\u52a0\u7740\u8272\u5668.001.Shader"
+      },
+      {
+        "from": "\u539f\u7406\u5316BSDF.BSDF",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.001.Shader"
+      },
+      {
+        "from": "\u76f8\u52a0\u7740\u8272\u5668.001.Shader",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.001.Shader"
+      },
+      {
+        "from": "\u73af\u5883\u5149\u906e\u853d (AO).002.Color",
+        "to": "\u989c\u8272\u6e10\u53d8.005.Fac"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.005.Color",
+        "to": "\u539f\u7406\u5316BSDF.Subsurface"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.007.Output",
+        "to": "\u8f6c\u63a5\u70b9.013.Input"
+      },
+      {
+        "from": "\u6620\u5c04.001.Vector",
+        "to": "\u566a\u6ce2\u7eb9\u7406.Vector"
+      },
+      {
+        "from": "\u566a\u6ce2\u7eb9\u7406.Color",
+        "to": "\u989c\u8272\u6e10\u53d8.007.Fac"
+      },
+      {
+        "from": "\u51f9\u51f8.Normal",
+        "to": "\u539f\u7406\u5316BSDF.Normal"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.007.Color",
+        "to": "\u51f9\u51f8.Height"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.007.Color",
+        "to": "\u6df7\u5408.001.Factor"
+      },
+      {
+        "from": "\u7eb9\u7406\u5750\u6807.001.Generated",
+        "to": "\u6620\u5c04.001.Vector"
+      },
+      {
+        "from": "\u8fd0\u7b97.Value",
+        "to": "\u6f2b\u5c04 BSDF.001.Color"
+      },
+      {
+        "from": "\u6f2b\u5c04 BSDF.002.BSDF",
+        "to": "Shader --> RGB.Shader"
+      },
+      {
+        "from": "Shader --> RGB.Color",
+        "to": "\u989c\u8272\u6e10\u53d8.008.Fac"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.013.Output",
+        "to": "\u8f6c\u63a5\u70b9.011.Input"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.008.Color",
+        "to": "\u6df7\u5408.004.Factor"
+      },
+      {
+        "from": "\u4eae\u5ea6 / \u5bf9\u6bd4\u5ea6.Color",
+        "to": "\u8f6c\u63a5\u70b9.007.Input"
+      },
+      {
+        "from": "\u6df7\u5408.003.Result",
+        "to": "\u81ea\u53d1\u5149(\u53d1\u5c04).003.Color"
+      },
+      {
+        "from": "\u6df7\u5408.001.Result",
+        "to": "\u539f\u7406\u5316BSDF.Base Color"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.011.Output",
+        "to": "\u6df7\u5408.001.A"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.011.Output",
+        "to": "\u539f\u7406\u5316BSDF.Emission"
+      },
+      {
+        "from": "\u81ea\u53d1\u5149(\u53d1\u5c04).003.Emission",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.002.Shader"
+      },
+      {
+        "from": "\u6df7\u5408\u7740\u8272\u5668.002.Shader",
+        "to": "\u76f8\u52a0\u7740\u8272\u5668.Shader"
+      },
+      {
+        "from": "\u6df7\u5408.004.Result",
+        "to": "\u4eae\u5ea6 / \u5bf9\u6bd4\u5ea6.Color"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.010.Color",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.002.Fac"
+      },
+      {
+        "from": "\u5c42\u6743\u91cd.002.Facing",
+        "to": "\u8fd0\u7b97.007.Value"
+      },
+      {
+        "from": "\u8fd0\u7b97.007.Value",
+        "to": "\u989c\u8272\u6e10\u53d8.010.Fac"
+      },
+      {
+        "from": "\u80cc\u666f.Background",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.002.Shader"
+      },
+      {
+        "from": "\u6df7\u5408\u7740\u8272\u5668.001.Shader",
+        "to": "\u6750\u8d28\u8f93\u51fa.Surface"
+      },
+      {
+        "from": "\u4eae\u5ea6 / \u5bf9\u6bd4\u5ea6.Color",
+        "to": "\u6df7\u5408.003.A"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.008.Color",
+        "to": "\u8fd0\u7b97.006.Value"
+      }
+    ]
+  },
+  "M_Smooth_Cloth": {
+    "nodes": {
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.004": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.5,
+          "Saturation": 0.8,
+          "Value": 2.0,
+          "Fac": 1.0
+        }
+      },
+      "\u6df7\u5408.004": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "B": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "blend_type": "MIX"
+      },
+      "\u6df7\u5408.003": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "B": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "blend_type": "MIX"
+      },
+      "\u5012\u89d2.001": {
+        "type": "BEVEL",
+        "params": {
+          "Radius": 0.05,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u5206\u79bb XYZ.001": {
+        "type": "SEPXYZ"
+      },
+      "\u6750\u8d28\u8f93\u51fa": {
+        "type": "OUTPUT_MATERIAL",
+        "params": {
+          "Displacement": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Thickness": 0.0
+        }
+      },
+      "\u8f6c\u63a5\u70b9": {
+        "type": "REROUTE"
+      },
+      "\u8f6c\u63a5\u70b9.001": {
+        "type": "REROUTE"
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.5,
+          "Saturation": 1.0,
+          "Value": 0.8,
+          "Fac": 1.0
+        }
+      },
+      "\u6620\u5c04": {
+        "type": "MAPPING",
+        "params": {
+          "Location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "\u7eb9\u7406\u5750\u6807": {
+        "type": "TEX_COORD"
+      },
+      "\u6f2b\u5c04 BSDF.002": {
+        "type": "BSDF_DIFFUSE",
+        "params": {
+          "Color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "Roughness": 0.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Weight": 0.0
+        }
+      },
+      "Shader --> RGB": {
+        "type": "SHADERTORGB"
+      },
+      "\u989c\u8272\u6e10\u53d8.008": {
+        "type": "VALTORGB",
+        "interpolation": "CONSTANT",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.2966,
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u51f9\u51f8": {
+        "type": "BUMP",
+        "params": {
+          "Strength": 1.0,
+          "Distance": 1.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u6620\u5c04.001": {
+        "type": "MAPPING",
+        "params": {
+          "Location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "\u7eb9\u7406\u5750\u6807.001": {
+        "type": "TEX_COORD"
+      },
+      "\u566a\u6ce2\u7eb9\u7406": {
+        "type": "TEX_NOISE",
+        "params": {
+          "W": 0.0,
+          "Scale": 17.7,
+          "Detail": 2.0,
+          "Roughness": 0.5,
+          "Distortion": 0.0
+        }
+      },
+      "\u989c\u8272\u6e10\u53d8": {
+        "type": "VALTORGB",
+        "interpolation": "LINEAR",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              0.6351,
+              0.6351,
+              0.6351,
+              1.0
+            ]
+          },
+          {
+            "pos": 1.0,
+            "color": [
+              0.5139,
+              0.5139,
+              0.5139,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u8fd0\u7b97.004": {
+        "type": "MATH",
+        "params": {
+          "Value": 0.5
+        },
+        "operation": "MULTIPLY"
+      },
+      "\u56fe\u50cf\u7eb9\u7406.001": {
+        "type": "TEX_IMAGE"
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.002": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.5,
+          "Saturation": 1.0,
+          "Value": 0.2,
+          "Fac": 1.0
+        }
+      },
+      "\u539f\u7406\u5316BSDF": {
+        "type": "BSDF_PRINCIPLED",
+        "params": {
+          "Subsurface": 0.0,
+          "Subsurface Radius": [
+            1.0,
+            0.2,
+            0.1
+          ],
+          "Subsurface Color": [
+            0.8,
+            0.8,
+            0.8,
+            1.0
+          ],
+          "Subsurface IOR": 1.3566,
+          "Subsurface Anisotropy": 0.0,
+          "Metallic": 0.0,
+          "Specular": 0.8,
+          "Specular Tint": 0.0,
+          "Roughness": 0.5,
+          "Anisotropic": 0.0,
+          "Anisotropic Rotation": 0.0,
+          "Sheen": 0.0,
+          "Sheen Tint": 0.5,
+          "Clearcoat": 0.0,
+          "Clearcoat Roughness": 0.03,
+          "IOR": 1.45,
+          "Transmission": 0.0,
+          "Transmission Roughness": 0.0,
+          "Emission Strength": 0.0,
+          "Alpha": 1.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Clearcoat Normal": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Tangent": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Weight": 0.0
+        }
+      },
+      "\u73af\u5883\u5149\u906e\u853d (AO).001": {
+        "type": "AMBIENT_OCCLUSION",
+        "params": {
+          "Color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "Distance": 1.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "\u989c\u8272\u6e10\u53d8.001": {
+        "type": "VALTORGB",
+        "interpolation": "LINEAR",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.8808,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u6df7\u5408.001": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "B": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "blend_type": "MIX"
+      },
+      "\u6df7\u5408.002": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "B": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "blend_type": "OVERLAY"
+      },
+      "\u81ea\u53d1\u5149(\u53d1\u5c04).005": {
+        "type": "EMISSION",
+        "params": {
+          "Strength": 18.2,
+          "Weight": 0.0
+        }
+      },
+      "\u6df7\u5408\u7740\u8272\u5668.001": {
+        "type": "MIX_SHADER",
+        "params": {
+          "Fac": 0.9
+        }
+      }
+    },
+    "links": [
+      {
+        "from": "\u73af\u5883\u5149\u906e\u853d (AO).001.Color",
+        "to": "\u989c\u8272\u6e10\u53d8.001.Fac"
+      },
+      {
+        "from": "\u8fd0\u7b97.004.Value",
+        "to": "\u6df7\u5408.004.Factor"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.001.Output",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.002.Color"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.002.Color",
+        "to": "\u6df7\u5408.004.A"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.001.Output",
+        "to": "\u6df7\u5408.004.B"
+      },
+      {
+        "from": "\u5012\u89d2.001.Normal",
+        "to": "\u5206\u79bb XYZ.001.Vector"
+      },
+      {
+        "from": "\u5206\u79bb XYZ.001.Z",
+        "to": "\u6df7\u5408.003.Factor"
+      },
+      {
+        "from": "\u6df7\u5408.004.Result",
+        "to": "\u6df7\u5408.003.A"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.001.Color",
+        "to": "\u6df7\u5408.001.Factor"
+      },
+      {
+        "from": "\u6df7\u5408.001.Result",
+        "to": "\u6df7\u5408.002.Factor"
+      },
+      {
+        "from": "\u6df7\u5408.003.Result",
+        "to": "\u6df7\u5408.002.A"
+      },
+      {
+        "from": "\u6df7\u5408.003.Result",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.004.Color"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.004.Color",
+        "to": "\u6df7\u5408.002.B"
+      },
+      {
+        "from": "\u6620\u5c04.Vector",
+        "to": "\u56fe\u50cf\u7eb9\u7406.001.Vector"
+      },
+      {
+        "from": "\u7eb9\u7406\u5750\u6807.UV",
+        "to": "\u6620\u5c04.Vector"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.001.Output",
+        "to": "\u8f6c\u63a5\u70b9.Input"
+      },
+      {
+        "from": "\u56fe\u50cf\u7eb9\u7406.001.Color",
+        "to": "\u8f6c\u63a5\u70b9.001.Input"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.Color",
+        "to": "\u539f\u7406\u5316BSDF.Base Color"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.Output",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.Color"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.002.Color",
+        "to": "\u6df7\u5408.003.B"
+      },
+      {
+        "from": "\u81ea\u53d1\u5149(\u53d1\u5c04).005.Emission",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.001.Shader"
+      },
+      {
+        "from": "\u539f\u7406\u5316BSDF.BSDF",
+        "to": "\u6df7\u5408\u7740\u8272\u5668.001.Shader"
+      },
+      {
+        "from": "\u6620\u5c04.001.Vector",
+        "to": "\u566a\u6ce2\u7eb9\u7406.Vector"
+      },
+      {
+        "from": "\u7eb9\u7406\u5750\u6807.001.UV",
+        "to": "\u6620\u5c04.001.Vector"
+      },
+      {
+        "from": "\u566a\u6ce2\u7eb9\u7406.Color",
+        "to": "\u989c\u8272\u6e10\u53d8.Fac"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.Color",
+        "to": "\u539f\u7406\u5316BSDF.Emission"
+      },
+      {
+        "from": "\u6df7\u5408.002.Result",
+        "to": "\u81ea\u53d1\u5149(\u53d1\u5c04).005.Color"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.Color",
+        "to": "\u51f9\u51f8.Height"
+      },
+      {
+        "from": "\u6f2b\u5c04 BSDF.002.BSDF",
+        "to": "Shader --> RGB.Shader"
+      },
+      {
+        "from": "Shader --> RGB.Color",
+        "to": "\u989c\u8272\u6e10\u53d8.008.Fac"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.008.Color",
+        "to": "\u8fd0\u7b97.004.Value"
+      },
+      {
+        "from": "\u6df7\u5408\u7740\u8272\u5668.001.Shader",
+        "to": "\u6750\u8d28\u8f93\u51fa.Surface"
+      }
+    ]
+  },
+  "M_Stockings": {
+    "nodes": {
+      "ColorRamp.002": {
+        "type": "VALTORGB",
+        "interpolation": "EASE",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.9565,
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "Gradient Texture": {
+        "type": "TEX_GRADIENT"
+      },
+      "ColorRamp": {
+        "type": "VALTORGB",
+        "interpolation": "EASE",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.5435,
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "Mix.001": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "B": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "blend_type": "MIX"
+      },
+      "Layer Weight": {
+        "type": "LAYER_WEIGHT",
+        "params": {
+          "Blend": 0.4,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "ColorRamp.001": {
+        "type": "VALTORGB",
+        "interpolation": "LINEAR",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.5,
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 1.0,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "Mix": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "B": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "blend_type": "LIGHTEN"
+      },
+      "Mapping": {
+        "type": "MAPPING",
+        "params": {
+          "Location": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "Rotation": [
+            0.0,
+            1.5708,
+            1.5708
+          ],
+          "Scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "Texture Coordinate": {
+        "type": "TEX_COORD"
+      },
+      "\u81ea\u53d1\u5149(\u53d1\u5c04)": {
+        "type": "EMISSION",
+        "params": {
+          "Strength": 1.0,
+          "Weight": 0.0
+        }
+      },
+      "Mix Shader": {
+        "type": "MIX_SHADER"
+      },
+      "\u6750\u8d28\u8f93\u51fa": {
+        "type": "OUTPUT_MATERIAL",
+        "params": {
+          "Displacement": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Thickness": 0.0
+        }
+      },
+      "\u7eb9\u7406\u5750\u6807.001": {
+        "type": "TEX_COORD"
+      },
+      "\u6620\u5c04": {
+        "type": "MAPPING",
+        "params": {
+          "Location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "\u56fe\u50cf\u7eb9\u7406.001": {
+        "type": "TEX_IMAGE"
+      },
+      "Principled BSDF": {
+        "type": "BSDF_PRINCIPLED",
+        "params": {
+          "Subsurface": 0.0,
+          "Subsurface Radius": [
+            1.0,
+            0.2,
+            0.1
+          ],
+          "Subsurface Color": [
+            0.8,
+            0.8,
+            0.8,
+            1.0
+          ],
+          "Subsurface IOR": 1.4,
+          "Subsurface Anisotropy": 0.0,
+          "Metallic": 0.1,
+          "Specular": 1.0,
+          "Specular Tint": 0.0,
+          "Roughness": 0.5,
+          "Anisotropic": 0.0,
+          "Anisotropic Rotation": 0.0,
+          "Sheen": 0.7018,
+          "Sheen Tint": 0.5,
+          "Clearcoat": 0.0,
+          "Clearcoat Roughness": 0.03,
+          "IOR": 1.45,
+          "Transmission": 0.0,
+          "Transmission Roughness": 0.0,
+          "Emission": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "Emission Strength": 0.0,
+          "Alpha": 0.95,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Clearcoat Normal": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Tangent": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Weight": 0.0
+        }
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.5,
+          "Saturation": 1.0,
+          "Value": 5.0,
+          "Fac": 1.0
+        }
+      }
+    },
+    "links": [
+      {
+        "from": "\u81ea\u53d1\u5149(\u53d1\u5c04).Emission",
+        "to": "Mix Shader.Shader"
+      },
+      {
+        "from": "ColorRamp.Color",
+        "to": "Mix.001.B"
+      },
+      {
+        "from": "Principled BSDF.BSDF",
+        "to": "Mix Shader.Shader"
+      },
+      {
+        "from": "Mix.001.Result",
+        "to": "Mix.A"
+      },
+      {
+        "from": "Layer Weight.Facing",
+        "to": "ColorRamp.Fac"
+      },
+      {
+        "from": "ColorRamp.002.Color",
+        "to": "Mix.B"
+      },
+      {
+        "from": "Mix.Result",
+        "to": "Mix Shader.Fac"
+      },
+      {
+        "from": "Mapping.Vector",
+        "to": "Gradient Texture.Vector"
+      },
+      {
+        "from": "Gradient Texture.Fac",
+        "to": "ColorRamp.001.Fac"
+      },
+      {
+        "from": "ColorRamp.001.Color",
+        "to": "ColorRamp.002.Fac"
+      },
+      {
+        "from": "Texture Coordinate.Generated",
+        "to": "Mapping.Vector"
+      },
+      {
+        "from": "Mix Shader.Shader",
+        "to": "\u6750\u8d28\u8f93\u51fa.Surface"
+      },
+      {
+        "from": "\u6620\u5c04.Vector",
+        "to": "\u56fe\u50cf\u7eb9\u7406.001.Vector"
+      },
+      {
+        "from": "\u7eb9\u7406\u5750\u6807.001.UV",
+        "to": "\u6620\u5c04.Vector"
+      },
+      {
+        "from": "\u56fe\u50cf\u7eb9\u7406.001.Color",
+        "to": "Principled BSDF.Base Color"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.Color",
+        "to": "\u81ea\u53d1\u5149(\u53d1\u5c04).Color"
+      },
+      {
+        "from": "\u56fe\u50cf\u7eb9\u7406.001.Color",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.Color"
+      }
+    ]
+  },
+  "M_Stockings_Textured": {
+    "nodes": {
+      "\u6df7\u5408.005": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "B": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "blend_type": "MIX"
+      },
+      "\u8f6c\u63a5\u70b9.001": {
+        "type": "REROUTE"
+      },
+      "\u8f6c\u63a5\u70b9.004": {
+        "type": "REROUTE"
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.008": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.5,
+          "Saturation": 1.0,
+          "Value": 0.4,
+          "Fac": 1.0
+        }
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.009": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.5,
+          "Saturation": 1.0,
+          "Value": 1.3,
+          "Fac": 1.0
+        }
+      },
+      "\u6f2b\u5c04 BSDF.002": {
+        "type": "BSDF_DIFFUSE",
+        "params": {
+          "Color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "Roughness": 0.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Weight": 0.0
+        }
+      },
+      "Shader --> RGB": {
+        "type": "SHADERTORGB"
+      },
+      "\u989c\u8272\u6e10\u53d8.008": {
+        "type": "VALTORGB",
+        "interpolation": "CONSTANT",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.3614,
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u8f6c\u63a5\u70b9.002": {
+        "type": "REROUTE"
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.5,
+          "Saturation": 1.0,
+          "Value": 1.0,
+          "Fac": 1.0
+        }
+      },
+      "\u539f\u7406\u5316BSDF": {
+        "type": "BSDF_PRINCIPLED",
+        "params": {
+          "Subsurface": 0.0,
+          "Subsurface Radius": [
+            1.0,
+            0.2,
+            0.1
+          ],
+          "Subsurface Color": [
+            0.8,
+            0.8,
+            0.8,
+            1.0
+          ],
+          "Subsurface IOR": 1.3566,
+          "Subsurface Anisotropy": 0.0,
+          "Metallic": 0.044,
+          "Specular": 0.5544,
+          "Specular Tint": 0.0,
+          "Roughness": 0.4663,
+          "Anisotropic": 0.0,
+          "Anisotropic Rotation": 0.0,
+          "Sheen": 0.0,
+          "Sheen Tint": 0.5,
+          "Clearcoat": 0.0,
+          "Clearcoat Roughness": 0.03,
+          "IOR": 1.45,
+          "Transmission": 0.0,
+          "Transmission Roughness": 0.0,
+          "Emission": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "Emission Strength": 0.95,
+          "Alpha": 1.0,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Clearcoat Normal": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Tangent": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Weight": 0.0
+        }
+      },
+      "ColorRamp.002": {
+        "type": "VALTORGB",
+        "interpolation": "EASE",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.9565,
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "Gradient Texture": {
+        "type": "TEX_GRADIENT"
+      },
+      "\u76f8\u52a0\u7740\u8272\u5668.009": {
+        "type": "ADD_SHADER"
+      },
+      "Mix Shader": {
+        "type": "MIX_SHADER"
+      },
+      "ColorRamp": {
+        "type": "VALTORGB",
+        "interpolation": "EASE",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.5435,
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "Mix.001": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "B": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "blend_type": "MIX"
+      },
+      "Layer Weight": {
+        "type": "LAYER_WEIGHT",
+        "params": {
+          "Blend": 0.4,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "ColorRamp.001": {
+        "type": "VALTORGB",
+        "interpolation": "LINEAR",
+        "stops": [
+          {
+            "pos": 0.0,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 0.5,
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          {
+            "pos": 1.0,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "\u81ea\u53d1\u5149(\u53d1\u5c04)": {
+        "type": "EMISSION",
+        "params": {
+          "Strength": 1.0,
+          "Weight": 0.0
+        }
+      },
+      "Mix": {
+        "type": "MIX",
+        "params": {
+          "Factor": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "A": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "B": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "blend_type": "LIGHTEN"
+      },
+      "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.006": {
+        "type": "HUE_SAT",
+        "params": {
+          "Hue": 0.5,
+          "Saturation": 1.0,
+          "Value": 0.2,
+          "Fac": 1.0
+        }
+      },
+      "Mix Shader.001": {
+        "type": "MIX_SHADER",
+        "params": {
+          "Fac": 0.99
+        }
+      },
+      "\u6750\u8d28\u8f93\u51fa": {
+        "type": "OUTPUT_MATERIAL",
+        "params": {
+          "Displacement": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Thickness": 0.0
+        }
+      },
+      "Mapping": {
+        "type": "MAPPING",
+        "params": {
+          "Location": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "Rotation": [
+            0.0,
+            1.5708,
+            1.5708
+          ],
+          "Scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "\u7eb9\u7406\u5750\u6807.001": {
+        "type": "TEX_COORD"
+      },
+      "\u56fe\u50cf\u7eb9\u7406.001": {
+        "type": "TEX_IMAGE"
+      },
+      "\u6620\u5c04": {
+        "type": "MAPPING",
+        "params": {
+          "Location": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "Texture Coordinate": {
+        "type": "TEX_COORD"
+      },
+      "\u8f6c\u63a5\u70b9.003": {
+        "type": "REROUTE"
+      },
+      "Principled BSDF": {
+        "type": "BSDF_PRINCIPLED",
+        "params": {
+          "Subsurface": 0.0,
+          "Subsurface Radius": [
+            1.0,
+            0.2,
+            0.1
+          ],
+          "Subsurface Color": [
+            0.8,
+            0.8,
+            0.8,
+            1.0
+          ],
+          "Subsurface IOR": 1.4,
+          "Subsurface Anisotropy": 0.0,
+          "Metallic": 0.1,
+          "Specular": 0.0,
+          "Specular Tint": 0.0,
+          "Roughness": 0.4,
+          "Anisotropic": 0.0,
+          "Anisotropic Rotation": 0.0,
+          "Sheen": 0.7018,
+          "Sheen Tint": 0.5,
+          "Clearcoat": 0.0,
+          "Clearcoat Roughness": 0.03,
+          "IOR": 1.45,
+          "Transmission": 0.0,
+          "Transmission Roughness": 0.0,
+          "Emission Strength": 0.3,
+          "Alpha": 0.95,
+          "Normal": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Clearcoat Normal": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Tangent": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Weight": 0.0
+        }
+      }
+    },
+    "links": [
+      {
+        "from": "\u56fe\u50cf\u7eb9\u7406.001.Color",
+        "to": "\u8f6c\u63a5\u70b9.001.Input"
+      },
+      {
+        "from": "\u539f\u7406\u5316BSDF.BSDF",
+        "to": "\u76f8\u52a0\u7740\u8272\u5668.009.Shader"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.Color",
+        "to": "\u539f\u7406\u5316BSDF.Base Color"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.002.Output",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.Color"
+      },
+      {
+        "from": "\u81ea\u53d1\u5149(\u53d1\u5c04).Emission",
+        "to": "Mix Shader.Shader"
+      },
+      {
+        "from": "ColorRamp.Color",
+        "to": "Mix.001.B"
+      },
+      {
+        "from": "Principled BSDF.BSDF",
+        "to": "Mix Shader.Shader"
+      },
+      {
+        "from": "Mix.001.Result",
+        "to": "Mix.A"
+      },
+      {
+        "from": "Layer Weight.Facing",
+        "to": "ColorRamp.Fac"
+      },
+      {
+        "from": "ColorRamp.002.Color",
+        "to": "Mix.B"
+      },
+      {
+        "from": "Mix.Result",
+        "to": "Mix Shader.Fac"
+      },
+      {
+        "from": "Mapping.Vector",
+        "to": "Gradient Texture.Vector"
+      },
+      {
+        "from": "Gradient Texture.Fac",
+        "to": "ColorRamp.001.Fac"
+      },
+      {
+        "from": "ColorRamp.001.Color",
+        "to": "ColorRamp.002.Fac"
+      },
+      {
+        "from": "\u76f8\u52a0\u7740\u8272\u5668.009.Shader",
+        "to": "Mix Shader.001.Shader"
+      },
+      {
+        "from": "Mix Shader.Shader",
+        "to": "Mix Shader.001.Shader"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.001.Output",
+        "to": "\u8f6c\u63a5\u70b9.002.Input"
+      },
+      {
+        "from": "Texture Coordinate.Generated",
+        "to": "Mapping.Vector"
+      },
+      {
+        "from": "\u6620\u5c04.Vector",
+        "to": "\u56fe\u50cf\u7eb9\u7406.001.Vector"
+      },
+      {
+        "from": "\u7eb9\u7406\u5750\u6807.001.UV",
+        "to": "\u6620\u5c04.Vector"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.003.Output",
+        "to": "Principled BSDF.Base Color"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.002.Output",
+        "to": "\u8f6c\u63a5\u70b9.003.Input"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.006.Color",
+        "to": "\u81ea\u53d1\u5149(\u53d1\u5c04).Color"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.002.Output",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.006.Color"
+      },
+      {
+        "from": "\u6f2b\u5c04 BSDF.002.BSDF",
+        "to": "Shader --> RGB.Shader"
+      },
+      {
+        "from": "Shader --> RGB.Color",
+        "to": "\u989c\u8272\u6e10\u53d8.008.Fac"
+      },
+      {
+        "from": "\u989c\u8272\u6e10\u53d8.008.Color",
+        "to": "\u6df7\u5408.005.Factor"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.004.Output",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.008.Color"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.001.Output",
+        "to": "\u8f6c\u63a5\u70b9.004.Input"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.004.Output",
+        "to": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.009.Color"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.008.Color",
+        "to": "\u6df7\u5408.005.A"
+      },
+      {
+        "from": "\u8272\u76f8/\u9971\u548c\u5ea6/\u660e\u5ea6.009.Color",
+        "to": "\u6df7\u5408.005.B"
+      },
+      {
+        "from": "Mix Shader.001.Shader",
+        "to": "\u6750\u8d28\u8f93\u51fa.Surface"
+      },
+      {
+        "from": "\u6df7\u5408.005.Result",
+        "to": "\u76f8\u52a0\u7740\u8272\u5668.009.Shader"
+      },
+      {
+        "from": "\u8f6c\u63a5\u70b9.003.Output",
+        "to": "Principled BSDF.Emission"
+      }
+    ]
+  }
+}
