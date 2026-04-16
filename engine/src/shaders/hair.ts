@@ -161,8 +161,9 @@ fn fresnel_schlick_hair(cosTheta: f32, f0: f32) -> f32 {
   let toon_color = mix_blend(toon, adjusted_tint, lit_tint);
   let bc = bright_contrast(toon_color, 0.1, 0.2);
 
-  // ═══ 3. BEVEL / EDGE DARKENING — Bevel.001→SeparateXYZ→Z approximated as n.z ═══
-  let bevel_z = clamp(n.z, 0.0, 1.0);
+  // ═══ 3. BEVEL / EDGE DARKENING — Bevel.001→SeparateXYZ→Z ═══
+  // Blender Z-up, engine Y-up: Blender "Z" (up) maps to engine "Y".
+  let bevel_z = clamp(n.y, 0.0, 1.0);
   // Mix.003(Factor=bevel_z, A=bc, B=adjusted_tint)
   let edge_mix = mix_blend(bevel_z, bc, adjusted_tint);
 

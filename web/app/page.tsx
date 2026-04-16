@@ -210,10 +210,10 @@ export default function Home() {
       modelRef.current = m1
 
       engine.setMaterialPresets("reze", {
-        face: ["脸"],
-        body: ["皮肤"],
-        hair: ["头发", "hair_f"],
-        cloth_smooth: ["衣服", "裙子", "裙带", "裙布", "外套", "外套饰", "裤子", "裤子0", "腿环", "发饰"],
+        // face: ["脸"],
+        // body: ["皮肤"],
+        // hair: ["头发", "hair_f"],
+        // cloth_smooth: ["衣服", "裙子", "裙带", "裙布", "外套", "外套饰", "裤子", "裤子0", "腿环", "发饰"],
       })
 
       engine.addGround()

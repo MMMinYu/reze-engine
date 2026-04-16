@@ -159,7 +159,8 @@ fn fresnel_schlick_cloth(cosTheta: f32, f0: f32) -> f32 {
   let toon_mix = mix_blend(toon_fac, dark_tex, tex_color); // Mix.004: A=dark, B=original
 
   // ═══ 3. BEVEL / EDGE MIX ═══
-  let bevel_z = clamp(n.z, 0.0, 1.0); // approximate bevel normal Z with geometric normal
+  // Blender Z-up, engine Y-up: Blender "Z" (up) maps to engine "Y".
+  let bevel_z = clamp(n.y, 0.0, 1.0);
   let edge_mixed = mix_blend(bevel_z, toon_mix, dark_tex); // Mix.003: A=toon_mix, B=dark_tex
 
   // ═══ 4. BRIGHT VERSION ═══
