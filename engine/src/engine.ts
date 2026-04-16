@@ -65,7 +65,7 @@ export type BloomOptions = {
   intensity: number
   clamp: number
   sceneLinearBoost: number
-  /** Widen blur σ vs internal radius→σ heuristic (EEVEE “large bloom” uses multi-downsample; use ~1.2–1.8 to approximate wider 光圈). */
+  /** Deprecated — pyramid implementation drives halo size from `radius` directly; this value is ignored. */
   blurSpread: number
 }
 
@@ -213,27 +213,37 @@ export class Engine {
   private compositeBindGroupLayout!: GPUBindGroupLayout
   private compositeBindGroup!: GPUBindGroup
   private compositeUniformBuffer!: GPUBuffer
-  private readonly compositeUniformData = new Float32Array(4)
+  // [exposure, gamma, _, _,  bloomTint.x, bloomTint.y, bloomTint.z, bloomIntensity]
+  private readonly compositeUniformData = new Float32Array(8)
 
-  // EEVEE-style bloom: half-res 2×2 downsample → luminance soft-threshold → separable Gaussian → add before Filmic.
-  // Simplified vs Blender (no mip pyramid); sceneLinearBoost affects threshold input only, not bloom radiance.
+  // EEVEE-style bloom pyramid (mirrors Blender 3.6 effect_bloom_frag.glsl):
+  //   blit (HDR → half-res, 4-tap Karis + soft threshold/knee)
+  //   N-1 downsamples (13-tap Jimenez/COD box filter, 5 group averages)
+  //   N-1 upsamples (9-tap tent, additively combined with corresponding downsample mip)
+  //   composite adds bloomUp mip 0 × (color × intensity) to HDR before Filmic.
+  // Matches EEVEE energy: tint/intensity applied at composite, not prefilter.
   private bloomSampler!: GPUSampler
-  private bloomUniformBuffer!: GPUBuffer
-  private bloomBlurUniformBuffer!: GPUBuffer
-  private readonly bloomUniformData = new Float32Array(12)
-  private readonly bloomBlurUniformData = new Float32Array(4)
-  private bloomExtractPipeline!: GPURenderPipeline
-  private bloomBlurHPipeline!: GPURenderPipeline
-  private bloomBlurVPipeline!: GPURenderPipeline
-  private bloomExtractBindGroupLayout!: GPUBindGroupLayout
-  private bloomBlurBindGroupLayout!: GPUBindGroupLayout
-  private bloomExtractBindGroup!: GPUBindGroup
-  private bloomBlurHBindGroup!: GPUBindGroup
-  private bloomBlurVBindGroup!: GPUBindGroup
-  private bloomTex0!: GPUTexture
-  private bloomTex1!: GPUTexture
+  private bloomBlitUniformBuffer!: GPUBuffer
+  private bloomUpsampleUniformBuffer!: GPUBuffer
+  private readonly bloomBlitUniformData = new Float32Array(4)
+  private readonly bloomUpsampleUniformData = new Float32Array(4)
+  private bloomBlitPipeline!: GPURenderPipeline
+  private bloomDownsamplePipeline!: GPURenderPipeline
+  private bloomUpsamplePipeline!: GPURenderPipeline
+  private bloomBlitBindGroupLayout!: GPUBindGroupLayout
+  private bloomDownsampleBindGroupLayout!: GPUBindGroupLayout
+  private bloomUpsampleBindGroupLayout!: GPUBindGroupLayout
+  private bloomDownTexture!: GPUTexture
+  private bloomUpTexture!: GPUTexture
+  private bloomMipCount = 0
+  private bloomDownMipViews: GPUTextureView[] = []
+  private bloomUpMipViews: GPUTextureView[] = []
+  private bloomBlitBindGroup!: GPUBindGroup
+  private bloomDownsampleBindGroups: GPUBindGroup[] = []
+  private bloomUpsampleBindGroups: GPUBindGroup[] = []
   /** Single-attachment pass; colorAttachments[0].view set per bloom step. */
   private bloomPassDescriptor!: GPURenderPassDescriptor
+  private static readonly BLOOM_MAX_LEVELS = 7
 
   // Ground properties (shadow only)
   private groundVertexBuffer?: GPUBuffer
@@ -375,11 +385,17 @@ export class Engine {
 
   private writeCompositeViewUniforms(): void {
     const v = this.viewTransform
+    const b = this.bloomSettings
+    const effIntensity = b.enabled ? b.intensity : 0.0
     const u = this.compositeUniformData
     u[0] = v.exposure
     u[1] = Math.max(v.gamma, 1e-4)
     u[2] = 0.0
     u[3] = 0.0
+    u[4] = b.color.x
+    u[5] = b.color.y
+    u[6] = b.color.z
+    u[7] = effIntensity
     this.device.queue.writeBuffer(this.compositeUniformBuffer, 0, u)
   }
 
@@ -399,29 +415,28 @@ export class Engine {
     if (patch.clamp !== undefined) b.clamp = patch.clamp
     if (patch.sceneLinearBoost !== undefined) b.sceneLinearBoost = patch.sceneLinearBoost
     if (patch.blurSpread !== undefined) b.blurSpread = patch.blurSpread
-    if (this.device && this.bloomUniformBuffer) {
-      this.writeBloomUniforms(this.canvas.width, this.canvas.height)
+    if (this.device && this.bloomBlitUniformBuffer) {
+      this.writeBloomUniforms()
+      this.writeCompositeViewUniforms()
     }
   }
 
-  private writeBloomUniforms(fullW: number, fullH: number): void {
+  // EEVEE prefilter uniforms (blit stage) + upsample sample scale. Intensity/tint live in composite.
+  private writeBloomUniforms(): void {
     const b = this.bloomSettings
-    const effIntensity = b.enabled ? b.intensity : 0.0
-    const effBoost = b.enabled ? Math.max(b.sceneLinearBoost, 1.0) : 1.0
-    const bu = this.bloomUniformData
-    bu[0] = fullW
-    bu[1] = fullH
-    bu[2] = b.threshold
-    bu[3] = b.knee
-    bu[4] = b.color.x
-    bu[5] = b.color.y
-    bu[6] = b.color.z
-    bu[7] = effIntensity
-    bu[8] = b.radius
-    bu[9] = b.clamp
-    bu[10] = effBoost
-    bu[11] = 0.0
-    this.device.queue.writeBuffer(this.bloomUniformBuffer, 0, bu)
+    const bu = this.bloomBlitUniformData
+    bu[0] = b.threshold
+    bu[1] = b.knee
+    bu[2] = b.enabled ? Math.max(b.sceneLinearBoost, 1.0) : 1.0
+    bu[3] = b.clamp
+    this.device.queue.writeBuffer(this.bloomBlitUniformBuffer, 0, bu)
+    const us = this.bloomUpsampleUniformData
+    // Blender: bloom.radius directly controls the tent-filter sample scale in texel units.
+    us[0] = Math.max(0.5, b.radius)
+    us[1] = 0
+    us[2] = 0
+    us[3] = 0
+    this.device.queue.writeBuffer(this.bloomUpsampleUniformBuffer, 0, us)
   }
 
   // Step 1: Get WebGPU device and context
@@ -994,7 +1009,10 @@ export class Engine {
       },
     })
 
-    // ─── Bloom (EEVEE-style): half-res extract + 9-tap separable blur, then composite ───
+    // ─── Bloom (EEVEE 3.6 pyramid): blit(Karis prefilter) → 13-tap downsamples → 9-tap tent upsamples ───
+    // Mirrors source/blender/draw/engines/eevee/shaders/effect_bloom_frag.glsl.
+    // Firefly suppression lives in the blit (Karis luminance-weighted 4-tap average). A single-pass
+    // Gaussian cannot reproduce this — hot pixels dominate and produce the sparkle halo.
     this.bloomSampler = this.device.createSampler({
       label: "bloom sampler",
       magFilter: "linear",
@@ -1002,30 +1020,38 @@ export class Engine {
       addressModeU: "clamp-to-edge",
       addressModeV: "clamp-to-edge",
     })
-    this.bloomUniformBuffer = this.device.createBuffer({
-      label: "bloom uniforms",
-      size: 48,
+    this.bloomBlitUniformBuffer = this.device.createBuffer({
+      label: "bloom blit uniforms",
+      size: 16,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     })
-    this.bloomBlurUniformBuffer = this.device.createBuffer({
-      label: "bloom blur separable uniforms",
+    this.bloomUpsampleUniformBuffer = this.device.createBuffer({
+      label: "bloom upsample uniforms",
       size: 16,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     })
 
-    this.bloomExtractBindGroupLayout = this.device.createBindGroupLayout({
-      label: "bloom extract layout",
+    this.bloomBlitBindGroupLayout = this.device.createBindGroupLayout({
+      label: "bloom blit layout",
       entries: [
         { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "unfilterable-float" } },
         { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
       ],
     })
-    this.bloomBlurBindGroupLayout = this.device.createBindGroupLayout({
-      label: "bloom blur layout",
+    this.bloomDownsampleBindGroupLayout = this.device.createBindGroupLayout({
+      label: "bloom downsample layout",
       entries: [
         { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: {} },
         { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
-        { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+      ],
+    })
+    this.bloomUpsampleBindGroupLayout = this.device.createBindGroupLayout({
+      label: "bloom upsample layout",
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: {} }, // coarser-mip accumulator
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: {} }, // matching downsample mip (base add)
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
       ],
     })
 
@@ -1037,127 +1063,153 @@ export class Engine {
       }
     `
 
-    const bloomExtractShader = this.device.createShaderModule({
-      label: "bloom extract",
+    // Blit: full-res HDR → half-res. Karis 4-tap firefly average + EEVEE quadratic knee threshold + clamp.
+    const bloomBlitShader = this.device.createShaderModule({
+      label: "bloom blit (Karis prefilter)",
       code: `${bloomFullscreenVs}
         @group(0) @binding(0) var hdrTex: texture_2d<f32>;
-        @group(0) @binding(1) var<uniform> bloomU: array<vec4<f32>, 3>;
+        @group(0) @binding(1) var<uniform> prefilter: vec4<f32>; // threshold, knee, sceneLinearBoost, clamp
 
         fn luminance(c: vec3f) -> f32 {
           return dot(max(c, vec3f(0.0)), vec3f(0.2126, 0.7152, 0.0722));
         }
+        fn fetch(c: vec2<i32>) -> vec3f {
+          let d = vec2<i32>(textureDimensions(hdrTex));
+          let cc = clamp(c, vec2<i32>(0), d - vec2<i32>(1));
+          let s = textureLoad(hdrTex, cc, 0);
+          // Scene pass uses src-alpha blend with clear alpha 0 → premultiplied. Unpremultiply.
+          return s.rgb / max(s.a, 1e-6);
+        }
 
         @fragment fn fs(@builtin(position) p: vec4f) -> @location(0) vec4f {
-          let fullW = i32(bloomU[0].x);
-          let fullH = i32(bloomU[0].y);
-          let threshold = bloomU[0].z;
-          let knee = bloomU[0].w;
-          let tint = bloomU[1].xyz;
-          let intensity = bloomU[1].w;
-          let clampV = bloomU[2].y;
-          let px = vec2<i32>(p.xy - vec2f(0.5));
-          var acc = vec3f(0.0);
-          var w = 0.0;
-          for (var dy = 0; dy < 2; dy++) {
-            for (var dx = 0; dx < 2; dx++) {
-              let hc = vec2<i32>(px.x * 2 + dx, px.y * 2 + dy);
-              if (hc.x < fullW && hc.y < fullH && hc.x >= 0 && hc.y >= 0) {
-                let h = textureLoad(hdrTex, hc, 0);
-                let a = max(h.a, 1e-6);
-                acc += h.rgb / a;
-                w += 1.0;
-              }
-            }
-          }
-          let straight = acc / max(w, 1.0);
-          let sceneBoost = max(bloomU[2].z, 1.0);
-          // Boost only luminance for gate (viewport exposure); blo uses straight so intensity≈Blender (no extra boost³ wash)
-          let lum = luminance(straight * sceneBoost);
-          let soft = clamp(lum - threshold + knee, 0.0, 2.0 * knee);
-          let q = soft * soft / (4.0 * max(knee, 1e-4) + 1e-6);
-          let contrib = select(max(lum - threshold, 0.0), q, knee > 1e-4 && lum < threshold + knee);
-          let mask = contrib / max(lum, 1e-4);
-          var blo = straight * mask * intensity * tint;
-          if (clampV > 0.0) { blo = min(blo, vec3f(clampV)); }
-          return vec4f(max(blo, vec3f(0.0)), 1.0);
+          let dst = vec2<i32>(p.xy - vec2f(0.5));
+          let base = dst * 2;
+          let a = fetch(base + vec2<i32>(0, 0));
+          let b = fetch(base + vec2<i32>(1, 0));
+          let c = fetch(base + vec2<i32>(0, 1));
+          let d = fetch(base + vec2<i32>(1, 1));
+          let boost = max(prefilter.z, 1.0);
+          // Karis partial average: weight each tap by 1/(1+luma) — suppresses fireflies before threshold.
+          let wa = 1.0 / (1.0 + luminance(a * boost));
+          let wb = 1.0 / (1.0 + luminance(b * boost));
+          let wc = 1.0 / (1.0 + luminance(c * boost));
+          let wd = 1.0 / (1.0 + luminance(d * boost));
+          let avg = (a * wa + b * wb + c * wc + d * wd) / max(wa + wb + wc + wd, 1e-6);
+          // EEVEE quadratic threshold (brightness = max-channel, then soft-knee curve).
+          let bright = max(avg.r, max(avg.g, avg.b)) * boost;
+          let soft = clamp(bright - prefilter.x + prefilter.y, 0.0, 2.0 * prefilter.y);
+          let q = (soft * soft) / (4.0 * max(prefilter.y, 1e-4) + 1e-6);
+          let contrib = max(q, bright - prefilter.x) / max(bright, 1e-4);
+          var outC = avg * contrib;
+          let clampV = prefilter.w;
+          if (clampV > 0.0) { outC = min(outC, vec3f(clampV)); }
+          return vec4f(max(outC, vec3f(0.0)), 1.0);
         }
       `,
     })
 
-    const bloomBlurShader = this.device.createShaderModule({
-      label: "bloom blur separable",
+    // Downsample: Jimenez/COD 13-tap dual-box — 5 weighted 2×2 averages, rejects nyquist ringing.
+    const bloomDownsampleShader = this.device.createShaderModule({
+      label: "bloom downsample 13-tap",
       code: `${bloomFullscreenVs}
         @group(0) @binding(0) var srcTex: texture_2d<f32>;
         @group(0) @binding(1) var srcSamp: sampler;
-        @group(0) @binding(2) var<uniform> blurU: vec4<f32>;
 
-        fn gauss_w(i: i32, sigma: f32) -> f32 {
-          let x = f32(i);
-          return exp(-(x * x) / (2.0 * sigma * sigma));
+        fn samp(uv: vec2f, off: vec2f) -> vec3f {
+          return textureSampleLevel(srcTex, srcSamp, uv + off, 0.0).rgb;
         }
 
         @fragment fn fs(@builtin(position) p: vec4f) -> @location(0) vec4f {
-          let dims = vec2f(textureDimensions(srcTex));
-          let uv = (p.xy - vec2f(0.5)) / max(dims, vec2f(1.0));
-          let sigma = max(blurU.x, 0.35);
-          var col = vec3f(0.0);
-          var wsum = 0.0;
-          for (var i = -4; i <= 4; i++) {
-            let o = f32(i) * blurU.yz;
-            let w = gauss_w(i, sigma);
-            col += textureSampleLevel(srcTex, srcSamp, uv + o, 0.0).rgb * w;
-            wsum += w;
-          }
-          return vec4f(col / max(wsum, 1e-6), 1.0);
+          let srcDims = vec2f(textureDimensions(srcTex));
+          let t = 1.0 / srcDims;
+          // fragCoord.xy reports pixel centers (e.g. 0.5,0.5 for first pixel) — divide by dst dims directly.
+          let dstDims = srcDims * 0.5;
+          let uv = p.xy / max(dstDims, vec2f(1.0));
+          let A = samp(uv, t * vec2f(-2.0, -2.0));
+          let B = samp(uv, t * vec2f( 0.0, -2.0));
+          let C = samp(uv, t * vec2f( 2.0, -2.0));
+          let D = samp(uv, t * vec2f(-1.0, -1.0));
+          let E = samp(uv, t * vec2f( 1.0, -1.0));
+          let F = samp(uv, t * vec2f(-2.0,  0.0));
+          let G = samp(uv, t * vec2f( 0.0,  0.0));
+          let H = samp(uv, t * vec2f( 2.0,  0.0));
+          let I = samp(uv, t * vec2f(-1.0,  1.0));
+          let J = samp(uv, t * vec2f( 1.0,  1.0));
+          let K = samp(uv, t * vec2f(-2.0,  2.0));
+          let L = samp(uv, t * vec2f( 0.0,  2.0));
+          let M = samp(uv, t * vec2f( 2.0,  2.0));
+          var o = (D + E + I + J) * (0.5 / 4.0);
+          o = o + (A + B + G + F) * (0.125 / 4.0);
+          o = o + (B + C + H + G) * (0.125 / 4.0);
+          o = o + (F + G + L + K) * (0.125 / 4.0);
+          o = o + (G + H + M + L) * (0.125 / 4.0);
+          return vec4f(o, 1.0);
         }
       `,
     })
 
-    const bloomExtractLayout = this.device.createPipelineLayout({
-      bindGroupLayouts: [this.bloomExtractBindGroupLayout],
-    })
-    const bloomBlurLayout = this.device.createPipelineLayout({
-      bindGroupLayouts: [this.bloomBlurBindGroupLayout],
+    // Upsample: 9-tap tent, progressively added to matching downsample mip. Blender radius = sample scale.
+    const bloomUpsampleShader = this.device.createShaderModule({
+      label: "bloom upsample 9-tap tent",
+      code: `${bloomFullscreenVs}
+        @group(0) @binding(0) var srcTex: texture_2d<f32>;   // coarser accumulator
+        @group(0) @binding(1) var baseTex: texture_2d<f32>;  // matching downsample mip
+        @group(0) @binding(2) var srcSamp: sampler;
+        @group(0) @binding(3) var<uniform> upU: vec4<f32>;   // sampleScale, _, _, _
+
+        @fragment fn fs(@builtin(position) p: vec4f) -> @location(0) vec4f {
+          let srcDims = vec2f(textureDimensions(srcTex));
+          let baseDims = vec2f(textureDimensions(baseTex));
+          let uv = p.xy / max(baseDims, vec2f(1.0));
+          let t = upU.x / srcDims;
+          var o = textureSampleLevel(srcTex, srcSamp, uv + t * vec2f(-1.0, -1.0), 0.0).rgb * 1.0;
+          o = o + textureSampleLevel(srcTex, srcSamp, uv + t * vec2f( 0.0, -1.0), 0.0).rgb * 2.0;
+          o = o + textureSampleLevel(srcTex, srcSamp, uv + t * vec2f( 1.0, -1.0), 0.0).rgb * 1.0;
+          o = o + textureSampleLevel(srcTex, srcSamp, uv + t * vec2f(-1.0,  0.0), 0.0).rgb * 2.0;
+          o = o + textureSampleLevel(srcTex, srcSamp, uv + t * vec2f( 0.0,  0.0), 0.0).rgb * 4.0;
+          o = o + textureSampleLevel(srcTex, srcSamp, uv + t * vec2f( 1.0,  0.0), 0.0).rgb * 2.0;
+          o = o + textureSampleLevel(srcTex, srcSamp, uv + t * vec2f(-1.0,  1.0), 0.0).rgb * 1.0;
+          o = o + textureSampleLevel(srcTex, srcSamp, uv + t * vec2f( 0.0,  1.0), 0.0).rgb * 2.0;
+          o = o + textureSampleLevel(srcTex, srcSamp, uv + t * vec2f( 1.0,  1.0), 0.0).rgb * 1.0;
+          o = o * (1.0 / 16.0);
+          let base = textureSampleLevel(baseTex, srcSamp, uv, 0.0).rgb;
+          return vec4f(o + base, 1.0);
+        }
+      `,
     })
 
-    this.bloomExtractPipeline = this.device.createRenderPipeline({
-      label: "bloom extract pipeline",
-      layout: bloomExtractLayout,
-      vertex: { module: bloomExtractShader, entryPoint: "vs" },
-      fragment: {
-        module: bloomExtractShader,
-        entryPoint: "fs",
-        targets: [{ format: Engine.HDR_FORMAT }],
-      },
+    const bloomBlitLayout = this.device.createPipelineLayout({ bindGroupLayouts: [this.bloomBlitBindGroupLayout] })
+    const bloomDownLayout = this.device.createPipelineLayout({ bindGroupLayouts: [this.bloomDownsampleBindGroupLayout] })
+    const bloomUpLayout = this.device.createPipelineLayout({ bindGroupLayouts: [this.bloomUpsampleBindGroupLayout] })
+
+    this.bloomBlitPipeline = this.device.createRenderPipeline({
+      label: "bloom blit pipeline",
+      layout: bloomBlitLayout,
+      vertex: { module: bloomBlitShader, entryPoint: "vs" },
+      fragment: { module: bloomBlitShader, entryPoint: "fs", targets: [{ format: Engine.HDR_FORMAT }] },
       primitive: { topology: "triangle-list" },
     })
-    this.bloomBlurHPipeline = this.device.createRenderPipeline({
-      label: "bloom blur H",
-      layout: bloomBlurLayout,
-      vertex: { module: bloomBlurShader, entryPoint: "vs" },
-      fragment: {
-        module: bloomBlurShader,
-        entryPoint: "fs",
-        targets: [{ format: Engine.HDR_FORMAT }],
-      },
+    this.bloomDownsamplePipeline = this.device.createRenderPipeline({
+      label: "bloom downsample pipeline",
+      layout: bloomDownLayout,
+      vertex: { module: bloomDownsampleShader, entryPoint: "vs" },
+      fragment: { module: bloomDownsampleShader, entryPoint: "fs", targets: [{ format: Engine.HDR_FORMAT }] },
       primitive: { topology: "triangle-list" },
     })
-    this.bloomBlurVPipeline = this.device.createRenderPipeline({
-      label: "bloom blur V",
-      layout: bloomBlurLayout,
-      vertex: { module: bloomBlurShader, entryPoint: "vs" },
-      fragment: {
-        module: bloomBlurShader,
-        entryPoint: "fs",
-        targets: [{ format: Engine.HDR_FORMAT }],
-      },
+    this.bloomUpsamplePipeline = this.device.createRenderPipeline({
+      label: "bloom upsample pipeline",
+      layout: bloomUpLayout,
+      vertex: { module: bloomUpsampleShader, entryPoint: "vs" },
+      fragment: { module: bloomUpsampleShader, entryPoint: "fs", targets: [{ format: Engine.HDR_FORMAT }] },
       primitive: { topology: "triangle-list" },
     })
 
     // ─── Composite: HDR + bloom → Filmic → swapchain (premultiplied) ───
+    // Bloom color/intensity applied HERE (pyramid is pure energy; tint belongs to the combine step,
+    // mirroring EEVEE where bloom color/intensity are combine-stage params, not prefilter).
     this.compositeUniformBuffer = this.device.createBuffer({
       label: "composite view uniforms",
-      size: 16,
+      size: 32,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     })
     this.compositeBindGroupLayout = this.device.createBindGroupLayout({
@@ -1174,9 +1226,10 @@ export class Engine {
       label: "composite shader",
       code: /* wgsl */ `
         @group(0) @binding(0) var hdrTex: texture_2d<f32>;
-        @group(0) @binding(1) var bloomTex: texture_2d<f32>;
+        @group(0) @binding(1) var bloomTex: texture_2d<f32>;   // bloomUpTexture mip 0 (full pyramid top)
         @group(0) @binding(2) var bloomSamp: sampler;
-        @group(0) @binding(3) var<uniform> viewU: vec4<f32>;
+        @group(0) @binding(3) var<uniform> viewU: array<vec4<f32>, 2>;
+        // viewU[0] = (exposure, gamma, _, _);  viewU[1] = (tint.rgb, intensity)
 
         fn filmic(x: f32) -> f32 {
           var lut = array<f32, 14>(
@@ -1200,12 +1253,16 @@ export class Engine {
           let a = max(hdr.a, 1e-6);
           let straight = hdr.rgb / a;
           let fullSz = vec2f(textureDimensions(hdrTex));
+          let bloomSz = vec2f(textureDimensions(bloomTex));
+          // Bloom is at half-res (pyramid mip 0). Sampler interpolates back to full-res UVs.
           let bloomUv = (fragCoord.xy + vec2f(0.5)) / max(fullSz, vec2f(1.0));
-          let bloom = textureSampleLevel(bloomTex, bloomSamp, bloomUv, 0.0).rgb;
+          let tint = viewU[1].xyz;
+          let intensity = viewU[1].w;
+          let bloom = textureSampleLevel(bloomTex, bloomSamp, bloomUv, 0.0).rgb * tint * intensity;
           let combined = straight + bloom;
-          let exposed = combined * exp2(viewU.x);
+          let exposed = combined * exp2(viewU[0].x);
           let tm = vec3f(filmic(exposed.r), filmic(exposed.g), filmic(exposed.b));
-          let g = max(viewU.y, 1e-4);
+          let g = max(viewU[0].y, 1e-4);
           let disp = pow(max(tm, vec3f(0.0)), vec3f(1.0 / g));
           return vec4f(disp * hdr.a, hdr.a);
         }
@@ -1370,20 +1427,42 @@ export class Engine {
         usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
       })
 
+      // Bloom pyramid: mip 0 is half-res, each subsequent mip halves again.
+      // Mip count chosen so the coarsest mip is ≥4 px on the short side, capped at BLOOM_MAX_LEVELS.
       const bw = Math.max(1, Math.floor(width / 2))
       const bh = Math.max(1, Math.floor(height / 2))
-      this.bloomTex0 = this.device.createTexture({
-        label: "bloom ping 0",
+      const shortSide = Math.max(1, Math.min(bw, bh))
+      this.bloomMipCount = Math.max(
+        1,
+        Math.min(Engine.BLOOM_MAX_LEVELS, Math.floor(Math.log2(shortSide)) - 1),
+      )
+      this.bloomDownTexture = this.device.createTexture({
+        label: "bloom down pyramid",
         size: [bw, bh],
+        mipLevelCount: this.bloomMipCount,
         format: Engine.HDR_FORMAT,
         usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
       })
-      this.bloomTex1 = this.device.createTexture({
-        label: "bloom ping 1",
+      this.bloomUpTexture = this.device.createTexture({
+        label: "bloom up pyramid",
         size: [bw, bh],
+        mipLevelCount: Math.max(1, this.bloomMipCount - 1),
         format: Engine.HDR_FORMAT,
         usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
       })
+      this.bloomDownMipViews = []
+      for (let i = 0; i < this.bloomMipCount; i++) {
+        this.bloomDownMipViews.push(
+          this.bloomDownTexture.createView({ baseMipLevel: i, mipLevelCount: 1 }),
+        )
+      }
+      this.bloomUpMipViews = []
+      const upLevels = Math.max(1, this.bloomMipCount - 1)
+      for (let i = 0; i < upLevels; i++) {
+        this.bloomUpMipViews.push(
+          this.bloomUpTexture.createView({ baseMipLevel: i, mipLevelCount: 1 }),
+        )
+      }
 
       this.depthTexture = this.device.createTexture({
         label: "depth texture",
@@ -1430,41 +1509,59 @@ export class Engine {
         ],
       }
 
-      this.writeBloomUniforms(width, height)
+      this.writeBloomUniforms()
 
-      if (this.compositeBindGroupLayout && this.bloomExtractBindGroupLayout) {
-        this.bloomExtractBindGroup = this.device.createBindGroup({
-          label: "bloom extract bind group",
-          layout: this.bloomExtractBindGroupLayout,
+      if (this.compositeBindGroupLayout && this.bloomBlitBindGroupLayout) {
+        // Blit: reads HDR resolve texture (full-res), writes bloomDown mip 0.
+        this.bloomBlitBindGroup = this.device.createBindGroup({
+          label: "bloom blit bind group",
+          layout: this.bloomBlitBindGroupLayout,
           entries: [
             { binding: 0, resource: this.hdrResolveTexture.createView() },
-            { binding: 1, resource: { buffer: this.bloomUniformBuffer } },
+            { binding: 1, resource: { buffer: this.bloomBlitUniformBuffer } },
           ],
         })
-        this.bloomBlurHBindGroup = this.device.createBindGroup({
-          label: "bloom blur H bind group",
-          layout: this.bloomBlurBindGroupLayout,
-          entries: [
-            { binding: 0, resource: this.bloomTex0.createView() },
-            { binding: 1, resource: this.bloomSampler },
-            { binding: 2, resource: { buffer: this.bloomBlurUniformBuffer } },
-          ],
-        })
-        this.bloomBlurVBindGroup = this.device.createBindGroup({
-          label: "bloom blur V bind group",
-          layout: this.bloomBlurBindGroupLayout,
-          entries: [
-            { binding: 0, resource: this.bloomTex1.createView() },
-            { binding: 1, resource: this.bloomSampler },
-            { binding: 2, resource: { buffer: this.bloomBlurUniformBuffer } },
-          ],
-        })
+        // Downsample[i] reads bloomDown mip (i-1), writes bloomDown mip i. i ∈ [1..N-1].
+        this.bloomDownsampleBindGroups = []
+        for (let i = 1; i < this.bloomMipCount; i++) {
+          this.bloomDownsampleBindGroups.push(
+            this.device.createBindGroup({
+              label: `bloom downsample ${i}`,
+              layout: this.bloomDownsampleBindGroupLayout,
+              entries: [
+                { binding: 0, resource: this.bloomDownMipViews[i - 1] },
+                { binding: 1, resource: this.bloomSampler },
+              ],
+            }),
+          )
+        }
+        // Upsample[i] writes bloomUp mip i. Coarsest step reads bloomDown[N-1] (no prior up yet);
+        // subsequent steps read bloomUp[i+1]. Both read bloomDown[i] as the base (additive combine).
+        this.bloomUpsampleBindGroups = []
+        const topIdx = this.bloomMipCount - 2
+        for (let i = topIdx; i >= 0; i--) {
+          const srcView = i === topIdx ? this.bloomDownMipViews[this.bloomMipCount - 1] : this.bloomUpMipViews[i + 1]
+          this.bloomUpsampleBindGroups.push(
+            this.device.createBindGroup({
+              label: `bloom upsample ${i}`,
+              layout: this.bloomUpsampleBindGroupLayout,
+              entries: [
+                { binding: 0, resource: srcView },
+                { binding: 1, resource: this.bloomDownMipViews[i] },
+                { binding: 2, resource: this.bloomSampler },
+                { binding: 3, resource: { buffer: this.bloomUpsampleUniformBuffer } },
+              ],
+            }),
+          )
+        }
+        // Composite reads bloomUp mip 0 (full pyramid collapsed); fallback to bloomDown mip 0 if no upsample level.
+        const compositeBloomView = this.bloomMipCount > 1 ? this.bloomUpMipViews[0] : this.bloomDownMipViews[0]
         this.compositeBindGroup = this.device.createBindGroup({
           label: "composite bind group",
           layout: this.compositeBindGroupLayout,
           entries: [
             { binding: 0, resource: this.hdrResolveTexture.createView() },
-            { binding: 1, resource: this.bloomTex0.createView() },
+            { binding: 1, resource: compositeBloomView },
             { binding: 2, resource: this.bloomSampler },
             { binding: 3, resource: { buffer: this.compositeUniformBuffer } },
           ],
@@ -2487,50 +2584,44 @@ export class Engine {
     if (this.hasGround) this.renderGround(pass)
     pass.end()
 
-    // Bloom: half-res extract → separable Gaussian (σ from EEVEE radius) → composite adds bloom before Filmic.
-    if (this.bloomExtractBindGroup && this.bloomBlurHBindGroup && this.bloomBlurVBindGroup && this.compositeBindGroup) {
+    // Bloom pyramid (EEVEE 3.6):
+    //   1. Blit: HDR → bloomDown[0] (Karis prefilter, half-res)
+    //   2. Downsample: bloomDown[0] → bloomDown[1] → … → bloomDown[N-1] (13-tap)
+    //   3. Upsample (top-down): bloomUp[N-2] = tent(bloomDown[N-1]) + bloomDown[N-2],
+    //      then bloomUp[i] = tent(bloomUp[i+1]) + bloomDown[i] until i=0 (9-tap tent)
+    //   Composite reads bloomUp[0] and adds tint * intensity * bloom before Filmic.
+    if (this.bloomBlitBindGroup && this.compositeBindGroup && this.bloomMipCount > 0) {
       const bloomAtt = this.bloomPassDescriptor.colorAttachments as GPURenderPassColorAttachment[]
-      bloomAtt[0].view = this.bloomTex0.createView()
-      const b0 = encoder.beginRenderPass(this.bloomPassDescriptor)
-      b0.setPipeline(this.bloomExtractPipeline)
-      b0.setBindGroup(0, this.bloomExtractBindGroup)
-      b0.draw(3)
-      b0.end()
 
-      const doBlur = this.bloomSettings.enabled && this.bloomSettings.intensity > 1e-7
-      if (doBlur) {
-        const bw = Math.max(1, Math.floor(this.canvas.width))
-        const bh = Math.max(1, Math.floor(this.canvas.height))
-        const halfW = Math.max(1, Math.floor(bw / 2))
-        const halfH = Math.max(1, Math.floor(bh / 2))
-        // Heuristic σ from EEVEE radius + blurSpread (EEVEE uses pyramid blur — widen σ to approximate 大光圈 footprint)
-        const radius = this.bloomUniformData[8]
-        const spread = Math.max(0.05, this.bloomSettings.blurSpread)
-        const sigma = Math.max(0.28, radius * 0.26) * spread
-        const blurU = this.bloomBlurUniformData
-        blurU[0] = sigma
-        blurU[1] = 1.0 / halfW
-        blurU[2] = 0.0
-        blurU[3] = 0.0
-        this.device.queue.writeBuffer(this.bloomBlurUniformBuffer, 0, blurU)
+      // 1. Blit
+      bloomAtt[0].view = this.bloomDownMipViews[0]
+      const pBlit = encoder.beginRenderPass(this.bloomPassDescriptor)
+      pBlit.setPipeline(this.bloomBlitPipeline)
+      pBlit.setBindGroup(0, this.bloomBlitBindGroup)
+      pBlit.draw(3)
+      pBlit.end()
 
-        bloomAtt[0].view = this.bloomTex1.createView()
-        const b1 = encoder.beginRenderPass(this.bloomPassDescriptor)
-        b1.setPipeline(this.bloomBlurHPipeline)
-        b1.setBindGroup(0, this.bloomBlurHBindGroup)
-        b1.draw(3)
-        b1.end()
+      // 2. Downsample chain
+      for (let i = 1; i < this.bloomMipCount; i++) {
+        bloomAtt[0].view = this.bloomDownMipViews[i]
+        const p = encoder.beginRenderPass(this.bloomPassDescriptor)
+        p.setPipeline(this.bloomDownsamplePipeline)
+        p.setBindGroup(0, this.bloomDownsampleBindGroups[i - 1])
+        p.draw(3)
+        p.end()
+      }
 
-        blurU[1] = 0.0
-        blurU[2] = 1.0 / halfH
-        this.device.queue.writeBuffer(this.bloomBlurUniformBuffer, 0, blurU)
-
-        bloomAtt[0].view = this.bloomTex0.createView()
-        const b2 = encoder.beginRenderPass(this.bloomPassDescriptor)
-        b2.setPipeline(this.bloomBlurVPipeline)
-        b2.setBindGroup(0, this.bloomBlurVBindGroup)
-        b2.draw(3)
-        b2.end()
+      // 3. Upsample chain (coarsest to finest; bindGroups[0] is the coarsest step)
+      const upSteps = this.bloomUpsampleBindGroups.length
+      const topIdx = this.bloomMipCount - 2
+      for (let k = 0; k < upSteps; k++) {
+        const levelIdx = topIdx - k // writes bloomUp[levelIdx]
+        bloomAtt[0].view = this.bloomUpMipViews[levelIdx]
+        const p = encoder.beginRenderPass(this.bloomPassDescriptor)
+        p.setPipeline(this.bloomUpsamplePipeline)
+        p.setBindGroup(0, this.bloomUpsampleBindGroups[k])
+        p.draw(3)
+        p.end()
       }
     }
 
