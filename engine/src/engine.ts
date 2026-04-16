@@ -13,6 +13,9 @@ import {
   normalizeAssetPath,
   type AssetReader,
 } from "./asset-reader"
+import { DEFAULT_SHADER_WGSL } from "./shaders/default"
+import { FACE_SHADER_WGSL } from "./shaders/face"
+import { classifyMaterial, type MaterialPreset } from "./shaders/classify"
 
 export type RaycastCallback = (modelName: string, material: string | null, screenX: number, screenY: number) => void
 
@@ -22,32 +25,45 @@ export type LoadModelFromFilesOptions = {
   pmxFile?: File
 }
 
+// Blender-style scene config. World = environment lighting (ambient);
+// Sun = the single directional lamp; Camera = view framing.
+export type WorldOptions = {
+  /** Linear scene-referred color of the World Background (Blender: World > Surface > Color). */
+  color?: Vec3
+  /** Multiplier on world color (Blender: World > Surface > Strength). */
+  strength?: number
+}
+
+export type SunOptions = {
+  /** Linear color of the sun lamp (Blender: Light > Color). */
+  color?: Vec3
+  /** Lamp power in Blender units (Blender: Light > Strength). */
+  strength?: number
+  /** Direction sunlight travels (points FROM sun TO scene, Blender: -light.rotation.Z). */
+  direction?: Vec3
+}
+
+export type CameraOptions = {
+  /** Orbit distance from target. */
+  distance?: number
+  /** World-space orbit center. */
+  target?: Vec3
+  /** Vertical field of view in radians. */
+  fov?: number
+}
+
 export type EngineOptions = {
-  ambientColor?: Vec3
-  directionalLightDirection?: Vec3
-  directionalLightIntensity?: number
-  minSpecularIntensity?: number
-  rimLightIntensity?: number
-  cameraDistance?: number
-  cameraTarget?: Vec3
-  cameraFov?: number
+  world?: WorldOptions
+  sun?: SunOptions
+  camera?: CameraOptions
   onRaycast?: RaycastCallback
   physicsOptions?: PhysicsOptions
 }
 
-// Lighting defaults come from the Blender game-like preset:
-//   world_color (0.401, 0.494, 0.647) × world_strength 0.3 → (0.120, 0.148, 0.194)
-//   sun direction in Blender Z-up (-0.087, 0.919, -0.384) → Y-up (-0.087, -0.384, -0.919)
-//   sun intensity (energy) 2.0
 export const DEFAULT_ENGINE_OPTIONS = {
-  ambientColor: new Vec3(0.12, 0.148, 0.194),
-  directionalLightDirection: new Vec3(-0.087, -0.384, 0.919),
-  directionalLightIntensity: 2.0,
-  minSpecularIntensity: 0.3,
-  rimLightIntensity: 0.4,
-  cameraDistance: 26.6,
-  cameraTarget: new Vec3(0, 12.5, 0),
-  cameraFov: Math.PI / 4,
+  world: { color: new Vec3(0.4, 0.494, 0.647), strength: 1 },
+  sun: { color: new Vec3(1.0, 1.0, 1.0), strength: 2.0, direction: new Vec3(0, -0.5, 1) },
+  camera: { distance: 26.6, target: new Vec3(0, 12.5, 0), fov: Math.PI / 4 },
   onRaycast: undefined,
   physicsOptions: { constraintSolverKeywords: ["胸"] },
 }
@@ -57,12 +73,7 @@ export interface EngineStats {
   frameTime: number // ms
 }
 
-type DrawCallType =
-  | "opaque"
-  | "transparent"
-  | "ground"
-  | "opaque-outline"
-  | "transparent-outline"
+type DrawCallType = "opaque" | "transparent" | "ground" | "opaque-outline" | "transparent-outline"
 
 interface DrawCall {
   type: DrawCallType
@@ -70,6 +81,7 @@ interface DrawCall {
   firstIndex: number
   bindGroup: GPUBindGroup
   materialName: string
+  preset: MaterialPreset
 }
 
 interface PickDrawCall {
@@ -118,15 +130,17 @@ export class Engine {
   private camera!: Camera
   private cameraUniformBuffer!: GPUBuffer
   private cameraMatrixData = new Float32Array(36)
-  private cameraDistance!: number
-  private cameraTarget!: Vec3
-  private cameraFov!: number
+  // Blender-style scene config groups (resolved from EngineOptions)
+  private world!: { color: Vec3; strength: number }
+  private sun!: { color: Vec3; strength: number; direction: Vec3 }
+  private cameraConfig!: { distance: number; target: Vec3; fov: number }
   private lightUniformBuffer!: GPUBuffer
   private lightData = new Float32Array(64)
   private lightCount = 0
   private resizeObserver: ResizeObserver | null = null
   private depthTexture!: GPUTexture
   private modelPipeline!: GPURenderPipeline
+  private facePipeline!: GPURenderPipeline
   private groundShadowPipeline!: GPURenderPipeline
   private groundShadowBindGroupLayout!: GPUBindGroupLayout
   private outlinePipeline!: GPURenderPipeline
@@ -141,20 +155,13 @@ export class Engine {
   private static readonly MULTISAMPLE_COUNT = 4
   private renderPassDescriptor!: GPURenderPassDescriptor
 
-  // Ambient light settings
-  private ambientColor!: Vec3
-  private directionalLightDirection!: Vec3
-  private directionalLightIntensity!: number
-  private minSpecularIntensity!: number
-  // Rim light settings
-  private rimLightIntensity!: number
-
   // Ground properties (shadow only)
   private groundVertexBuffer?: GPUBuffer
   private groundIndexBuffer?: GPUBuffer
   private hasGround = false
-  private shadowMapTexture?: GPUTexture
-  private shadowMapDepthView?: GPUTextureView
+  private shadowMapTexture!: GPUTexture
+  private shadowMapDepthView!: GPUTextureView
+  private static readonly SHADOW_MAP_SIZE = 4096
   private shadowDepthPipeline!: GPURenderPipeline
   private shadowLightVPBuffer!: GPUBuffer
   private shadowLightVPMatrix = new Float32Array(16)
@@ -206,20 +213,23 @@ export class Engine {
 
   constructor(canvas: HTMLCanvasElement, options?: EngineOptions) {
     this.canvas = canvas
-    if (options) {
-      this.ambientColor = options.ambientColor ?? DEFAULT_ENGINE_OPTIONS.ambientColor
-      this.directionalLightDirection =
-        options.directionalLightDirection ?? DEFAULT_ENGINE_OPTIONS.directionalLightDirection
-      this.directionalLightIntensity =
-        options.directionalLightIntensity ?? DEFAULT_ENGINE_OPTIONS.directionalLightIntensity
-      this.minSpecularIntensity = options.minSpecularIntensity ?? DEFAULT_ENGINE_OPTIONS.minSpecularIntensity
-      this.rimLightIntensity = options.rimLightIntensity ?? DEFAULT_ENGINE_OPTIONS.rimLightIntensity
-      this.cameraDistance = options.cameraDistance ?? DEFAULT_ENGINE_OPTIONS.cameraDistance
-      this.cameraTarget = options.cameraTarget ?? DEFAULT_ENGINE_OPTIONS.cameraTarget
-      this.cameraFov = options.cameraFov ?? DEFAULT_ENGINE_OPTIONS.cameraFov
-      this.onRaycast = options.onRaycast
-      this.physicsOptions = options.physicsOptions ?? DEFAULT_ENGINE_OPTIONS.physicsOptions
+    const d = DEFAULT_ENGINE_OPTIONS
+    this.world = {
+      color: options?.world?.color ?? d.world.color,
+      strength: options?.world?.strength ?? d.world.strength,
     }
+    this.sun = {
+      color: options?.sun?.color ?? d.sun.color,
+      strength: options?.sun?.strength ?? d.sun.strength,
+      direction: options?.sun?.direction ?? d.sun.direction,
+    }
+    this.cameraConfig = {
+      distance: options?.camera?.distance ?? d.camera.distance,
+      target: options?.camera?.target ?? d.camera.target,
+      fov: options?.camera?.fov ?? d.camera.fov,
+    }
+    this.onRaycast = options?.onRaycast
+    this.physicsOptions = options?.physicsOptions ?? d.physicsOptions
   }
 
   // Step 1: Get WebGPU device and context
@@ -346,146 +356,31 @@ export class Engine {
     }
 
     const shaderModule = this.device.createShaderModule({
-      label: "model shaders",
-      code: /* wgsl */ `
-        struct CameraUniforms {
-          view: mat4x4f,
-          projection: mat4x4f,
-          viewPos: vec3f,
-          _padding: f32,
-        };
-
-        struct Light {
-          direction: vec4f,
-          color: vec4f,
-        };
-
-        struct LightUniforms {
-          ambientColor: vec4f,
-          lights: array<Light, 4>,
-        };
-
-        struct MaterialUniforms {
-          alpha: f32,
-          rimIntensity: f32,
-          shininess: f32,
-          _padding1: f32,
-          rimColor: vec3f,
-          _padding2: f32,
-          diffuseColor: vec3f,
-          _padding3: f32,
-          ambientColor: vec3f,
-          _padding4: f32,
-          specularColor: vec3f,
-          _padding5: f32,
-        };
-
-        struct VertexOutput {
-          @builtin(position) position: vec4f,
-          @location(0) normal: vec3f,
-          @location(1) uv: vec2f,
-          @location(2) worldPos: vec3f,
-        };
-
-        // group 0: per-frame (bound once per pass)
-        @group(0) @binding(0) var<uniform> camera: CameraUniforms;
-        @group(0) @binding(1) var<uniform> light: LightUniforms;
-        @group(0) @binding(2) var diffuseSampler: sampler;
-        // group 1: per-instance (bound once per model)
-        @group(1) @binding(0) var<storage, read> skinMats: array<mat4x4f>;
-        // group 2: per-material (bound per draw call)
-        @group(2) @binding(0) var diffuseTexture: texture_2d<f32>;
-        @group(2) @binding(1) var<uniform> material: MaterialUniforms;
-
-        @vertex fn vs(
-          @location(0) position: vec3f,
-          @location(1) normal: vec3f,
-          @location(2) uv: vec2f,
-          @location(3) joints0: vec4<u32>,
-          @location(4) weights0: vec4<f32>
-        ) -> VertexOutput {
-          var output: VertexOutput;
-          let pos4 = vec4f(position, 1.0);
-          
-          let weightSum = weights0.x + weights0.y + weights0.z + weights0.w;
-          let invWeightSum = select(1.0, 1.0 / weightSum, weightSum > 0.0001);
-          let normalizedWeights = select(vec4f(1.0, 0.0, 0.0, 0.0), weights0 * invWeightSum, weightSum > 0.0001);
-          
-          var skinnedPos = vec4f(0.0, 0.0, 0.0, 0.0);
-          var skinnedNrm = vec3f(0.0, 0.0, 0.0);
-          for (var i = 0u; i < 4u; i++) {
-            let j = joints0[i];
-            let w = normalizedWeights[i];
-            let m = skinMats[j];
-            skinnedPos += (m * pos4) * w;
-            let r3 = mat3x3f(m[0].xyz, m[1].xyz, m[2].xyz);
-            skinnedNrm += (r3 * normal) * w;
-          }
-          let worldPos = skinnedPos.xyz;
-          output.position = camera.projection * camera.view * vec4f(worldPos, 1.0);
-          output.normal = normalize(skinnedNrm);
-          output.uv = uv;
-          output.worldPos = worldPos;
-          return output;
-        }
-
-        @fragment fn fs(input: VertexOutput) -> @location(0) vec4f {
-          let finalAlpha = material.alpha;
-          if (finalAlpha < 0.001) {
-            discard;
-          }
-          
-          let n = normalize(input.normal);
-          let textureColor = textureSample(diffuseTexture, diffuseSampler, input.uv).rgb;
-
-          let viewDir = normalize(camera.viewPos - input.worldPos);
-
-          let albedo = textureColor * material.diffuseColor;
-          
-          let minSpec = light.ambientColor.w;
-          let effectiveSpecular = max(material.specularColor, vec3f(minSpec));
-          let specPower = max(material.shininess, 1.0);
-          
-          let l = -light.lights[0].direction.xyz;
-          let nDotL = max(dot(n, l), 0.0);
-          let intensity = light.lights[0].color.w;
-          let radiance = light.lights[0].color.xyz * intensity;
-          
-          let lightAccum = light.ambientColor.xyz + radiance * nDotL;
-
-          let h = normalize(l + viewDir);
-          let nDotH = max(dot(n, h), 0.0);
-          let specFactor = pow(nDotH, specPower);
-          let specularAccum = effectiveSpecular * radiance * specFactor * nDotL;
-          
-          let litColor = albedo * lightAccum;
-
-          let fresnel = 1.0 - abs(dot(n, viewDir));
-          let rimFactor = pow(fresnel, 4.0);
-          let rimLight = material.rimColor * material.rimIntensity * rimFactor;
-
-          let color = litColor + specularAccum + rimLight;
-          
-          return vec4f(color, finalAlpha);
-        }
-      `,
+      label: "default model shader",
+      code: DEFAULT_SHADER_WGSL,
     })
 
-    // group 0: per-frame (camera + light + sampler) — bound once per pass
+    const faceShaderModule = this.device.createShaderModule({
+      label: "face NPR shader",
+      code: FACE_SHADER_WGSL,
+    })
+
+    // group 0: per-frame (camera + light + sampler + shadow) — bound once per pass
     this.mainPerFrameBindGroupLayout = this.device.createBindGroupLayout({
       label: "main per-frame bind group layout",
       entries: [
         { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
         { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
         { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "depth" } },
+        { binding: 4, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "comparison" } },
+        { binding: 5, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
       ],
     })
     // group 1: per-instance (skinMats) — bound once per model
     this.mainPerInstanceBindGroupLayout = this.device.createBindGroupLayout({
       label: "main per-instance bind group layout",
-      entries: [
-        { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } },
-      ],
+      entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } }],
     })
     // group 2: per-material (texture + material uniforms) — bound per draw call
     this.mainPerMaterialBindGroupLayout = this.device.createBindGroupLayout({
@@ -498,23 +393,33 @@ export class Engine {
 
     const mainPipelineLayout = this.device.createPipelineLayout({
       label: "main pipeline layout",
-      bindGroupLayouts: [this.mainPerFrameBindGroupLayout, this.mainPerInstanceBindGroupLayout, this.mainPerMaterialBindGroupLayout],
-    })
-
-    this.perFrameBindGroup = this.device.createBindGroup({
-      label: "main per-frame bind group",
-      layout: this.mainPerFrameBindGroupLayout,
-      entries: [
-        { binding: 0, resource: { buffer: this.cameraUniformBuffer } },
-        { binding: 1, resource: { buffer: this.lightUniformBuffer } },
-        { binding: 2, resource: this.materialSampler },
+      bindGroupLayouts: [
+        this.mainPerFrameBindGroupLayout,
+        this.mainPerInstanceBindGroupLayout,
+        this.mainPerMaterialBindGroupLayout,
       ],
     })
+
+    // perFrameBindGroup is created after shadow resources below
 
     this.modelPipeline = this.createRenderPipeline({
       label: "model pipeline",
       layout: mainPipelineLayout,
       shaderModule,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTarget: standardBlend,
+      cullMode: "none",
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        depthWriteEnabled: true,
+        depthCompare: "less-equal",
+      },
+    })
+
+    this.facePipeline = this.createRenderPipeline({
+      label: "face NPR pipeline",
+      layout: mainPipelineLayout,
+      shaderModule: faceShaderModule,
       vertexBuffers: fullVertexBuffers,
       fragmentTarget: standardBlend,
       cullMode: "none",
@@ -573,6 +478,28 @@ export class Engine {
       magFilter: "linear",
       minFilter: "linear",
     })
+    this.shadowMapTexture = this.device.createTexture({
+      label: "shadow map",
+      size: [Engine.SHADOW_MAP_SIZE, Engine.SHADOW_MAP_SIZE],
+      format: "depth32float",
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+    })
+    this.shadowMapDepthView = this.shadowMapTexture.createView()
+
+    // Now that shadow resources exist, create the main per-frame bind group
+    this.perFrameBindGroup = this.device.createBindGroup({
+      label: "main per-frame bind group",
+      layout: this.mainPerFrameBindGroupLayout,
+      entries: [
+        { binding: 0, resource: { buffer: this.cameraUniformBuffer } },
+        { binding: 1, resource: { buffer: this.lightUniformBuffer } },
+        { binding: 2, resource: this.materialSampler },
+        { binding: 3, resource: this.shadowMapDepthView },
+        { binding: 4, resource: this.shadowComparisonSampler },
+        { binding: 5, resource: { buffer: this.shadowLightVPBuffer } },
+      ],
+    })
+
     this.groundShadowBindGroupLayout = this.device.createBindGroupLayout({
       label: "ground shadow layout",
       entries: [
@@ -703,15 +630,17 @@ export class Engine {
 
     const outlinePipelineLayout = this.device.createPipelineLayout({
       label: "outline pipeline layout",
-      bindGroupLayouts: [this.outlinePerFrameBindGroupLayout, this.mainPerInstanceBindGroupLayout, this.outlinePerMaterialBindGroupLayout],
+      bindGroupLayouts: [
+        this.outlinePerFrameBindGroupLayout,
+        this.mainPerInstanceBindGroupLayout,
+        this.outlinePerMaterialBindGroupLayout,
+      ],
     })
 
     this.outlinePerFrameBindGroup = this.device.createBindGroup({
       label: "outline per-frame bind group",
       layout: this.outlinePerFrameBindGroupLayout,
-      entries: [
-        { binding: 0, resource: { buffer: this.cameraUniformBuffer } },
-      ],
+      entries: [{ binding: 0, resource: { buffer: this.cameraUniformBuffer } }],
     })
 
     const outlineShaderModule = this.device.createShaderModule({
@@ -843,34 +772,30 @@ export class Engine {
 
     this.pickPerFrameBindGroupLayout = this.device.createBindGroupLayout({
       label: "pick per-frame layout",
-      entries: [
-        { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "uniform" } },
-      ],
+      entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "uniform" } }],
     })
     this.pickPerInstanceBindGroupLayout = this.device.createBindGroupLayout({
       label: "pick per-instance layout",
-      entries: [
-        { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } },
-      ],
+      entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } }],
     })
     this.pickPerMaterialBindGroupLayout = this.device.createBindGroupLayout({
       label: "pick per-material layout",
-      entries: [
-        { binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
-      ],
+      entries: [{ binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } }],
     })
 
     const pickPipelineLayout = this.device.createPipelineLayout({
       label: "pick pipeline layout",
-      bindGroupLayouts: [this.pickPerFrameBindGroupLayout, this.pickPerInstanceBindGroupLayout, this.pickPerMaterialBindGroupLayout],
+      bindGroupLayouts: [
+        this.pickPerFrameBindGroupLayout,
+        this.pickPerInstanceBindGroupLayout,
+        this.pickPerMaterialBindGroupLayout,
+      ],
     })
 
     this.pickPerFrameBindGroup = this.device.createBindGroup({
       label: "pick per-frame bind group",
       layout: this.pickPerFrameBindGroupLayout,
-      entries: [
-        { binding: 0, resource: { buffer: this.cameraUniformBuffer } },
-      ],
+      entries: [{ binding: 0, resource: { buffer: this.cameraUniformBuffer } }],
     })
 
     this.pickPipeline = this.device.createRenderPipeline({
@@ -895,7 +820,6 @@ export class Engine {
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     })
   }
-
 
   // Step 3: Setup canvas resize handling
   private setupResize() {
@@ -989,7 +913,13 @@ export class Engine {
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     })
 
-    this.camera = new Camera(Math.PI, Math.PI / 2.5, this.cameraDistance, this.cameraTarget, this.cameraFov)
+    this.camera = new Camera(
+      Math.PI,
+      Math.PI / 2.5,
+      this.cameraConfig.distance,
+      this.cameraConfig.target,
+      this.cameraConfig.fov,
+    )
 
     this.camera.aspect = this.canvas.width / this.canvas.height
     this.camera.attachControl(this.canvas)
@@ -1031,55 +961,92 @@ export class Engine {
     this.cameraTargetOffset.z = offset?.z ?? 0
   }
 
-  getCameraDistance(): number { return this.camera.radius }
-  setCameraDistance(d: number): void { this.camera.radius = d }
-  getCameraAlpha(): number { return this.camera.alpha }
-  setCameraAlpha(a: number): void { this.camera.alpha = a }
-  getCameraBeta(): number { return this.camera.beta }
-  setCameraBeta(b: number): void { this.camera.beta = b }
+  getCameraDistance(): number {
+    return this.camera.radius
+  }
+  setCameraDistance(d: number): void {
+    this.camera.radius = d
+  }
+  getCameraAlpha(): number {
+    return this.camera.alpha
+  }
+  setCameraAlpha(a: number): void {
+    this.camera.alpha = a
+  }
+  getCameraBeta(): number {
+    return this.camera.beta
+  }
+  setCameraBeta(b: number): void {
+    this.camera.beta = b
+  }
 
   // Step 5: Create lighting buffers
   private setupLighting() {
     this.lightUniformBuffer = this.device.createBuffer({
       label: "light uniforms",
-      size: 64 * 4, // 64 floats: ambientColor vec4f (4) + 4 lights * 2 vec4f each (32)
+      size: 64 * 4, // ambientColor vec4f (4) + 4 lights * 2 vec4f each (32) = 36 f32 padded to 64
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     })
-
-    // Initialize light buffer to zeros
     this.lightData.fill(0)
     this.lightCount = 0
-
-    this.setAmbientColor(this.ambientColor)
-    this.addLight(new Vec3(0.5, -1, 1).normalize(), new Vec3(1.0, 1.0, 1.0), this.directionalLightIntensity)
+    this.writeWorld()
+    this.writeSun(0)
   }
 
-  private setAmbientColor(color: Vec3) {
-    // Layout: ambientColor (0-3), lights (4-63) - 2 vec4f per light
-    this.lightData[0] = color.x // ambientColor.x
-    this.lightData[1] = color.y // ambientColor.y
-    this.lightData[2] = color.z // ambientColor.z
-    this.lightData[3] = this.minSpecularIntensity // ambientColor.w = minSpecularIntensity
+  /**
+   * Write world ambient. For a uniform-radiance world, hemispherical irradiance
+   * is E = π·L and a Lambertian BRDF reflects (albedo/π)·E = albedo·L, so the
+   * shader's ambient uniform is just `world.color × world.strength` — no /π.
+   */
+  private writeWorld() {
+    const s = this.world.strength
+    this.lightData[0] = this.world.color.x * s
+    this.lightData[1] = this.world.color.y * s
+    this.lightData[2] = this.world.color.z * s
+    this.lightData[3] = 0
     this.updateLightBuffer()
   }
 
-  private addLight(direction: Vec3, color: Vec3, intensity: number = 1.0): boolean {
-    if (this.lightCount >= 4) return false
-
-    const normalized = direction.normalize()
-    const baseIndex = 4 + this.lightCount * 8 // Start at index 4, 8 floats per light (2 vec4f)
-    this.lightData[baseIndex] = normalized.x // direction.x
-    this.lightData[baseIndex + 1] = normalized.y // direction.y
-    this.lightData[baseIndex + 2] = normalized.z // direction.z
-    this.lightData[baseIndex + 3] = 0 // direction.w
-    this.lightData[baseIndex + 4] = color.x // color.x
-    this.lightData[baseIndex + 5] = color.y // color.y
-    this.lightData[baseIndex + 6] = color.z // color.z
-    this.lightData[baseIndex + 7] = intensity // color.w / intensity
-
-    this.lightCount++
+  /** Write sun lamp into light slot `index` (0..3). Layout mirrors the WGSL struct. */
+  private writeSun(index: number) {
+    if (index < 0 || index >= 4) return
+    const normalized = this.sun.direction.normalize()
+    const base = 4 + index * 8 // 8 floats per light (direction vec4, color vec4)
+    this.lightData[base] = normalized.x
+    this.lightData[base + 1] = normalized.y
+    this.lightData[base + 2] = normalized.z
+    this.lightData[base + 3] = 0
+    this.lightData[base + 4] = this.sun.color.x
+    this.lightData[base + 5] = this.sun.color.y
+    this.lightData[base + 6] = this.sun.color.z
+    this.lightData[base + 7] = this.sun.strength
+    if (index >= this.lightCount) this.lightCount = index + 1
     this.updateLightBuffer()
-    return true
+  }
+
+  /** Update the world environment (Blender: World Background). Ambient recomputes immediately. */
+  setWorld(options: WorldOptions): void {
+    if (options.color) this.world.color = options.color
+    if (options.strength !== undefined) this.world.strength = options.strength
+    this.writeWorld()
+  }
+
+  /** Update the sun lamp (Blender: Light > Sun). Direction change marks shadow VP dirty. */
+  setSun(options: SunOptions): void {
+    if (options.color) this.sun.color = options.color
+    if (options.strength !== undefined) this.sun.strength = options.strength
+    if (options.direction) {
+      this.sun.direction = options.direction
+      this.shadowLightVPDirty = true
+    }
+    this.writeSun(0)
+  }
+
+  getWorld(): Readonly<{ color: Vec3; strength: number }> {
+    return this.world
+  }
+  getSun(): Readonly<{ color: Vec3; strength: number; direction: Vec3 }> {
+    return this.sun
   }
 
   addGround(options?: {
@@ -1088,7 +1055,6 @@ export class Engine {
     diffuseColor?: Vec3
     fadeStart?: number
     fadeEnd?: number
-    shadowMapSize?: number
     shadowStrength?: number
     gridSpacing?: number
     gridLineWidth?: number
@@ -1102,7 +1068,6 @@ export class Engine {
       diffuseColor: new Vec3(0.8, 0.1, 1.0),
       fadeStart: 10.0,
       fadeEnd: 80.0,
-      shadowMapSize: 4096,
       shadowStrength: 1.0,
       gridSpacing: 4.2,
       gridLineWidth: 0.012,
@@ -1120,6 +1085,7 @@ export class Engine {
       firstIndex: 0,
       bindGroup: this.groundShadowBindGroup!,
       materialName: "Ground",
+      preset: "rough_cloth",
     }
   }
 
@@ -1176,17 +1142,14 @@ export class Engine {
   async loadModel(path: string): Promise<Model>
   async loadModel(name: string, path: string): Promise<Model>
   async loadModel(name: string, options: LoadModelFromFilesOptions): Promise<Model>
-  async loadModel(
-    nameOrPath: string,
-    pathOrOptions?: string | LoadModelFromFilesOptions
-  ): Promise<Model> {
+  async loadModel(nameOrPath: string, pathOrOptions?: string | LoadModelFromFilesOptions): Promise<Model> {
     if (pathOrOptions !== undefined && typeof pathOrOptions === "object" && "files" in pathOrOptions) {
       const name = nameOrPath
       const pmxFile = pathOrOptions.pmxFile ?? findFirstPmxFileInList(pathOrOptions.files)
       if (!pmxFile) throw new Error("No .pmx file found in the selected folder")
       const map = fileListToMap(pathOrOptions.files)
       const pmxKey = normalizeAssetPath(
-        (pmxFile as File & { webkitRelativePath?: string }).webkitRelativePath ?? pmxFile.name
+        (pmxFile as File & { webkitRelativePath?: string }).webkitRelativePath ?? pmxFile.name,
       )
       const reader = createFileMapAssetReader(map)
       const model = await PmxLoader.loadFromReader(reader, pmxKey)
@@ -1301,11 +1264,7 @@ export class Engine {
       const verticesChanged = inst.model.update(deltaTime, this.ikEnabled)
       if (verticesChanged) inst.vertexBufferNeedsUpdate = true
       if (inst.physics && this.physicsEnabled) {
-        inst.physics.step(
-          deltaTime,
-          inst.model.getWorldMatrices(),
-          inst.model.getBoneInverseBindMatrices()
-        )
+        inst.physics.step(deltaTime, inst.model.getWorldMatrices(), inst.model.getBoneInverseBindMatrices())
       }
       if (inst.vertexBufferNeedsUpdate) this.updateVertexBuffer(inst)
     })
@@ -1318,7 +1277,12 @@ export class Engine {
     inst.vertexBufferNeedsUpdate = false
   }
 
-  private async setupModelInstance(name: string, model: Model, basePath: string, assetReader: AssetReader): Promise<void> {
+  private async setupModelInstance(
+    name: string,
+    model: Model,
+    basePath: string,
+    assetReader: AssetReader,
+  ): Promise<void> {
     const vertices = model.getVertices()
     const skinning = model.getSkinning()
     const skeleton = model.getSkeleton()
@@ -1342,7 +1306,7 @@ export class Engine {
       0,
       skinning.joints.buffer,
       skinning.joints.byteOffset,
-      skinning.joints.byteLength
+      skinning.joints.byteLength,
     )
 
     const weightsBuffer = this.device.createBuffer({
@@ -1355,7 +1319,7 @@ export class Engine {
       0,
       skinning.weights.buffer,
       skinning.weights.byteOffset,
-      skinning.weights.byteLength
+      skinning.weights.byteLength,
     )
 
     const skinMatrixBuffer = this.device.createBuffer({
@@ -1388,26 +1352,16 @@ export class Engine {
     const mainPerInstanceBindGroup = this.device.createBindGroup({
       label: `${name}: main per-instance bind group`,
       layout: this.mainPerInstanceBindGroupLayout,
-      entries: [
-        { binding: 0, resource: { buffer: skinMatrixBuffer } },
-      ],
+      entries: [{ binding: 0, resource: { buffer: skinMatrixBuffer } }],
     })
 
     const pickPerInstanceBindGroup = this.device.createBindGroup({
       label: `${name}: pick per-instance bind group`,
       layout: this.pickPerInstanceBindGroupLayout,
-      entries: [
-        { binding: 0, resource: { buffer: skinMatrixBuffer } },
-      ],
+      entries: [{ binding: 0, resource: { buffer: skinMatrixBuffer } }],
     })
 
-    const gpuBuffers: GPUBuffer[] = [
-      vertexBuffer,
-      indexBuffer,
-      jointsBuffer,
-      weightsBuffer,
-      skinMatrixBuffer,
-    ]
+    const gpuBuffers: GPUBuffer[] = [vertexBuffer, indexBuffer, jointsBuffer, weightsBuffer, skinMatrixBuffer]
 
     const inst: ModelInstance = {
       name,
@@ -1508,7 +1462,6 @@ export class Engine {
   }
 
   private createShadowGroundResources(opts: {
-    shadowMapSize: number
     diffuseColor: Vec3
     fadeStart: number
     fadeEnd: number
@@ -1519,21 +1472,39 @@ export class Engine {
     gridLineColor: Vec3
     noiseStrength: number
   }) {
-    const { shadowMapSize, diffuseColor, fadeStart, fadeEnd, shadowStrength, gridSpacing, gridLineWidth, gridLineOpacity, gridLineColor, noiseStrength } = opts
-    this.shadowMapTexture = this.device.createTexture({
-      label: "shadow map",
-      size: [shadowMapSize, shadowMapSize],
-      format: "depth32float",
-      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-    })
-    this.shadowMapDepthView = this.shadowMapTexture.createView()
-    // Layout: diffuseColor(3f) fadeStart(1f) | fadeEnd(1f) shadowStrength(1f) pcfTexel(1f) gridSpacing(1f) | gridLineWidth(1f) gridOpacity(1f) noiseStrength(1f) _pad(1f) | gridColor(3f) _pad2(1f)
+    const {
+      diffuseColor,
+      fadeStart,
+      fadeEnd,
+      shadowStrength,
+      gridSpacing,
+      gridLineWidth,
+      gridLineOpacity,
+      gridLineColor,
+      noiseStrength,
+    } = opts
+    // Shadow map is already created in setupPipelines()
     const gb = new Float32Array(16)
-    gb[0] = diffuseColor.x; gb[1] = diffuseColor.y; gb[2] = diffuseColor.z; gb[3] = fadeStart
-    gb[4] = fadeEnd; gb[5] = shadowStrength; gb[6] = 1 / shadowMapSize; gb[7] = gridSpacing
-    gb[8] = gridLineWidth; gb[9] = gridLineOpacity; gb[10] = noiseStrength; gb[11] = 0
-    gb[12] = gridLineColor.x; gb[13] = gridLineColor.y; gb[14] = gridLineColor.z; gb[15] = 0
-    this.groundShadowMaterialBuffer = this.device.createBuffer({ size: gb.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
+    gb[0] = diffuseColor.x
+    gb[1] = diffuseColor.y
+    gb[2] = diffuseColor.z
+    gb[3] = fadeStart
+    gb[4] = fadeEnd
+    gb[5] = shadowStrength
+    gb[6] = 1 / Engine.SHADOW_MAP_SIZE
+    gb[7] = gridSpacing
+    gb[8] = gridLineWidth
+    gb[9] = gridLineOpacity
+    gb[10] = noiseStrength
+    gb[11] = 0
+    gb[12] = gridLineColor.x
+    gb[13] = gridLineColor.y
+    gb[14] = gridLineColor.z
+    gb[15] = 0
+    this.groundShadowMaterialBuffer = this.device.createBuffer({
+      size: gb.byteLength,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    })
     this.device.queue.writeBuffer(this.groundShadowMaterialBuffer, 0, gb)
     this.groundShadowBindGroup = this.device.createBindGroup({
       label: "ground shadow bind",
@@ -1549,16 +1520,12 @@ export class Engine {
     })
   }
 
-  // Shadow is cast from the visible sun direction — same vector as directionalLightDirection.
+  // Shadow is cast from the visible sun direction — same vector the shader lights with.
   private shadowLightVPDirty = true
   private updateShadowLightVP() {
     if (!this.shadowLightVPDirty) return
     this.shadowLightVPDirty = false
-    const dir = new Vec3(
-      this.directionalLightDirection.x,
-      this.directionalLightDirection.y,
-      this.directionalLightDirection.z
-    )
+    const dir = new Vec3(this.sun.direction.x, this.sun.direction.y, this.sun.direction.z)
     dir.normalize()
     const target = new Vec3(0, 11, 0)
     const eye = new Vec3(target.x - dir.x * 72, target.y - dir.y * 72, target.z - dir.z * 72)
@@ -1598,14 +1565,11 @@ export class Engine {
       const materialAlpha = mat.diffuse[3]
       const isTransparent = materialAlpha < 1.0 - 0.001
 
-      const materialUniformBuffer = this.createMaterialUniformBuffer(
-        prefix + mat.name,
-        materialAlpha,
-        [mat.diffuse[0], mat.diffuse[1], mat.diffuse[2]],
-        mat.ambient,
-        mat.specular,
-        mat.shininess
-      )
+      const materialUniformBuffer = this.createMaterialUniformBuffer(prefix + mat.name, materialAlpha, [
+        mat.diffuse[0],
+        mat.diffuse[1],
+        mat.diffuse[2],
+      ])
       inst.gpuBuffers.push(materialUniformBuffer)
 
       const textureView = diffuseTexture.createView()
@@ -1619,24 +1583,43 @@ export class Engine {
       })
 
       const type: DrawCallType = isTransparent ? "transparent" : "opaque"
-      inst.drawCalls.push({ type, count: indexCount, firstIndex: currentIndexOffset, bindGroup, materialName: mat.name })
+      const preset = classifyMaterial(mat.name)
+      inst.drawCalls.push({
+        type,
+        count: indexCount,
+        firstIndex: currentIndexOffset,
+        bindGroup,
+        materialName: mat.name,
+        preset,
+      })
 
       if ((mat.edgeFlag & 0x10) !== 0 && mat.edgeSize > 0) {
         const materialUniformData = new Float32Array([
-          mat.edgeColor[0], mat.edgeColor[1], mat.edgeColor[2], mat.edgeColor[3],
-          mat.edgeSize, 0, 0, 0,
+          mat.edgeColor[0],
+          mat.edgeColor[1],
+          mat.edgeColor[2],
+          mat.edgeColor[3],
+          mat.edgeSize,
+          0,
+          0,
+          0,
         ])
         const outlineUniformBuffer = this.createUniformBuffer(`${prefix}outline: ${mat.name}`, materialUniformData)
         inst.gpuBuffers.push(outlineUniformBuffer)
         const outlineBindGroup = this.device.createBindGroup({
           label: `${prefix}outline: ${mat.name}`,
           layout: this.outlinePerMaterialBindGroupLayout,
-          entries: [
-            { binding: 0, resource: { buffer: outlineUniformBuffer } },
-          ],
+          entries: [{ binding: 0, resource: { buffer: outlineUniformBuffer } }],
         })
         const outlineType: DrawCallType = isTransparent ? "transparent-outline" : "opaque-outline"
-        inst.drawCalls.push({ type: outlineType, count: indexCount, firstIndex: currentIndexOffset, bindGroup: outlineBindGroup, materialName: mat.name })
+        inst.drawCalls.push({
+          type: outlineType,
+          count: indexCount,
+          firstIndex: currentIndexOffset,
+          bindGroup: outlineBindGroup,
+          materialName: mat.name,
+          preset,
+        })
       }
 
       if (this.onRaycast) {
@@ -1659,25 +1642,13 @@ export class Engine {
     }
   }
 
-  private createMaterialUniformBuffer(
-    label: string,
-    alpha: number,
-    diffuseColor: [number, number, number],
-    ambientColor: [number, number, number],
-    specularColor: [number, number, number],
-    shininess: number
-  ): GPUBuffer {
-    const data = new Float32Array(20)
-    data.set([
-      alpha,
-      this.rimLightIntensity,
-      shininess,
-      0.0,
-      1.0, 1.0, 1.0, 0.0, // rimColor (vec3), _padding2
-      diffuseColor[0], diffuseColor[1], diffuseColor[2], 0.0,
-      ambientColor[0], ambientColor[1], ambientColor[2], 0.0,
-      specularColor[0], specularColor[1], specularColor[2], 0.0,
-    ])
+  private createMaterialUniformBuffer(label: string, alpha: number, diffuseColor: [number, number, number]): GPUBuffer {
+    // Matches WGSL `struct MaterialUniforms { diffuseColor: vec3f, alpha: f32 }` — 16 bytes.
+    const data = new Float32Array(4)
+    data[0] = diffuseColor[0]
+    data[1] = diffuseColor[1]
+    data[2] = diffuseColor[2]
+    data[3] = alpha
     return this.createUniformBuffer(`material uniform: ${label}`, data)
   }
 
@@ -1712,7 +1683,7 @@ export class Engine {
       const texture = this.device.createTexture({
         label: `texture: ${cacheKey}`,
         size: [imageBitmap.width, imageBitmap.height],
-        format: "rgba8unorm",
+        format: "rgba8unorm-srgb",
         usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
       })
       this.device.queue.copyExternalImageToTexture({ source: imageBitmap }, { texture }, [
@@ -1728,7 +1699,6 @@ export class Engine {
     }
   }
 
-
   private renderGround(pass: GPURenderPassEncoder) {
     if (!this.hasGround || !this.groundVertexBuffer || !this.groundIndexBuffer || !this.groundDrawCall) return
     pass.setPipeline(this.groundShadowPipeline)
@@ -1737,7 +1707,6 @@ export class Engine {
     pass.setBindGroup(0, this.groundDrawCall.bindGroup)
     pass.drawIndexed(this.groundDrawCall.count, 1, this.groundDrawCall.firstIndex, 0, 0)
   }
-
 
   private handleCanvasDoubleClick = (event: MouseEvent) => {
     if (!this.onRaycast || this.modelInstances.size === 0) return
@@ -1786,12 +1755,14 @@ export class Engine {
     if (!this.pendingPick || !this.pickTexture || !this.pickDepthTexture) return
 
     const pass = encoder.beginRenderPass({
-      colorAttachments: [{
-        view: this.pickTexture.createView(),
-        clearValue: { r: 0, g: 0, b: 0, a: 0 },
-        loadOp: "clear",
-        storeOp: "store",
-      }],
+      colorAttachments: [
+        {
+          view: this.pickTexture.createView(),
+          clearValue: { r: 0, g: 0, b: 0, a: 0 },
+          loadOp: "clear",
+          storeOp: "store",
+        },
+      ],
       depthStencilAttachment: {
         view: this.pickDepthTexture.createView(),
         depthClearValue: 1.0,
@@ -1823,7 +1794,7 @@ export class Engine {
     encoder.copyTextureToBuffer(
       { texture: this.pickTexture, origin: { x: Math.max(0, px), y: Math.max(0, py) } },
       { buffer: this.pickReadbackBuffer, bytesPerRow: 256 },
-      { width: 1, height: 1 }
+      { width: 1, height: 1 },
     )
   }
 
@@ -1844,7 +1815,10 @@ export class Engine {
     let idx = 1
     let hitModel = ""
     for (const [name] of this.modelInstances) {
-      if (idx === modelId) { hitModel = name; break }
+      if (idx === modelId) {
+        hitModel = name
+        break
+      }
       idx++
     }
 
@@ -1858,7 +1832,10 @@ export class Engine {
         for (const mat of materials) {
           if (mat.vertexCount === 0) continue
           matIdx++
-          if (matIdx === materialId) { hitMaterial = mat.name; break }
+          if (matIdx === materialId) {
+            hitMaterial = mat.name
+            break
+          }
         }
       }
     }
@@ -1892,10 +1869,10 @@ export class Engine {
     }
 
     this.updateCameraUniforms()
-    if (this.hasGround) this.updateShadowLightVP()
+    this.updateShadowLightVP()
 
     const encoder = this.device.createCommandEncoder()
-    if (hasModels && this.hasGround && this.shadowMapDepthView) {
+    if (hasModels) {
       const sp = encoder.beginRenderPass({
         colorAttachments: [],
         depthStencilAttachment: {
@@ -1945,45 +1922,82 @@ export class Engine {
     }
   }
 
-  private drawOpaque(pass: GPURenderPassEncoder, inst: ModelInstance, pipeline: GPURenderPipeline): void {
-    pass.setPipeline(pipeline)
+  /**
+   * Route a material to a render pipeline based on its preset.
+   * All materials currently use the default Principled BSDF pipeline (baseline-matching mode);
+   * per-preset NPR pipelines (face, hair, eye) will dispatch here as they land.
+   *
+   * Example, once enabled:
+   *   if (preset === "face") return this.facePipeline
+   */
+  private pipelineForPreset(_preset: MaterialPreset): GPURenderPipeline {
+    return this.modelPipeline
+  }
+
+  /**
+   * Draw every material of a given type (`opaque` or `transparent`) using the main
+   * pipeline(s). Binds the per-frame and per-instance groups once at the top of the
+   * batch, then issues one draw per material. Early-outs if nothing to draw so we
+   * don't waste bindings when a model has no transparents, etc.
+   */
+  private drawMaterials(pass: GPURenderPassEncoder, inst: ModelInstance, type: "opaque" | "transparent"): void {
+    let currentPipeline: GPURenderPipeline | null = null
+    let bound = false
     for (const draw of inst.drawCalls) {
-      if (draw.type === "opaque" && this.shouldRenderDrawCall(inst, draw)) {
-        pass.setBindGroup(2, draw.bindGroup)
-        pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
+      if (draw.type !== type || !this.shouldRenderDrawCall(inst, draw)) continue
+      if (!bound) {
+        pass.setBindGroup(0, this.perFrameBindGroup)
+        pass.setBindGroup(1, inst.mainPerInstanceBindGroup)
+        bound = true
       }
+      const pipeline = this.pipelineForPreset(draw.preset)
+      if (pipeline !== currentPipeline) {
+        pass.setPipeline(pipeline)
+        currentPipeline = pipeline
+      }
+      pass.setBindGroup(2, draw.bindGroup)
+      pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
     }
   }
 
-  private drawTransparent(pass: GPURenderPassEncoder, inst: ModelInstance, pipeline: GPURenderPipeline): void {
-    pass.setPipeline(pipeline)
+  /**
+   * Draw every outline of a given type (`opaque-outline` or `transparent-outline`).
+   * Uses its own pipeline layout (group 0 = camera-only, group 2 = edge uniforms), so
+   * every batch binds its own groups from scratch — the next drawMaterials call will
+   * rebind group 0/1 correctly if needed.
+   */
+  private drawOutlines(pass: GPURenderPassEncoder, inst: ModelInstance, type: DrawCallType): void {
+    let bound = false
     for (const draw of inst.drawCalls) {
-      if (draw.type === "transparent" && this.shouldRenderDrawCall(inst, draw)) {
-        pass.setBindGroup(2, draw.bindGroup)
-        pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
+      if (draw.type !== type || !this.shouldRenderDrawCall(inst, draw)) continue
+      if (!bound) {
+        pass.setPipeline(this.outlinePipeline)
+        pass.setBindGroup(0, this.outlinePerFrameBindGroup)
+        pass.setBindGroup(1, inst.mainPerInstanceBindGroup)
+        bound = true
       }
+      pass.setBindGroup(2, draw.bindGroup)
+      pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
     }
   }
 
-  private bindMainGroups(pass: GPURenderPassEncoder, inst: ModelInstance): void {
-    pass.setBindGroup(0, this.perFrameBindGroup)
-    pass.setBindGroup(1, inst.mainPerInstanceBindGroup)
-  }
-
+  /**
+   * Main-pass render sequence for one model instance:
+   *   1) opaque bodies → 2) opaque outlines → 3) transparents → 4) transparent outlines.
+   * Each batch binds the groups it needs, so switching between main and outline
+   * pipelines is self-contained (no cross-batch dependencies).
+   */
   private renderOneModel(pass: GPURenderPassEncoder, inst: ModelInstance): void {
     pass.setVertexBuffer(0, inst.vertexBuffer)
     pass.setVertexBuffer(1, inst.jointsBuffer)
     pass.setVertexBuffer(2, inst.weightsBuffer)
     pass.setIndexBuffer(inst.indexBuffer, "uint32")
 
-    this.bindMainGroups(pass, inst)
-    this.drawOpaque(pass, inst, this.modelPipeline)
-    this.drawOutlines(pass, inst, false)
-    this.bindMainGroups(pass, inst)
-    this.drawTransparent(pass, inst, this.modelPipeline)
-    this.drawOutlines(pass, inst, true)
+    this.drawMaterials(pass, inst, "opaque")
+    this.drawOutlines(pass, inst, "opaque-outline")
+    this.drawMaterials(pass, inst, "transparent")
+    this.drawOutlines(pass, inst, "transparent-outline")
   }
-
 
   private updateCameraUniforms() {
     const viewMatrix = this.camera.getViewMatrix()
@@ -1997,7 +2011,6 @@ export class Engine {
     this.device.queue.writeBuffer(this.cameraUniformBuffer, 0, this.cameraMatrixData)
   }
 
-
   private updateSkinMatrices() {
     this.forEachInstance((inst) => {
       const skinMatrices = inst.model.getSkinMatrices()
@@ -2006,22 +2019,9 @@ export class Engine {
         0,
         skinMatrices.buffer,
         skinMatrices.byteOffset,
-        skinMatrices.byteLength
+        skinMatrices.byteLength,
       )
     })
-  }
-
-  private drawOutlines(pass: GPURenderPassEncoder, inst: ModelInstance, transparent: boolean) {
-    pass.setPipeline(this.outlinePipeline)
-    pass.setBindGroup(0, this.outlinePerFrameBindGroup)
-    pass.setBindGroup(1, inst.mainPerInstanceBindGroup)
-    const outlineType: DrawCallType = transparent ? "transparent-outline" : "opaque-outline"
-    for (const draw of inst.drawCalls) {
-      if (draw.type === outlineType && this.shouldRenderDrawCall(inst, draw)) {
-        pass.setBindGroup(2, draw.bindGroup)
-        pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
-      }
-    }
   }
 
   private updateStats(frameTime: number) {
@@ -2048,5 +2048,4 @@ export class Engine {
       this.lastFpsUpdate = now
     }
   }
-
 }

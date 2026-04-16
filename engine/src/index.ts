@@ -13,3 +13,4 @@ export type {
 } from "./animation"
 export { FPS } from "./animation"
 export { Physics, type PhysicsOptions } from "./physics"
+export { classifyMaterial, type MaterialPreset } from "./shaders/classify"

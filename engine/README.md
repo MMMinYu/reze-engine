@@ -12,7 +12,7 @@ npm install reze-engine
 
 ## Features
 
-- Blinn-Phong shading, alpha blending, rim lighting, outlines, MSAA 4x
+- Principled BSDF + Blender Filmic tone mapping, alpha blending, outlines, MSAA 4x
 - VMD animation with IK solver and Bullet physics
 - Orbit camera with bone-follow mode
 - GPU picking (double-click/tap)
@@ -25,9 +25,9 @@ npm install reze-engine
 import { Engine, Vec3 } from "reze-engine";
 
 const engine = new Engine(canvas, {
-  ambientColor: new Vec3(0.88, 0.92, 0.99),
-  cameraDistance: 31.5, // MMD units (1 unit = 8 cm)
-  cameraTarget: new Vec3(0, 11.5, 0),
+  world:  { color: new Vec3(0.4, 0.49, 0.65), strength: 1.0 },
+  sun:    { color: new Vec3(1, 1, 1), strength: 2.0, direction: new Vec3(0, -0.5, 1) },
+  camera: { distance: 31.5, target: new Vec3(0, 11.5, 0) }, // MMD units (1 unit = 8 cm)
 });
 await engine.init();
 
@@ -159,24 +159,34 @@ Call `model.play(name, options?)` to start or switch motion. `loop: true` makes 
 
 ### Engine Options
 
+Blender-style scene config — `world` = environment lighting, `sun` = the directional lamp, `camera` = view framing.
+
 ```javascript
 {
-  ambientColor: Vec3,
-  directionalLightIntensity: number,
-  minSpecularIntensity: number,
-  rimLightIntensity: number,
-  cameraDistance: number,
-  cameraTarget: Vec3,
-  cameraFov: number,
+  world: {
+    color: Vec3,    // World > Surface > Color (linear scene-referred)
+    strength: number, // World > Surface > Strength
+  },
+  sun: {
+    color: Vec3,       // Light > Color
+    strength: number,  // Light > Strength (Blender units)
+    direction: Vec3,   // direction light travels (points from sun into the scene)
+  },
+  camera: {
+    distance: number,
+    target: Vec3,
+    fov: number,       // radians
+  },
   onRaycast: (modelName, material, screenX, screenY) => void,
-  shadowLightDirection: Vec3,
   physicsOptions: {
     constraintSolverKeywords: string[],
   },
 }
 ```
 
-`shadowLightDirection` — direction of the shadow-only light, independent of the visible directional light. Default `(0.12, -1, 0.16)` casts a near-top-down shadow with a slight offset so extended limbs still project visible shadows.
+The shadow map is cast from `sun.direction` — same vector the shader lights with — so the visible shading and cast shadows stay coupled.
+
+`engine.setWorld({ color?, strength? })` and `engine.setSun({ color?, strength?, direction? })` update lighting at runtime; changing `sun.direction` refreshes the shadow VP on the next frame.
 
 `constraintSolverKeywords` — joints whose name contains any keyword use the Bullet 2.75 constraint solver; all others keep the stable Ammo 2.82+ default. See [babylon-mmd: Fix Constraint Behavior](https://noname0310.github.io/babylon-mmd/docs/reference/runtime/apply-physics-to-mmd-models/#fix-constraint-behavior) for details.
 

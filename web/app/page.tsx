@@ -123,7 +123,7 @@ export default function Home() {
       if (audioRef.current) {
         audioRef.current.muted = false
         audioRef.current.volume = 1.0
-        audioRef.current.play().catch(() => { })
+        audioRef.current.play().catch(() => {})
       }
       modelRef.current.play()
       modelRef.current.setMorphWeight("抗穿模", 0.5)
@@ -138,7 +138,7 @@ export default function Home() {
       audioRef.current.volume = 1.0
       const atEnd = prog.duration > 0 && prog.current >= prog.duration - 1e-3
       audioRef.current.currentTime = atEnd ? 0 : prog.current
-      audioRef.current.play().catch(() => { })
+      audioRef.current.play().catch(() => {})
     }
     modelRef.current.play(IRIS_ANIM)
     modelRef.current.setMorphWeight("抗穿模", 0.5)
@@ -160,7 +160,7 @@ export default function Home() {
   const handleResume = useCallback(() => {
     if (engineRef.current) {
       if (audioRef.current) {
-        audioRef.current.play().catch(() => { })
+        audioRef.current.play().catch(() => {})
       }
       modelRef.current?.play()
       modelRef.current?.setMorphWeight("抗穿模", 0.5)
@@ -183,7 +183,7 @@ export default function Home() {
         }))
       }
     },
-    [progress.duration]
+    [progress.duration],
   )
 
   const initEngine = useCallback(async () => {
@@ -193,8 +193,7 @@ export default function Home() {
     }
     try {
       const engine = new Engine(canvasRef.current, {
-        cameraDistance: 31.5,
-        cameraTarget: new Vec3(0, 11.5, 0),
+        camera: { distance: 31.5, target: new Vec3(0, 11.5, 0) },
         onRaycast: (modelName: string, material: string | null, screenX: number, screenY: number) => {
           if (material) {
             setMousePosition({ x: screenX, y: screenY })
@@ -216,6 +215,7 @@ export default function Home() {
 
       await m1.loadVmd(IRIS_ANIM, "/animations/IRIS OUT.vmd")
       m1.show(IRIS_ANIM)
+      console.log(m1.getMaterials())
 
       m1.setMorphWeight("抗穿模", 0.5)
 
