@@ -697,12 +697,27 @@ export class Engine {
           }
           let worldPos = skinnedPos.xyz;
           let worldNormal = normalize(skinnedNrm);
-          // Screen-stable edgeline: extrusion ∝ camera distance (same idea as MMD viewers / babylon-mmd-style scaling)
-          let camDist = max(length(camera.viewPos - worldPos), 0.25);
-          let refDist = 30.0;
-          let edgeScale = 0.025;
-          let expandedPos = worldPos + worldNormal * material.edgeSize * edgeScale * (camDist / refDist);
-          output.position = camera.projection * camera.view * vec4f(expandedPos, 1.0);
+
+          // Screen-space outline extrusion — MMD-style pixel-stable edge line.
+          // 1. Project position and normal-as-direction to clip space.
+          // 2. Normalize the 2D clip-space normal, aspect-compensated so "one pixel horizontally"
+          //    matches "one pixel vertically" (otherwise wide viewports squash the outline in X).
+          // 3. Offset clip-space xy by (normal * edgeSize * edgeScale), then multiply by w
+          //    so the perspective divide cancels out → offset stays constant in NDC regardless
+          //    of depth, matching how MMD / babylon-mmd style outlines look identical when zooming.
+          // 4. edgeScale is in NDC-y units per PMX edgeSize. ≈ 0.006 gives ~3px at 1080p; it's
+          //    tied to viewport HEIGHT so resizing the window keeps pixel thickness stable.
+          let viewProj = camera.projection * camera.view;
+          let clipPos = viewProj * vec4f(worldPos, 1.0);
+          let clipNormal = (viewProj * vec4f(worldNormal, 0.0)).xy;
+          // projection is column-major: proj[0][0] = 1/(aspect·tan(fov/2)), proj[1][1] = 1/tan(fov/2).
+          // Ratio proj[1][1]/proj[0][0] recovers the viewport aspect (width/height).
+          let aspect = camera.projection[1][1] / camera.projection[0][0];
+          let pixelDir = normalize(vec2f(clipNormal.x * aspect, clipNormal.y));
+          let ndcDir = vec2f(pixelDir.x / aspect, pixelDir.y);
+          let edgeScale = 0.0018;
+          let offset = ndcDir * material.edgeSize * edgeScale * clipPos.w;
+          output.position = vec4f(clipPos.xy + offset, clipPos.z, clipPos.w);
           return output;
         }
 
