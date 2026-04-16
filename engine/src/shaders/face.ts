@@ -209,9 +209,7 @@ fn fresnel_schlick_face(cosTheta: f32, f0: f32) -> f32 {
   let D = ggx_d_face(p_ndoth, a2);
   let G = smith_g1_face(p_ndotl, a2) * smith_g1_face(p_ndotv, a2);
   let F = fresnel_schlick_face(p_vdoth, F0_FACE);
-  // Kill GGX fireflies when N·L→0 (bump + hard cel boundary); smoothstep barely widens dark region
-  let spec_vis = smoothstep(0.0, 0.06, p_ndotl);
-  let spec = (D * G * F) / max(4.0 * p_ndotl * p_ndotv, 0.02) * spec_vis;
+  let spec = (D * G * F) / max(4.0 * p_ndotl * p_ndotv, 0.02);
   let kd = (1.0 - F) * principled_base / PI_F;
   let direct = (kd + spec) * sun * p_ndotl * shadow;
   let ambient = principled_base * light.ambientColor.xyz;

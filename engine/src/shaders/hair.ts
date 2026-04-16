@@ -173,16 +173,14 @@ fn fresnel_schlick_hair(cosTheta: f32, f0: f32) -> f32 {
   // 相加着色器: MixShader.002 + gate emission (color sum in linear space)
   let add_shader = mix_shader_002 + gate_emit;
 
-  // 映射.004 Scale(20,1.8,1) + 纹理坐标.002.UV → 噪波纹理.002 (scale=5 detail=2 rough=0.5 distort=0.1) → 法线贴图 Strength=0.1 → Principled Normal
-  let noise_uv = mapping_point(vec3f(input.uv, 0.0), vec3f(0.0), vec3f(0.0), vec3f(20.0, 1.8, 1.0));
-  let noise_val = tex_noise(noise_uv, 5.0, 2.0, 0.5, 0.1);
-  let bumped_n = bump_lh(0.1, noise_val, n, input.worldPos);
-
-  // 原理化 BSDF: Base Color + Emission from reroute bc (Emission Strength=0 in JSON → no emission term in direct lighting)
-  let p_ndotl = max(dot(bumped_n, l), 0.0);
-  let p_ndotv = max(dot(bumped_n, v), 0.001);
+  // Blender graph: 噪波纹理.002.Color → 法线贴图(Strength=0.1).Color → 原理化BSDF.Normal.
+  // NORMAL_MAP with a scalar noise broadcast to vec3 + Strength=0.1 produces a near-identity
+  // perturbation in Blender; using plain geometry normal for GGX matches visually and avoids
+  // the wrong-algorithm bump_lh divergence (BUMP ≠ NORMAL_MAP).
+  let p_ndotl = max(dot(n, l), 0.0);
+  let p_ndotv = max(dot(n, v), 0.001);
   let h = normalize(l + v);
-  let p_ndoth = max(dot(bumped_n, h), 0.0);
+  let p_ndoth = max(dot(n, h), 0.0);
   let p_vdoth = max(dot(v, h), 0.0);
   let a2 = HAIR_ROUGHNESS * HAIR_ROUGHNESS;
   let D = ggx_d_hair(p_ndoth, a2);
