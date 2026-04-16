@@ -151,23 +151,20 @@ fn fresnel_schlick_cloth(cosTheta: f32, f0: f32) -> f32 {
   let npr_rgb = mix_overlay(overlay_fac, mix03, hue004);
   let npr_emission = npr_rgb * NPR_EMIT_STR;
 
-  // 原理化BSDF: 噪波(Scale=17.7)→颜色渐变→凹凸 Strength=1 → Normal (m_graphs; bump_lh)
+  // 原理化BSDF: m_graphs has 噪波→渐变→凹凸 but bump output is NOT linked to Principled.Normal,
+  // so the noise/bump subtree is dead in the Blender graph. Use plain geometry normal for GGX — this
+  // is what makes the specular highlight concentrate (the bumped normal smears the lobe flat).
   let principled_base = hue_sat(0.5, 1.0, 0.800000011920929, 1.0, tex_rgb);
-  let noise_uv = mapping_point(vec3f(input.uv, 0.0), vec3f(0.0), vec3f(0.0), vec3f(1.0));
-  let nv = tex_noise(noise_uv, 17.7, 2.0, 0.5, 0.0);
-  let nh = ramp_linear(nv, 0.0, vec4f(0.6351, 0.6351, 0.6351, 1.0), 1.0, vec4f(0.5139, 0.5139, 0.5139, 1.0)).r;
-  let pn = bump_lh(1.0, nh, n, input.worldPos);
-  let p_ndotl = max(dot(pn, l), 0.0);
-  let p_ndotv = max(dot(pn, v), 0.001);
+  let p_ndotl = max(dot(n, l), 0.0);
+  let p_ndotv = max(dot(n, v), 0.001);
   let h = normalize(l + v);
-  let p_ndoth = max(dot(pn, h), 0.0);
+  let p_ndoth = max(dot(n, h), 0.0);
   let p_vdoth = max(dot(v, h), 0.0);
   let a2 = CLOTH_ROUGHNESS * CLOTH_ROUGHNESS;
   let D = ggx_d_cloth(p_ndoth, a2);
   let G = smith_g1_cloth(p_ndotl, a2) * smith_g1_cloth(p_ndotv, a2);
   let F = fresnel_schlick_cloth(p_vdoth, F0_CLOTH);
-  let spec_vis = smoothstep(0.0, 0.06, p_ndotl);
-  let spec = (D * G * F) / max(4.0 * p_ndotl * p_ndotv, 0.02) * spec_vis;
+  let spec = (D * G * F) / max(4.0 * p_ndotl * p_ndotv, 0.02);
   let kd = (1.0 - F) * principled_base / PI_C;
   let direct = (kd + spec) * sun * p_ndotl * shadow;
   let ambient = principled_base * amb;

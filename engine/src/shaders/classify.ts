@@ -7,6 +7,7 @@ export type MaterialPreset =
   | "face"
   | "hair"
   | "body"
+  | "eye"
   | "stockings"
   | "metal"
   | "cloth_smooth"

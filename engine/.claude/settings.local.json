@@ -4,7 +4,10 @@
       "Bash(npx tsc *)",
       "Bash(npm run *)",
       "Bash(wc:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(echo \"---exit $?---\")",
+      "Bash(bunx tsc *)",
+      "Bash(bun tsc *)"
     ]
   }
 }

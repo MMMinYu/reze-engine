@@ -18,6 +18,7 @@ import { FACE_SHADER_WGSL } from "./shaders/face"
 import { HAIR_SHADER_WGSL } from "./shaders/hair"
 import { CLOTH_SMOOTH_SHADER_WGSL } from "./shaders/cloth_smooth"
 import { BODY_SHADER_WGSL } from "./shaders/body"
+import { EYE_SHADER_WGSL } from "./shaders/eye"
 import { resolvePreset, type MaterialPreset, type MaterialPresetMap } from "./shaders/classify"
 
 export type RaycastCallback = (modelName: string, material: string | null, screenX: number, screenY: number) => void
@@ -55,7 +56,7 @@ export type CameraOptions = {
   fov?: number
 }
 
-/** EEVEE Bloom panel (3D Viewport > Render > Bloom). `sceneLinearBoost` only scales luminance for the threshold/knee test — bloom color is reconstructed from unscaled scene RGB (matches EEVEE energy; avoids wash at high intensity). */
+/** EEVEE Bloom panel (3D Viewport > Render > Bloom). Fields map 1:1 to Blender's UI. */
 export type BloomOptions = {
   enabled: boolean
   threshold: number
@@ -64,9 +65,6 @@ export type BloomOptions = {
   color: Vec3
   intensity: number
   clamp: number
-  sceneLinearBoost: number
-  /** Deprecated — pyramid implementation drives halo size from `radius` directly; this value is ignored. */
-  blurSpread: number
 }
 
 export const DEFAULT_BLOOM_OPTIONS: BloomOptions = {
@@ -77,8 +75,6 @@ export const DEFAULT_BLOOM_OPTIONS: BloomOptions = {
   color: new Vec3(1.0, 0.7247558832168579, 0.6487361788749695),
   intensity: 0.05,
   clamp: 0.0,
-  sceneLinearBoost: 4.0,
-  blurSpread: 1.35,
 }
 
 /** Blender Color Management / View (rendering.txt: Filmic, exposure, gamma). `look` is reserved for future curve tweaks. */
@@ -193,6 +189,7 @@ export class Engine {
   private hairPipeline!: GPURenderPipeline
   private clothSmoothPipeline!: GPURenderPipeline
   private bodyPipeline!: GPURenderPipeline
+  private eyePipeline!: GPURenderPipeline
   private groundShadowPipeline!: GPURenderPipeline
   private groundShadowBindGroupLayout!: GPUBindGroupLayout
   private outlinePipeline!: GPURenderPipeline
@@ -338,8 +335,6 @@ export class Engine {
       color: c ? new Vec3(c.x, c.y, c.z) : new Vec3(d.color.x, d.color.y, d.color.z),
       intensity: partial?.intensity ?? d.intensity,
       clamp: partial?.clamp ?? d.clamp,
-      sceneLinearBoost: partial?.sceneLinearBoost ?? d.sceneLinearBoost,
-      blurSpread: partial?.blurSpread ?? d.blurSpread,
     }
   }
 
@@ -363,8 +358,6 @@ export class Engine {
       color: new Vec3(b.color.x, b.color.y, b.color.z),
       intensity: b.intensity,
       clamp: b.clamp,
-      sceneLinearBoost: b.sceneLinearBoost,
-      blurSpread: b.blurSpread,
     }
   }
 
@@ -413,8 +406,6 @@ export class Engine {
     }
     if (patch.intensity !== undefined) b.intensity = patch.intensity
     if (patch.clamp !== undefined) b.clamp = patch.clamp
-    if (patch.sceneLinearBoost !== undefined) b.sceneLinearBoost = patch.sceneLinearBoost
-    if (patch.blurSpread !== undefined) b.blurSpread = patch.blurSpread
     if (this.device && this.bloomBlitUniformBuffer) {
       this.writeBloomUniforms()
       this.writeCompositeViewUniforms()
@@ -425,10 +416,11 @@ export class Engine {
   private writeBloomUniforms(): void {
     const b = this.bloomSettings
     const bu = this.bloomBlitUniformData
+    // EEVEE prefilter: threshold, knee, clamp (0 → disabled), _unused
     bu[0] = b.threshold
     bu[1] = b.knee
-    bu[2] = b.enabled ? Math.max(b.sceneLinearBoost, 1.0) : 1.0
-    bu[3] = b.clamp
+    bu[2] = b.clamp
+    bu[3] = 0.0
     this.device.queue.writeBuffer(this.bloomBlitUniformBuffer, 0, bu)
     const us = this.bloomUpsampleUniformData
     // Blender: bloom.radius directly controls the tent-filter sample scale in texel units.
@@ -590,6 +582,11 @@ export class Engine {
       code: BODY_SHADER_WGSL,
     })
 
+    const eyeShaderModule = this.device.createShaderModule({
+      label: "eye shader",
+      code: EYE_SHADER_WGSL,
+    })
+
     // group 0: per-frame (camera + light + sampler + shadow) — bound once per pass
     this.mainPerFrameBindGroupLayout = this.device.createBindGroupLayout({
       label: "main per-frame bind group layout",
@@ -687,6 +684,20 @@ export class Engine {
       label: "body NPR pipeline",
       layout: mainPipelineLayout,
       shaderModule: bodyShaderModule,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTarget: standardBlend,
+      cullMode: "none",
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        depthWriteEnabled: true,
+        depthCompare: "less-equal",
+      },
+    })
+
+    this.eyePipeline = this.createRenderPipeline({
+      label: "eye pipeline",
+      layout: mainPipelineLayout,
+      shaderModule: eyeShaderModule,
       vertexBuffers: fullVertexBuffers,
       fragmentTarget: standardBlend,
       cullMode: "none",
@@ -1068,42 +1079,41 @@ export class Engine {
       label: "bloom blit (Karis prefilter)",
       code: `${bloomFullscreenVs}
         @group(0) @binding(0) var hdrTex: texture_2d<f32>;
-        @group(0) @binding(1) var<uniform> prefilter: vec4<f32>; // threshold, knee, sceneLinearBoost, clamp
+        @group(0) @binding(1) var<uniform> prefilter: vec4<f32>; // threshold, knee, clamp, _unused
 
         fn luminance(c: vec3f) -> f32 {
           return dot(max(c, vec3f(0.0)), vec3f(0.2126, 0.7152, 0.0722));
         }
-        fn fetch(c: vec2<i32>) -> vec3f {
+        fn fetch(c: vec2<i32>, clampV: f32) -> vec3f {
           let d = vec2<i32>(textureDimensions(hdrTex));
           let cc = clamp(c, vec2<i32>(0), d - vec2<i32>(1));
           let s = textureLoad(hdrTex, cc, 0);
           // Scene pass uses src-alpha blend with clear alpha 0 → premultiplied. Unpremultiply.
-          return s.rgb / max(s.a, 1e-6);
+          let rgb = max(s.rgb / max(s.a, 1e-6), vec3f(0.0));
+          // Blender: clamp each tap BEFORE Karis average (eevee_bloom: color = min(clampIntensity, color)).
+          return select(rgb, min(rgb, vec3f(clampV)), clampV > 0.0);
         }
 
         @fragment fn fs(@builtin(position) p: vec4f) -> @location(0) vec4f {
           let dst = vec2<i32>(p.xy - vec2f(0.5));
           let base = dst * 2;
-          let a = fetch(base + vec2<i32>(0, 0));
-          let b = fetch(base + vec2<i32>(1, 0));
-          let c = fetch(base + vec2<i32>(0, 1));
-          let d = fetch(base + vec2<i32>(1, 1));
-          let boost = max(prefilter.z, 1.0);
-          // Karis partial average: weight each tap by 1/(1+luma) — suppresses fireflies before threshold.
-          let wa = 1.0 / (1.0 + luminance(a * boost));
-          let wb = 1.0 / (1.0 + luminance(b * boost));
-          let wc = 1.0 / (1.0 + luminance(c * boost));
-          let wd = 1.0 / (1.0 + luminance(d * boost));
+          let clampV = prefilter.z;
+          let a = fetch(base + vec2<i32>(0, 0), clampV);
+          let b = fetch(base + vec2<i32>(1, 0), clampV);
+          let c = fetch(base + vec2<i32>(0, 1), clampV);
+          let d = fetch(base + vec2<i32>(1, 1), clampV);
+          // Karis partial average: weight each tap by 1/(1+luma) — suppresses fireflies.
+          let wa = 1.0 / (1.0 + luminance(a));
+          let wb = 1.0 / (1.0 + luminance(b));
+          let wc = 1.0 / (1.0 + luminance(c));
+          let wd = 1.0 / (1.0 + luminance(d));
           let avg = (a * wa + b * wb + c * wc + d * wd) / max(wa + wb + wc + wd, 1e-6);
           // EEVEE quadratic threshold (brightness = max-channel, then soft-knee curve).
-          let bright = max(avg.r, max(avg.g, avg.b)) * boost;
+          let bright = max(avg.r, max(avg.g, avg.b));
           let soft = clamp(bright - prefilter.x + prefilter.y, 0.0, 2.0 * prefilter.y);
           let q = (soft * soft) / (4.0 * max(prefilter.y, 1e-4) + 1e-6);
           let contrib = max(q, bright - prefilter.x) / max(bright, 1e-4);
-          var outC = avg * contrib;
-          let clampV = prefilter.w;
-          if (clampV > 0.0) { outC = min(outC, vec3f(clampV)); }
-          return vec4f(max(outC, vec3f(0.0)), 1.0);
+          return vec4f(max(avg * contrib, vec3f(0.0)), 1.0);
         }
       `,
     })
@@ -2664,6 +2674,7 @@ export class Engine {
     if (preset === "hair") return this.hairPipeline
     if (preset === "cloth_smooth") return this.clothSmoothPipeline
     if (preset === "body") return this.bodyPipeline
+    if (preset === "eye") return this.eyePipeline
     return this.modelPipeline
   }
 
