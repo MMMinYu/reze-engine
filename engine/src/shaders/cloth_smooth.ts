@@ -64,28 +64,12 @@ fn sampleShadow(worldPos: vec3f, n: vec3f) -> f32 {
 }
 
 const PI_C: f32 = 3.141592653589793;
-const F0_CLOTH: f32 = 0.064; // Specular=0.8 → 0.08*0.8
+const CLOTH_SPECULAR: f32 = 0.8;
 const CLOTH_ROUGHNESS: f32 = 0.5;
-// EEVEE's reflection probe + SSR contribute a sharper component on top of the direct GGX lobe.
-// Without IBL we approximate by tightening the direct-spec roughness; ambient keeps full r for energy.
-const CLOTH_DIRECT_ROUGHNESS: f32 = 0.3;
 const CLOTH_TOON_EDGE: f32 = 0.2966;
 const CLOTH_MIX04_MUL: f32 = 0.5; // 运算.004 MULTIPLY Value_001 (dump)
 const NPR_EMIT_STR: f32 = 18.200000762939453;
 const NPR_MIX_SHADER_FAC: f32 = 0.8999999761581421;
-
-fn ggx_d_cloth(ndoth: f32, a2: f32) -> f32 {
-  let denom = ndoth * ndoth * (a2 - 1.0) + 1.0;
-  return a2 / (PI_C * denom * denom);
-}
-
-fn smith_g1_cloth(ndotx: f32, a2: f32) -> f32 {
-  return 2.0 * ndotx / (ndotx + sqrt(a2 + (1.0 - a2) * ndotx * ndotx));
-}
-
-fn fresnel_schlick_cloth(cosTheta: f32, f0: f32) -> f32 {
-  return f0 + (1.0 - f0) * pow(1.0 - cosTheta, 5.0);
-}
 
 @vertex fn vs(
   @location(0) position: vec3f,
@@ -154,27 +138,27 @@ fn fresnel_schlick_cloth(cosTheta: f32, f0: f32) -> f32 {
   let npr_rgb = mix_overlay(overlay_fac, mix03, hue004);
   let npr_emission = npr_rgb * NPR_EMIT_STR;
 
-  // 原理化BSDF: m_graphs has 噪波→渐变→凹凸 but bump output is NOT linked to Principled.Normal,
-  // so the noise/bump subtree is dead in the Blender graph. Use plain geometry normal for GGX — this
-  // is what makes the specular highlight concentrate (the bumped normal smears the lobe flat).
+  // 原理化BSDF (EEVEE port): metallic=0, specular=0.8, roughness=0.5, specular_tint=0.
+  // Bump subtree is dead in the Blender graph (噪波→凹凸 not linked to Principled.Normal).
   let principled_base = hue_sat(0.5, 1.0, 0.800000011920929, 1.0, tex_rgb);
-  let p_ndotl = max(dot(n, l), 0.0);
-  let p_ndotv = max(dot(n, v), 0.001);
-  let h = normalize(l + v);
-  let p_ndoth = max(dot(n, h), 0.0);
-  let p_vdoth = max(dot(v, h), 0.0);
-  let a2_direct = CLOTH_DIRECT_ROUGHNESS * CLOTH_DIRECT_ROUGHNESS;
-  let D = ggx_d_cloth(p_ndoth, a2_direct);
-  let G = smith_g1_cloth(p_ndotl, a2_direct) * smith_g1_cloth(p_ndotv, a2_direct);
-  let F = fresnel_schlick_cloth(p_vdoth, F0_CLOTH);
-  let spec = (D * G * F) / max(4.0 * p_ndotl * p_ndotv, 0.001);
-  let kd = (1.0 - F) * principled_base / PI_C;
-  let direct = (kd + spec) * sun * p_ndotl * shadow;
-  // Ambient specular via Karis split-sum DFG — uses authored roughness so energy balance
-  // matches the material; direct lobe keeps the tightened CLOTH_DIRECT_ROUGHNESS.
-  let env_spec = env_brdf_approx(vec3f(F0_CLOTH), CLOTH_ROUGHNESS, p_ndotv);
-  let ambient = principled_base * amb + env_spec * amb;
-  let principled = ambient + direct;
+  let NL = max(dot(n, l), 0.0);
+  let NV = max(dot(n, v), 1e-4);
+
+  // f0/f90 per gpu_shader_material_principled.glsl — specular_tint=0 → dielectric_f0_color=white.
+  let f0 = vec3f(0.08 * CLOTH_SPECULAR);
+  let f90 = mix(f0, vec3f(1.0), sqrt(CLOTH_SPECULAR));
+  let split_sum = brdf_lut_approx(NV, CLOTH_ROUGHNESS);
+  let reflection_color = F_brdf_multi_scatter(f0, f90, split_sum);
+
+  // Direct glossy — bsdf_ggx already includes NL; no F applied here (tinted after accum).
+  let spec_direct = bsdf_ggx(n, l, v, CLOTH_ROUGHNESS) * sun * shadow;
+  // Indirect glossy — flat world probe (solid color). Phase 2 adds cubemap.
+  let spec_indirect = amb;
+  let spec_radiance = (spec_direct + spec_indirect) * reflection_color;
+
+  // Diffuse (Lambert), no (1-F) factor per EEVEE — it doesn't energy-conserve spec<->diffuse.
+  let diffuse_radiance = principled_base * (sun * NL * shadow / PI_C + amb);
+  let principled = diffuse_radiance + spec_radiance;
 
   // 混合着色器.001: Shader=自发光.005, Shader_001=原理化BSDF, Fac=0.9
   let final_color = mix(npr_emission, principled, NPR_MIX_SHADER_FAC);

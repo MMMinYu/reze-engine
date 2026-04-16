@@ -65,25 +65,12 @@ fn sampleShadow(worldPos: vec3f, n: vec3f) -> f32 {
 }
 
 const PI_H: f32 = 3.141592653589793;
-const F0_HAIR: f32 = 0.08;
+const HAIR_SPECULAR: f32 = 1.0;
 const HAIR_ROUGHNESS: f32 = 0.3;
 // Dump M_Hair: 运算.004 GREATER_THAN second operand Value_001; 运算.007 POWER exponent Value_001; 背景 Color
 const HAIR_TEX_GATE_THRESH: f32 = 0.15000000596046448;
 const HAIR_RIM2_POW: f32 = 0.6300000548362732;
 const HAIR_MIX_BG: vec3f = vec3f(0.1673291176557541);
-
-fn ggx_d_hair(ndoth: f32, a2: f32) -> f32 {
-  let denom = ndoth * ndoth * (a2 - 1.0) + 1.0;
-  return a2 / (PI_H * denom * denom);
-}
-
-fn smith_g1_hair(ndotx: f32, a2: f32) -> f32 {
-  return 2.0 * ndotx / (ndotx + sqrt(a2 + (1.0 - a2) * ndotx * ndotx));
-}
-
-fn fresnel_schlick_hair(cosTheta: f32, f0: f32) -> f32 {
-  return f0 + (1.0 - f0) * pow(1.0 - cosTheta, 5.0);
-}
 
 @vertex fn vs(
   @location(0) position: vec3f,
@@ -173,26 +160,22 @@ fn fresnel_schlick_hair(cosTheta: f32, f0: f32) -> f32 {
   // 相加着色器: MixShader.002 + gate emission (color sum in linear space)
   let add_shader = mix_shader_002 + gate_emit;
 
-  // Blender graph: 噪波纹理.002.Color → 法线贴图(Strength=0.1).Color → 原理化BSDF.Normal.
-  // NORMAL_MAP with a scalar noise broadcast to vec3 + Strength=0.1 produces a near-identity
-  // perturbation in Blender; using plain geometry normal for GGX matches visually and avoids
-  // the wrong-algorithm bump_lh divergence (BUMP ≠ NORMAL_MAP).
-  let p_ndotl = max(dot(n, l), 0.0);
-  let p_ndotv = max(dot(n, v), 0.001);
-  let h = normalize(l + v);
-  let p_ndoth = max(dot(n, h), 0.0);
-  let p_vdoth = max(dot(v, h), 0.0);
-  let a2 = HAIR_ROUGHNESS * HAIR_ROUGHNESS;
-  let D = ggx_d_hair(p_ndoth, a2);
-  let G = smith_g1_hair(p_ndotl, a2) * smith_g1_hair(p_ndotv, a2);
-  let F = fresnel_schlick_hair(p_vdoth, F0_HAIR);
-  let spec = (D * G * F) / max(4.0 * p_ndotl * p_ndotv, 0.001);
-  let kd = (1.0 - F) * bc / PI_H;
-  let direct = (kd + spec) * sun * p_ndotl * shadow;
-  // Ambient specular via Karis split-sum DFG — replaces (1-r) hack with the UE4 curve fit.
-  let env_spec = env_brdf_approx(vec3f(F0_HAIR), HAIR_ROUGHNESS, p_ndotv);
-  let ambient = bc * light.ambientColor.xyz + env_spec * light.ambientColor.xyz;
-  let principled = ambient + direct;
+  // 原理化BSDF (EEVEE port): metallic=0, specular=1.0, roughness=0.3, specular_tint=0.
+  // Graph's 噪波→法线贴图 Strength=0.1 is near-identity; plain n matches visually.
+  let NL = max(dot(n, l), 0.0);
+  let NV = max(dot(n, v), 1e-4);
+
+  let f0 = vec3f(0.08 * HAIR_SPECULAR);
+  let f90 = mix(f0, vec3f(1.0), sqrt(HAIR_SPECULAR));
+  let split_sum = brdf_lut_approx(NV, HAIR_ROUGHNESS);
+  let reflection_color = F_brdf_multi_scatter(f0, f90, split_sum);
+
+  let spec_direct = bsdf_ggx(n, l, v, HAIR_ROUGHNESS) * sun * shadow;
+  let spec_indirect = light.ambientColor.xyz;
+  let spec_radiance = (spec_direct + spec_indirect) * reflection_color;
+
+  let diffuse_radiance = bc * (sun * NL * shadow / PI_H + light.ambientColor.xyz);
+  let principled = diffuse_radiance + spec_radiance;
 
   // 混合着色器.001 Fac=0.2: first socket=相加着色器, second=原理化BSDF
   let final_color = mix(add_shader, principled, 0.2);

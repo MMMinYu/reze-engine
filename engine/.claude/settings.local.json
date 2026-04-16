@@ -7,7 +7,23 @@
       "Bash(python3:*)",
       "Bash(echo \"---exit $?---\")",
       "Bash(bunx tsc *)",
-      "Bash(bun tsc *)"
+      "Bash(bun tsc *)",
+      "Bash(mkdir -p /tmp/eevee_shaders)",
+      "Read(//tmp/**)",
+      "Bash(curl -s -o bsdf_common_lib.glsl \"https://projects.blender.org/blender/blender/raw/branch/blender-v3.6-release/source/blender/draw/engines/eevee/shaders/bsdf_common_lib.glsl\")",
+      "Bash(curl -s -o bsdf_direct_lib.glsl \"https://projects.blender.org/blender/blender/raw/branch/blender-v3.6-release/source/blender/draw/engines/eevee/shaders/bsdf_direct_lib.glsl\")",
+      "Bash(curl -s -o closure_eval_glossy_lib.glsl \"https://projects.blender.org/blender/blender/raw/branch/blender-v3.6-release/source/blender/draw/engines/eevee/shaders/closure_eval_glossy_lib.glsl\")",
+      "Read(//private/tmp/eevee_shaders/**)",
+      "Bash(curl -s -o closure_type_lib.glsl \"https://projects.blender.org/blender/blender/raw/branch/blender-v3.6-release/source/blender/draw/engines/eevee/shaders/closure_type_lib.glsl\")",
+      "Bash(curl -s -o surface_lib.glsl \"https://projects.blender.org/blender/blender/raw/branch/blender-v3.6-release/source/blender/draw/engines/eevee/shaders/surface_lib.glsl\")",
+      "Bash(curl -s -o lightprobe_lib.glsl \"https://projects.blender.org/blender/blender/raw/branch/blender-v3.6-release/source/blender/draw/engines/eevee/shaders/lightprobe_lib.glsl\")",
+      "Bash(curl -sI \"https://projects.blender.org/blender/blender/raw/branch/blender-v3.6-release/source/blender/draw/engines/eevee/shaders/bsdf_direct_lib.glsl\")",
+      "Bash(curl -s \"https://projects.blender.org/blender/blender/src/branch/blender-v3.6-release/source/blender/draw/engines/eevee/shaders\")",
+      "WebFetch(domain:projects.blender.org)",
+      "Bash(curl -sL -H \"User-Agent: Mozilla/5.0\" \"https://projects.blender.org/blender/blender/src/branch/blender-v3.6-release/source/blender/draw/engines/eevee/shaders\" -o /tmp/eevee_shaders/index.html)",
+      "Bash(curl -sL \"https://projects.blender.org/api/v1/repos/blender/blender/contents/source/blender/draw/engines/eevee/shaders?ref=blender-v3.6-release\")",
+      "Bash(curl -sL \"https://projects.blender.org/api/v1/repos/blender/blender/contents/source/blender/gpu/shaders/material?ref=blender-v3.6-release\")",
+      "Bash(curl -s -o /tmp/eevee_shaders/gpu_shader_material_principled.glsl \"https://projects.blender.org/blender/blender/raw/branch/blender-v3.6-release/source/blender/gpu/shaders/material/gpu_shader_material_principled.glsl\")"
     ]
   }
 }

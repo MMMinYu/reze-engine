@@ -65,7 +65,7 @@ fn sampleShadow(worldPos: vec3f, n: vec3f) -> f32 {
 }
 
 const PI_F: f32 = 3.141592653589793;
-const F0_FACE: f32 = 0.04; // specular=0.5 → F0 = 0.08*0.5 = 0.04
+const FACE_SPECULAR: f32 = 0.5;
 const FACE_ROUGHNESS: f32 = 0.3;
 // Dump M_Face unlinked defaults (math op enum not serialized — warm clamp chain still from m_graphs)
 const FACE_RIM2_POW: f32 = 0.6300000548362732;
@@ -73,19 +73,6 @@ const FACE_RIM2_BG: vec3f = vec3f(1.0, 0.4684903025627136, 0.3698573112487793);
 const FACE_WARM_AO_MUL: f32 = 0.30000001192092896; // 运算.004 MULTIPLY after invert (was 0.5 in older trace)
 const FACE_BRIGHT_TEX_THRESH: f32 = 0.9300000071525574; // 运算.005 GREATER_THAN Value_001
 const FACE_MIX_NPR: f32 = 0.5; // 混合着色器.001 Fac
-
-fn ggx_d_face(ndoth: f32, a2: f32) -> f32 {
-  let denom = ndoth * ndoth * (a2 - 1.0) + 1.0;
-  return a2 / (PI_F * denom * denom);
-}
-
-fn smith_g1_face(ndotx: f32, a2: f32) -> f32 {
-  return 2.0 * ndotx / (ndotx + sqrt(a2 + (1.0 - a2) * ndotx * ndotx));
-}
-
-fn fresnel_schlick_face(cosTheta: f32, f0: f32) -> f32 {
-  return f0 + (1.0 - f0) * pow(1.0 - cosTheta, 5.0);
-}
 
 @vertex fn vs(
   @location(0) position: vec3f,
@@ -199,23 +186,21 @@ fn fresnel_schlick_face(cosTheta: f32, f0: f32) -> f32 {
   let ao2 = ao_fake(n, v);
   let sss = ramp_linear(ao2, 0.003, vec4f(0,0,0,1), 1.0, vec4f(0.0786, 0.0786, 0.0786, 1.0)).r;
 
-  // GGX PBR: Metallic=0, Roughness=0.3, Specular=0.5
-  let p_ndotl = max(dot(bumped_n, l), 0.0);
-  let p_ndotv = max(dot(bumped_n, v), 0.001);
-  let h = normalize(l + v);
-  let p_ndoth = max(dot(bumped_n, h), 0.0);
-  let p_vdoth = max(dot(v, h), 0.0);
-  let a2 = FACE_ROUGHNESS * FACE_ROUGHNESS;
-  let D = ggx_d_face(p_ndoth, a2);
-  let G = smith_g1_face(p_ndotl, a2) * smith_g1_face(p_ndotv, a2);
-  let F = fresnel_schlick_face(p_vdoth, F0_FACE);
-  let spec = (D * G * F) / max(4.0 * p_ndotl * p_ndotv, 0.001);
-  let kd = (1.0 - F) * principled_base / PI_F;
-  let direct = (kd + spec) * sun * p_ndotl * shadow;
-  // Ambient specular via Karis split-sum DFG — replaces (1-r) hack with the UE4 curve fit.
-  let env_spec = env_brdf_approx(vec3f(F0_FACE), FACE_ROUGHNESS, p_ndotv);
-  let ambient = principled_base * light.ambientColor.xyz + env_spec * light.ambientColor.xyz;
-  let principled = ambient + direct + p_emission + vec3f(sss);
+  // 原理化BSDF (EEVEE port): metallic=0, specular=0.5, roughness=0.3, specular_tint=0.
+  let NL = max(dot(bumped_n, l), 0.0);
+  let NV = max(dot(bumped_n, v), 1e-4);
+
+  let f0 = vec3f(0.08 * FACE_SPECULAR);
+  let f90 = mix(f0, vec3f(1.0), sqrt(FACE_SPECULAR));
+  let split_sum = brdf_lut_approx(NV, FACE_ROUGHNESS);
+  let reflection_color = F_brdf_multi_scatter(f0, f90, split_sum);
+
+  let spec_direct = bsdf_ggx(bumped_n, l, v, FACE_ROUGHNESS) * sun * shadow;
+  let spec_indirect = light.ambientColor.xyz;
+  let spec_radiance = (spec_direct + spec_indirect) * reflection_color;
+
+  let diffuse_radiance = principled_base * (sun * NL * shadow / PI_F + light.ambientColor.xyz);
+  let principled = diffuse_radiance + spec_radiance + p_emission + vec3f(sss);
 
   // 混合着色器.001: Shader=相加着色器.001, Shader_001=原理化BSDF — Fac blends toward second
   let final_color = mix(npr_stack, principled, FACE_MIX_NPR);

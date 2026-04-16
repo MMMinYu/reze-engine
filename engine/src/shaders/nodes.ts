@@ -327,17 +327,62 @@ fn normal_map(strength: f32, map_color: vec3f, normal: vec3f, tangent: vec3f, bi
   return normalize(mix(normal, perturbed, strength));
 }
 
-// ─── Split-sum environment BRDF (Karis 2013, UE4) ───────────────────
-// Curve-fit replacement for the DFG LUT: returns F_ambient = F0 * scale + bias
-// for use as  env_spec = env_brdf_approx(F0, r, ndotv) * probe_radiance.
+// ─── EEVEE Principled BSDF primitives ───────────────────────────────
+// Ports from Blender 3.6 source/blender/draw/engines/eevee/shaders/
+//   bsdf_common_lib.glsl + gpu_shader_material_principled.glsl.
+// Usage pattern (see material shaders): direct spec = bsdf_ggx × sun × shadow
+// (NL baked in, no F yet); ambient spec = probe_radiance; tint both with
+// reflection_color = F_brdf_multi_scatter(f0, f90, split_sum) AFTER summing.
 
-fn env_brdf_approx(F0: vec3f, roughness: f32, ndotv: f32) -> vec3f {
+const EEVEE_PI: f32 = 3.141592653589793;
+
+// Fused analytic GGX specular (direct lights). Returns BRDF × NL.
+// 4·NL·NV is cancelled via G1_Smith reciprocal form — see bsdf_common_lib.glsl:115.
+fn bsdf_ggx(N: vec3f, L: vec3f, V: vec3f, roughness: f32) -> f32 {
+  let a = max(roughness, 1e-4);
+  let a2 = a * a;
+  let H = normalize(L + V);
+  let NH = max(dot(N, H), 1e-8);
+  let NL = max(dot(N, L), 1e-8);
+  let NV = max(dot(N, V), 1e-8);
+  // G1_Smith_GGX_opti reciprocal form — denominator piece only.
+  let G1L = NL + sqrt(NL * (NL - NL * a2) + a2);
+  let G1V = NV + sqrt(NV * (NV - NV * a2) + a2);
+  let G = G1L * G1V;
+  // D_ggx_opti = pi * denom² — reciprocal D × a².
+  let tmp = (NH * a2 - NH) * NH + 1.0;
+  let D_opti = EEVEE_PI * tmp * tmp;
+  return NL * a2 / (D_opti * G);
+}
+
+// Split-sum DFG LUT — Karis 2013 curve fit stand-in for the 64×64 baked LUT.
+// Returns (lut.x, lut.y) in Blender convention: tint = f0·lut.x + f90·lut.y.
+fn brdf_lut_approx(NV: f32, roughness: f32) -> vec2f {
   let c0 = vec4f(-1.0, -0.0275, -0.572, 0.022);
   let c1 = vec4f(1.0, 0.0425, 1.04, -0.04);
   let r = roughness * c0 + c1;
-  let a004 = min(r.x * r.x, exp2(-9.28 * ndotv)) * r.x + r.y;
-  let AB = vec2f(-1.04, 1.04) * a004 + r.zw;
-  return F0 * AB.x + vec3f(AB.y);
+  let a004 = min(r.x * r.x, exp2(-9.28 * NV)) * r.x + r.y;
+  return vec2f(-1.04, 1.04) * a004 + r.zw;
+}
+
+fn F_brdf_single_scatter(f0: vec3f, f90: vec3f, lut: vec2f) -> vec3f {
+  return lut.y * f90 + lut.x * f0;
+}
+
+// Fdez-Agüera 2019 multi-scatter compensation (EEVEE do_multiscatter=1).
+fn F_brdf_multi_scatter(f0: vec3f, f90: vec3f, lut: vec2f) -> vec3f {
+  let FssEss = lut.y * f90 + lut.x * f0;
+  let Ess = lut.x + lut.y;
+  let Ems = 1.0 - Ess;
+  let Favg = f0 + (1.0 - f0) / 21.0;
+  let Fms = FssEss * Favg / (1.0 - (1.0 - Ess) * Favg);
+  return FssEss + Fms * Ems;
+}
+
+// Luminance-normalized hue extraction — Blender tint_from_color (isolates hue+sat).
+fn tint_from_color(color: vec3f) -> vec3f {
+  let lum = dot(color, vec3f(0.3, 0.6, 0.1));
+  return select(vec3f(1.0), color / lum, lum > 0.0);
 }
 
 `;

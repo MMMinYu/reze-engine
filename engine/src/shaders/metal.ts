@@ -67,6 +67,8 @@ fn sampleShadow(worldPos: vec3f, n: vec3f) -> f32 {
 }
 
 const PI_M: f32 = 3.141592653589793;
+const METAL_SPECULAR: f32 = 1.0;
+const METAL_METALLIC: f32 = 1.0;
 const METAL_ROUGHNESS: f32 = 0.3;
 const METAL_SPECULAR_TINT: f32 = 0.114;
 const METAL_TOON_EDGE: f32 = 0.2966;
@@ -74,19 +76,6 @@ const METAL_MIX04_MUL: f32 = 0.5;
 const METAL_EMIT_STR: f32 = 8.100000381469727;
 const METAL_MIX_SHADER_FAC: f32 = 0.6967;
 const METAL_VORONOI_SCALE: f32 = 4.3;
-
-fn ggx_d_m(ndoth: f32, a2: f32) -> f32 {
-  let denom = ndoth * ndoth * (a2 - 1.0) + 1.0;
-  return a2 / (PI_M * denom * denom);
-}
-
-fn smith_g1_m(ndotx: f32, a2: f32) -> f32 {
-  return 2.0 * ndotx / (ndotx + sqrt(a2 + (1.0 - a2) * ndotx * ndotx));
-}
-
-fn fresnel_schlick_rgb(cosTheta: f32, f0: vec3f) -> vec3f {
-  return f0 + (vec3f(1.0) - f0) * pow(1.0 - cosTheta, 5.0);
-}
 
 @vertex fn vs(
   @location(0) position: vec3f,
@@ -159,23 +148,21 @@ fn fresnel_schlick_rgb(cosTheta: f32, f0: vec3f) -> vec3f {
   let hue006 = hue_sat(0.5, 1.5, 1.2999999523162842, 1.0, tex_tint);
   let albedo = mix_blend(voro_ramp, vec3f(voro_ramp), hue006);
 
-  // Metallic BRDF: F0 = mix(vec3(1), albedo, specular_tint); no diffuse term.
-  let F0_rgb = mix(vec3f(1.0), albedo, METAL_SPECULAR_TINT);
-  let p_ndotl = max(dot(n, l), 0.0);
-  let p_ndotv = max(dot(n, v), 0.001);
-  let h = normalize(l + v);
-  let p_ndoth = max(dot(n, h), 0.0);
-  let p_vdoth = max(dot(v, h), 0.0);
-  let a2 = METAL_ROUGHNESS * METAL_ROUGHNESS;
-  let D = ggx_d_m(p_ndoth, a2);
-  let G = smith_g1_m(p_ndotl, a2) * smith_g1_m(p_ndotv, a2);
-  let F = fresnel_schlick_rgb(p_vdoth, F0_rgb);
-  let spec = F * (D * G) / max(4.0 * p_ndotl * p_ndotv, 0.001);
-  let direct = spec * sun * p_ndotl * shadow;
-  // Metallic ambient specular via Karis split-sum DFG (no diffuse term for metals).
-  let env_spec = env_brdf_approx(F0_rgb, METAL_ROUGHNESS, p_ndotv);
-  let ambient = env_spec * amb;
-  let principled = ambient + direct;
+  // 原理化BSDF (EEVEE port): metallic=1.0, specular=1.0, roughness=0.3.
+  // Per Blender principled wiring: f0 = mix((0.08*spec)*dielectric, albedo, metallic) → with
+  // metallic=1 this is just albedo (specular_tint is dielectric-only and ignored here).
+  let f0 = albedo;
+  let f90 = mix(f0, vec3f(1.0), sqrt(METAL_SPECULAR));
+  let NV = max(dot(n, v), 1e-4);
+  let split_sum = brdf_lut_approx(NV, METAL_ROUGHNESS);
+  let reflection_color = F_brdf_multi_scatter(f0, f90, split_sum);
+
+  let spec_direct = bsdf_ggx(n, l, v, METAL_ROUGHNESS) * sun * shadow;
+  let spec_indirect = amb;
+  let spec_radiance = (spec_direct + spec_indirect) * reflection_color;
+
+  // Pure metal — no diffuse lobe (diffuse_weight = (1 - metallic) = 0).
+  let principled = spec_radiance;
 
   // 混合着色器.001 Fac=0.6967: Shader=npr_emission, Shader_001=principled
   let final_color = mix(npr_emission, principled, METAL_MIX_SHADER_FAC);
