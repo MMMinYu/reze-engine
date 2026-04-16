@@ -200,7 +200,7 @@ fn fresnel_schlick_cloth(cosTheta: f32, f0: f32) -> f32 {
   // Blender: (1-Fac)*First + Fac*Second = 0.1*NPR_emission + 0.9*Principled
   let final_color = mix(npr_emission, principled, 0.9);
 
-  return vec4f(tonemap(final_color), alpha);
+  return vec4f(final_color, alpha);
 }
 
 `

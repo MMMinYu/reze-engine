@@ -213,7 +213,7 @@ fn ramp_ease(f: f32, p0: f32, c0: vec4f, p1: f32, c1: vec4f) -> vec4f {
   // ═══ FINAL: MixShader.001(Fac=0.5, Principled, NPR) ═══
   let final_color = mix(principled, npr_stack, 0.5);
 
-  return vec4f(tonemap(final_color), alpha);
+  return vec4f(final_color, alpha);
 }
 
 `

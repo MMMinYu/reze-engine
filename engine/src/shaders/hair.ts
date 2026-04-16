@@ -220,7 +220,7 @@ fn fresnel_schlick_hair(cosTheta: f32, f0: f32) -> f32 {
   // ═══ 10. FINAL MIX — MixShader.001(Fac=0.2, first=Principled, second=NPR) ═══
   let final_color = mix(principled, npr_stack, 0.2);
 
-  return vec4f(tonemap(final_color), alpha);
+  return vec4f(final_color, alpha);
 }
 
 `

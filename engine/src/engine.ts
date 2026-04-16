@@ -159,8 +159,14 @@ export class Engine {
   private perFrameBindGroup!: GPUBindGroup
   private outlinePerFrameBindGroup!: GPUBindGroup
   private multisampleTexture!: GPUTexture
+  private hdrResolveTexture!: GPUTexture
   private static readonly MULTISAMPLE_COUNT = 4
+  private static readonly HDR_FORMAT: GPUTextureFormat = "rgba16float"
   private renderPassDescriptor!: GPURenderPassDescriptor
+  private compositePassDescriptor!: GPURenderPassDescriptor
+  private compositePipeline!: GPURenderPipeline
+  private compositeBindGroupLayout!: GPUBindGroupLayout
+  private compositeBindGroup!: GPUBindGroup
 
   // Ground properties (shadow only)
   private groundVertexBuffer?: GPUBuffer
@@ -346,8 +352,11 @@ export class Engine {
       },
     ]
 
+    // Internal scene passes render into the HDR offscreen target; only the final
+    // composite pass writes the swapchain. Tonemap moved to composite so bloom
+    // (added next) can run on linear HDR.
     const standardBlend: GPUColorTargetState = {
-      format: this.presentationFormat,
+      format: Engine.HDR_FORMAT,
       blend: {
         color: {
           srcFactor: "src-alpha",
@@ -806,6 +815,65 @@ export class Engine {
       },
     })
 
+    // ─── Composite pass: sample HDR scene, apply Filmic tonemap, write swapchain ───
+    // Final tonemap lives here so future bloom/postfx stack runs on linear HDR.
+    this.compositeBindGroupLayout = this.device.createBindGroupLayout({
+      label: "composite bind group layout",
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "unfilterable-float" } },
+      ],
+    })
+
+    const compositeShader = this.device.createShaderModule({
+      label: "composite shader",
+      code: /* wgsl */ `
+        @group(0) @binding(0) var hdrTex: texture_2d<f32>;
+
+        // Filmic LUT matching default.ts / material shaders — keeps tonemap identical
+        // to before the HDR refactor so pixel output is unchanged.
+        fn filmic(x: f32) -> f32 {
+          var lut = array<f32, 14>(
+            0.0067, 0.0141, 0.0272, 0.0499, 0.0885, 0.1512, 0.2462,
+            0.3753, 0.5273, 0.6776, 0.8031, 0.8929, 0.9495, 0.9814
+          );
+          let t = clamp(log2(max(x, 1e-10)) + 10.0, 0.0, 13.0);
+          let i = u32(t);
+          let j = min(i + 1u, 13u);
+          return mix(lut[i], lut[j], t - f32(i));
+        }
+
+        // Fullscreen triangle — covers NDC [-1,1] with a single triangle using no VBO.
+        @vertex fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
+          let x = f32((vi & 1u) << 2u) - 1.0;
+          let y = f32((vi & 2u) << 1u) - 1.0;
+          return vec4f(x, y, 0.0, 1.0);
+        }
+
+        @fragment fn fs(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
+          // HDR target stores premultiplied RGB (src-alpha blending).
+          // Tonemap in straight space, then re-premultiply for the premultiplied
+          // swapchain.
+          let hdr = textureLoad(hdrTex, vec2<i32>(fragCoord.xy), 0);
+          let a = max(hdr.a, 1e-6);
+          let straight = hdr.rgb / a;
+          let tm = vec3f(filmic(straight.r), filmic(straight.g), filmic(straight.b));
+          return vec4f(tm * hdr.a, hdr.a);
+        }
+      `,
+    })
+
+    this.compositePipeline = this.device.createRenderPipeline({
+      label: "composite pipeline",
+      layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.compositeBindGroupLayout] }),
+      vertex: { module: compositeShader, entryPoint: "vs" },
+      fragment: {
+        module: compositeShader,
+        entryPoint: "fs",
+        targets: [{ format: this.presentationFormat }],
+      },
+      primitive: { topology: "triangle-list" },
+    })
+
     // GPU picking: encode (modelIndex, materialIndex) as color
     const pickShaderModule = this.device.createShaderModule({
       label: "pick shader",
@@ -926,11 +994,18 @@ export class Engine {
       this.canvas.height = height
 
       this.multisampleTexture = this.device.createTexture({
-        label: "multisample render target",
+        label: "multisample HDR render target",
         size: [width, height],
         sampleCount: Engine.MULTISAMPLE_COUNT,
-        format: this.presentationFormat,
+        format: Engine.HDR_FORMAT,
         usage: GPUTextureUsage.RENDER_ATTACHMENT,
+      })
+
+      this.hdrResolveTexture = this.device.createTexture({
+        label: "HDR resolve target",
+        size: [width, height],
+        format: Engine.HDR_FORMAT,
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
       })
 
       this.depthTexture = this.device.createTexture({
@@ -945,7 +1020,7 @@ export class Engine {
 
       const colorAttachment: GPURenderPassColorAttachment = {
         view: this.multisampleTexture.createView(),
-        resolveTarget: this.context.getCurrentTexture().createView(),
+        resolveTarget: this.hdrResolveTexture.createView(),
         clearValue: { r: 0, g: 0, b: 0, a: 0 },
         loadOp: "clear",
         storeOp: "store",
@@ -963,6 +1038,28 @@ export class Engine {
           stencilLoadOp: "clear",
           stencilStoreOp: "discard",
         },
+      }
+
+      // Composite pass descriptor (color attachment view patched per-frame to current swapchain).
+      this.compositePassDescriptor = {
+        label: "composite pass",
+        colorAttachments: [
+          {
+            view: undefined as unknown as GPUTextureView,
+            clearValue: { r: 0, g: 0, b: 0, a: 0 },
+            loadOp: "clear",
+            storeOp: "store",
+          },
+        ],
+      }
+
+      // Rebind composite to new HDR resolve texture.
+      if (this.compositeBindGroupLayout) {
+        this.compositeBindGroup = this.device.createBindGroup({
+          label: "composite bind group",
+          layout: this.compositeBindGroupLayout,
+          entries: [{ binding: 0, resource: this.hdrResolveTexture.createView() }],
+        })
       }
 
       this.camera.aspect = width / height
@@ -1939,8 +2036,6 @@ export class Engine {
     const deltaTime = this.lastFrameTime > 0 ? (currentTime - this.lastFrameTime) / 1000 : 0.016
     this.lastFrameTime = currentTime
 
-    this.updateRenderTarget()
-
     const hasModels = this.modelInstances.size > 0
     if (hasModels) {
       this.updateInstances(deltaTime)
@@ -1981,6 +2076,15 @@ export class Engine {
     if (this.hasGround) this.renderGround(pass)
     pass.end()
 
+    // Composite: sample HDR scene texture, apply Filmic tonemap, write to swapchain.
+    const compositeAttachment = (this.compositePassDescriptor.colorAttachments as GPURenderPassColorAttachment[])[0]
+    compositeAttachment.view = this.context.getCurrentTexture().createView()
+    const cpass = encoder.beginRenderPass(this.compositePassDescriptor)
+    cpass.setPipeline(this.compositePipeline)
+    cpass.setBindGroup(0, this.compositeBindGroup)
+    cpass.draw(3)
+    cpass.end()
+
     const pick = this.pendingPick
     if (pick && hasModels) this.renderPickPass(encoder)
 
@@ -1993,11 +2097,6 @@ export class Engine {
     }
 
     this.updateStats(performance.now() - currentTime)
-  }
-
-  private updateRenderTarget() {
-    const colorAttachment = (this.renderPassDescriptor.colorAttachments as GPURenderPassColorAttachment[])[0]
-    colorAttachment.resolveTarget = this.context.getCurrentTexture().createView()
   }
 
   private drawInstanceShadow(sp: GPURenderPassEncoder, inst: ModelInstance): void {

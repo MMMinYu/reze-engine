@@ -163,7 +163,7 @@ fn sampleShadow(worldPos: vec3f, n: vec3f) -> f32 {
   let direct = (kd + spec) * sunColor * ndotl * shadow;
   let ambient = albedo * light.ambientColor.xyz;
 
-  return vec4f(tonemap(ambient + direct), alpha);
+  return vec4f(ambient + direct, alpha);
 }
 
 `

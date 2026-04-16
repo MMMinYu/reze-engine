@@ -230,7 +230,7 @@ fn fresnel_schlick_face(cosTheta: f32, f0: f32) -> f32 {
   // MixShader.001: (1-0.5)*Principled + 0.5*NPR
   let final_color = mix(principled, npr_stack, 0.5);
 
-  return vec4f(tonemap(final_color), alpha);
+  return vec4f(final_color, alpha);
 }
 
 `
