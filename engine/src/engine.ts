@@ -92,9 +92,9 @@ export type ViewTransformOptions = {
 }
 
 // Matches the reference Blender project: Filmic view, Medium High Contrast look,
-// exposure -0.3, gamma 1.0, sRGB display, no curves.
+// exposure 0.3, gamma 1.0, sRGB display, no curves.
 export const DEFAULT_VIEW_TRANSFORM: ViewTransformOptions = {
-  exposure: 0.3,
+  exposure: 0.6,
   gamma: 1.0,
   look: "medium_high_contrast",
 }
