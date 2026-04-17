@@ -12,12 +12,16 @@ npm install reze-engine
 
 ## Features
 
-- Anime/MMD-style hybrid renderer — toon-ramp NPR diffuse mixed with GGX specular (multi-scatter + LTC energy compensation), per-material presets (face / hair / body / eye / stockings / metal / cloth / default), HDR pipeline with bloom and Filmic tone mapping, alpha-hashed transparency, screen-space outlines, MSAA 4x
-- VMD animation with IK solver and Bullet physics
-- Orbit camera with bone-follow mode
-- GPU picking (double-click/tap)
-- Ground plane with PCF shadow mapping
-- Multi-model support
+- **Anime/MMD-style hybrid renderer** — toon-ramp NPR diffuse mixed with PBR GGX specular (multi-scatter + LTC energy compensation)
+- **Per-material presets** — `face` / `hair` / `body` / `eye` / `stockings` / `metal` / `cloth_smooth` / `cloth_rough` / `default`, assigned by material name
+- **HDR pipeline** with bloom mip pyramid, Filmic tone mapping, 4× MSAA
+- **Alpha-hashed transparency** (Wyman & McGuire 2017) for self-overlapping transparent meshes like stockings
+- **Screen-space outlines** on opaque + transparent materials
+- **VMD animation** with IK solver and Bullet physics
+- **Orbit camera** with bone-follow mode
+- **GPU picking** (double-click/tap)
+- **Ground plane** with PCF shadow mapping
+- **Multi-model support**
 
 ## Usage
 
@@ -25,13 +29,36 @@ npm install reze-engine
 import { Engine, Vec3 } from "reze-engine";
 
 const engine = new Engine(canvas, {
-  world:  { color: new Vec3(0.4, 0.49, 0.65), strength: 1.0 },
-  sun:    { color: new Vec3(1, 1, 1), strength: 2.0, direction: new Vec3(0, -0.5, 1) },
+  world: { color: new Vec3(0.4, 0.49, 0.65), strength: 1.0 },
+  sun: {
+    color: new Vec3(1, 1, 1),
+    strength: 2.0,
+    direction: new Vec3(0, -0.5, 1),
+  },
   camera: { distance: 31.5, target: new Vec3(0, 11.5, 0) }, // MMD units (1 unit = 8 cm)
 });
 await engine.init();
 
+engine.setBloomOptions({
+  color: new Vec3(0.9, 0.1, 0.8),
+  intensity: 0.05,
+  threshold: 0.5,
+});
+
 const model = await engine.loadModel("hero", "/models/hero/hero.pmx");
+
+// Map PMX material names to NPR presets (unlisted names fall back to `default`).
+engine.setMaterialPresets("hero", {
+  face: ["face01"],
+  body: ["skin"],
+  hair: ["hair_f"],
+  eye: ["eye"],
+  cloth_smooth: ["shirt", "shorts", "dress", "shoes"],
+  cloth_rough: ["jacket", "pants"],
+  stockings: ["stockings"],
+  metal: ["metal01", "earring"],
+});
+
 await model.loadVmd("idle", "/animations/idle.vmd");
 model.show("idle");
 model.play();
@@ -81,13 +108,17 @@ engine.dispose()
 
 Use a hidden `<input type="file" webkitdirectory multiple>` (or drag/drop) and pass the resulting `FileList` or `File[]` into the engine. Textures resolve relative to the chosen PMX file inside that tree.
 
-**Important:** read `input.files` into a normal array **before** setting `input.value = ""`. The browser’s `FileList` is *live* — clearing the input empties it.
+**Important:** read `input.files` into a normal array **before** setting `input.value = ""`. The browser’s `FileList` is _live_ — clearing the input empties it.
 
 1. **`parsePmxFolderInput(fileList)`** — returns a tagged result (`empty` | `not_directory` | `no_pmx` | `single` | `multiple`). For `single`, you already have `files` and `pmxFile`. For `multiple`, show a picker (dropdown) of `pmxRelativePaths`, then resolve with **`pmxFileAtRelativePath(files, path)`**.
 2. **`engine.loadModel(name, { files, pmxFile })`** — `pmxFile` selects which `.pmx` when the folder contains several.
 
 ```javascript
-import { Engine, parsePmxFolderInput, pmxFileAtRelativePath } from "reze-engine";
+import {
+  Engine,
+  parsePmxFolderInput,
+  pmxFileAtRelativePath,
+} from "reze-engine";
 
 // In <input onChange>:
 const picked = parsePmxFolderInput(e.target.files);
@@ -103,7 +134,10 @@ if (picked.status === "single") {
 if (picked.status === "multiple") {
   // Let the user choose `chosenPath` from picked.pmxRelativePaths, then:
   const pmxFile = pmxFileAtRelativePath(picked.files, chosenPath);
-  const model = await engine.loadModel("myModel", { files: picked.files, pmxFile });
+  const model = await engine.loadModel("myModel", {
+    files: picked.files,
+    pmxFile,
+  });
 }
 ```
 
@@ -165,8 +199,8 @@ Blender-style scene config — `world` = environment lighting, `sun` = the direc
 ```javascript
 {
   world: {
-    color: Vec3,    // World > Surface > Color (linear scene-referred)
-    strength: number, // World > Surface > Strength
+    color: Vec3,       // World > Surface > Color (linear scene-referred)
+    strength: number,  // World > Surface > Strength
   },
   sun: {
     color: Vec3,       // Light > Color
@@ -185,7 +219,7 @@ Blender-style scene config — `world` = environment lighting, `sun` = the direc
 }
 ```
 
-The shadow map is cast from `sun.direction` — same vector the shader lights with — so the visible shading and cast shadows stay coupled.
+The shadow map is cast from `sun.direction` — same vector the shader lights with — so visible shading and cast shadows stay coupled.
 
 `engine.setWorld({ color?, strength? })` and `engine.setSun({ color?, strength?, direction? })` update lighting at runtime; changing `sun.direction` refreshes the shadow VP on the next frame.
 
@@ -217,17 +251,17 @@ Every preset is built out of the same NPR primitives:
 
 Each PMX material is dispatched to one of these shaders:
 
-| Preset         | Look |
-| -------------- | ---- |
-| `face`         | toon ramp + rim + warm subsurface bleed + Principled mix |
-| `hair`         | layered hair toon + Fresnel rim + Principled spec mix |
-| `body`         | toon ramp + AO modulation + rim + Principled mix |
-| `eye`          | iris with emission boost (drives bloom) |
-| `stockings`    | NPR-tinted Principled with sheen, alpha-hashed |
+| Preset         | Look                                                                           |
+| -------------- | ------------------------------------------------------------------------------ |
+| `face`         | toon ramp + rim + warm subsurface bleed + Principled mix                       |
+| `hair`         | layered hair toon + Fresnel rim + Principled spec mix                          |
+| `body`         | toon ramp + AO modulation + rim + Principled mix                               |
+| `eye`          | iris with emission boost (drives bloom)                                        |
+| `stockings`    | NPR-tinted Principled with sheen, alpha-hashed                                 |
 | `metal`        | full-metallic Principled + reflection-coord Voronoi sparkle + NPR toon overlay |
-| `cloth_smooth` | Principled cloth with sheen, smoother variant |
-| `cloth_rough`  | rougher cloth variant |
-| `default`      | plain Principled BSDF (unmapped fallback) |
+| `cloth_smooth` | Principled cloth with sheen, smoother variant                                  |
+| `cloth_rough`  | rougher cloth variant                                                          |
+| `default`      | plain Principled BSDF (unmapped fallback)                                      |
 
 ### Shadows, post, output
 
@@ -237,21 +271,7 @@ Each PMX material is dispatched to one of these shaders:
 - Filmic tone mapping (LUT sampled from the same view-transform curve used by "Filmic / Medium High Contrast"), exposure baked in
 - Screen-space outline pass (inverted-hull) on opaque and transparent materials
 
-Assign presets per-model:
-
-```javascript
-engine.setMaterialPresets("hero", {
-  face:         ["顔", "白目", "口の中"],
-  hair:         ["髪", "前髪"],
-  body:         ["肌"],
-  eye:          ["瞳"],
-  stockings:    ["袜子"],
-  cloth_smooth: ["制服", "スカート"],
-  metal:        ["ボタン"],
-});
-```
-
-Material names not listed fall through to the `default` Principled BSDF.
+Assign presets per-model with `engine.setMaterialPresets(name, map)` (see the [Usage](#usage) example). Material names not listed fall through to the `default` Principled BSDF.
 
 ### Alpha-hashed transparency
 
