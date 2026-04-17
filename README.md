@@ -12,7 +12,7 @@ npm install reze-engine
 
 ## Features
 
-- Principled BSDF + Blender Filmic tone mapping, alpha blending, outlines, MSAA 4x
+- Blender 3.6 EEVEE rendering port — Principled BSDF with multi-scatter + LTC energy compensation, NPR material presets (face / hair / body / eye / stockings / metal / cloth / default), Filmic tone mapping, alpha-hashed transparency, outlines, MSAA 4x
 - VMD animation with IK solver and Bullet physics
 - Orbit camera with bone-follow mode
 - GPU picking (double-click/tap)
@@ -55,6 +55,7 @@ engine.getModel(name)
 engine.getModelNames()
 engine.removeModel(name)
 
+engine.setMaterialPresets(name, presetMap)   // assign NPR presets by material name
 engine.setMaterialVisible(name, material, visible)
 engine.toggleMaterialVisible(name, material)
 engine.isMaterialVisible(name, material)
@@ -196,6 +197,54 @@ The shadow map is cast from `sun.direction` — same vector the shader lights wi
 `engine.setWorld({ color?, strength? })` and `engine.setSun({ color?, strength?, direction? })` update lighting at runtime; changing `sun.direction` refreshes the shadow VP on the next frame.
 
 `constraintSolverKeywords` — joints whose name contains any keyword use the Bullet 2.75 constraint solver; all others keep the stable Ammo 2.82+ default. See [babylon-mmd: Fix Constraint Behavior](https://noname0310.github.io/babylon-mmd/docs/reference/runtime/apply-physics-to-mmd-models/#fix-constraint-behavior) for details.
+
+## Rendering
+
+The renderer follows Blender 3.6 EEVEE — shading, tone mapping, and transparency decisions match the reference CPU/GPU paths so authors tuning a model in Blender see the same result on the web.
+
+### Principled BSDF port
+
+- GGX specular with Schlick Fresnel and Smith G1
+- **Multi-scatter compensation** via Fdez-Agüera 2019 (`F_brdf_multi_scatter`) — the closed-form version used in EEVEE's `bsdf_common_lib.glsl`
+- **DFG split-sum LUT** baked at `engine.init()` — port of Blender's `bsdf_lut_frag.glsl`. Used for indirect specular and as the denominator of the direct-spec energy compensation
+- **LTC direct-specular energy compensation** (`ltc_brdf_scale = (ltc.x + ltc.y) / (dfg.x + dfg.y)`, per `closure_eval_glossy_lib.glsl:79-81`) — keeps direct and indirect spec in the same energy budget. The LTC magnitude LUT is uploaded from `eevee_lut.c` constants
+- Sheen coarse approximation (`f³·0.077 + f·0.01 + 0.00026`) on cloth/stockings
+
+### NPR material presets
+
+Each PMX material is dispatched to one of the preset shaders, all ported from "仿深空之眼渲染预设v1.0" Blender node graphs:
+
+| Preset         | Based on Blender material |
+| -------------- | ------------------------- |
+| `face`         | `M_Face` — toon ramp + rim + warm bleed + Principled mix |
+| `hair`         | `M_Hair` — anisotropic spec highlight + rim |
+| `body`         | `M_Body` — toon ramp + AO + rim + Principled mix |
+| `eye`          | `M_Eye` — iris mapping + highlight |
+| `stockings`    | `M_Stockings` — NPR mask × Principled with sheen, alpha-hashed |
+| `metal`        | `M_Metal` — anisotropic + environment rim |
+| `cloth_smooth` | `M_Cloth_Smooth` — Principled cloth with sheen |
+| `cloth_rough`  | `M_Cloth_Rough` — rougher variant |
+| `default`      | Principled BSDF (unmapped fallback) |
+
+Assign presets per-model:
+
+```javascript
+engine.setMaterialPresets("hero", {
+  face:         ["顔", "白目", "口の中"],
+  hair:         ["髪", "前髪"],
+  body:         ["肌"],
+  eye:          ["瞳"],
+  stockings:    ["袜子"],
+  cloth_smooth: ["制服", "スカート"],
+  metal:        ["ボタン"],
+});
+```
+
+Material names not listed fall through to the `default` Principled BSDF.
+
+### Alpha-hashed transparency
+
+`stockings` uses the Wyman & McGuire 2017 derivative-aware stochastic discard (port of EEVEE's `prepass_frag.glsl::hashed_alpha_threshold`) instead of alpha blend. Self-overlapping transparent meshes (stockings wrap the leg — front and back surfaces share screen pixels) can't be sorted per-fragment in one draw call, so blend produces "cracks". Hashed alpha keeps opaque-style depth writes, resolves under MSAA/TAA, and matches the fix the preset author documented.
 
 ## Projects Using This Engine
 

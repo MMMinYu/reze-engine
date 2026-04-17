@@ -154,10 +154,10 @@ const METAL_VORONOI_SCALE: f32 = 4.3;
   let f0 = albedo;
   let f90 = mix(f0, vec3f(1.0), sqrt(METAL_SPECULAR));
   let NV = max(dot(n, v), 1e-4);
-  let split_sum = brdf_lut_approx(NV, METAL_ROUGHNESS);
+  let split_sum = brdf_lut_baked(NV, METAL_ROUGHNESS);
   let reflection_color = F_brdf_multi_scatter(f0, f90, split_sum);
 
-  let spec_direct = bsdf_ggx(n, l, v, METAL_ROUGHNESS) * sun * shadow;
+  let spec_direct = bsdf_ggx(n, l, v, METAL_ROUGHNESS) * sun * shadow * ltc_brdf_scale(NV, METAL_ROUGHNESS);
   let spec_indirect = amb;
   let spec_radiance = (spec_direct + spec_indirect) * reflection_color;
 

@@ -167,13 +167,15 @@ const HAIR_MIX_BG: vec3f = vec3f(0.1673291176557541);
 
   let f0 = vec3f(0.08 * HAIR_SPECULAR);
   let f90 = mix(f0, vec3f(1.0), sqrt(HAIR_SPECULAR));
-  let split_sum = brdf_lut_approx(NV, HAIR_ROUGHNESS);
+  let split_sum = brdf_lut_baked(NV, HAIR_ROUGHNESS);
   let reflection_color = F_brdf_multi_scatter(f0, f90, split_sum);
 
-  let spec_direct = bsdf_ggx(n, l, v, HAIR_ROUGHNESS) * sun * shadow;
+  let spec_direct = bsdf_ggx(n, l, v, HAIR_ROUGHNESS) * sun * shadow * ltc_brdf_scale(NV, HAIR_ROUGHNESS);
   let spec_indirect = light.ambientColor.xyz;
   let spec_radiance = (spec_direct + spec_indirect) * reflection_color;
 
+  // Indirect diffuse = base_color × L_w per Blender closure_eval_surface_lib.glsl line 302;
+  // probe_evaluate_world_diff returns radiance (SH-projected, not cosine-convolved).
   let diffuse_radiance = bc * (sun * NL * shadow / PI_H + light.ambientColor.xyz);
   let principled = diffuse_radiance + spec_radiance;
 

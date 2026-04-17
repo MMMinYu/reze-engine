@@ -147,16 +147,20 @@ const NPR_MIX_SHADER_FAC: f32 = 0.8999999761581421;
   // f0/f90 per gpu_shader_material_principled.glsl — specular_tint=0 → dielectric_f0_color=white.
   let f0 = vec3f(0.08 * CLOTH_SPECULAR);
   let f90 = mix(f0, vec3f(1.0), sqrt(CLOTH_SPECULAR));
-  let split_sum = brdf_lut_approx(NV, CLOTH_ROUGHNESS);
+  let split_sum = brdf_lut_baked(NV, CLOTH_ROUGHNESS);
   let reflection_color = F_brdf_multi_scatter(f0, f90, split_sum);
 
   // Direct glossy — bsdf_ggx already includes NL; no F applied here (tinted after accum).
-  let spec_direct = bsdf_ggx(n, l, v, CLOTH_ROUGHNESS) * sun * shadow;
+  // ltc_brdf_scale: EEVEE direct path uses LTC; split-sum LUT path is rescaled to match.
+  let spec_direct = bsdf_ggx(n, l, v, CLOTH_ROUGHNESS) * sun * shadow * ltc_brdf_scale(NV, CLOTH_ROUGHNESS);
   // Indirect glossy — flat world probe (solid color). Phase 2 adds cubemap.
   let spec_indirect = amb;
   let spec_radiance = (spec_direct + spec_indirect) * reflection_color;
 
   // Diffuse (Lambert), no (1-F) factor per EEVEE — it doesn't energy-conserve spec<->diffuse.
+  // probe_evaluate_world_diff returns radiance L_w (SH projected, not cosine-convolved); in
+  // closure_eval_surface_lib line 302: closure.radiance += diffuse_accum * L_w * diffuse.color.
+  // So indirect diffuse = base_color × L_w, no π factor.
   let diffuse_radiance = principled_base * (sun * NL * shadow / PI_C + amb);
   let principled = diffuse_radiance + spec_radiance;
 

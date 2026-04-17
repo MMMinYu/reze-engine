@@ -192,13 +192,15 @@ const FACE_MIX_NPR: f32 = 0.5; // 混合着色器.001 Fac
 
   let f0 = vec3f(0.08 * FACE_SPECULAR);
   let f90 = mix(f0, vec3f(1.0), sqrt(FACE_SPECULAR));
-  let split_sum = brdf_lut_approx(NV, FACE_ROUGHNESS);
+  let split_sum = brdf_lut_baked(NV, FACE_ROUGHNESS);
   let reflection_color = F_brdf_multi_scatter(f0, f90, split_sum);
 
-  let spec_direct = bsdf_ggx(bumped_n, l, v, FACE_ROUGHNESS) * sun * shadow;
+  let spec_direct = bsdf_ggx(bumped_n, l, v, FACE_ROUGHNESS) * sun * shadow * ltc_brdf_scale(NV, FACE_ROUGHNESS);
   let spec_indirect = light.ambientColor.xyz;
   let spec_radiance = (spec_direct + spec_indirect) * reflection_color;
 
+  // Indirect diffuse = base_color × L_w per Blender closure_eval_surface_lib.glsl line 302;
+  // probe_evaluate_world_diff returns radiance (SH-projected, not cosine-convolved).
   let diffuse_radiance = principled_base * (sun * NL * shadow / PI_F + light.ambientColor.xyz);
   let principled = diffuse_radiance + spec_radiance + p_emission + vec3f(sss);
 

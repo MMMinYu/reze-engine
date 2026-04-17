@@ -194,9 +194,11 @@ fn ramp_ease(f: f32, p0: f32, c0: vec4f, p1: f32, c1: vec4f) -> vec4f {
   let D = ggx_d_body(p_ndoth, a2);
   let G = smith_g1_body(p_ndotl, a2) * smith_g1_body(p_ndotv, a2);
   let F = fresnel_schlick_body(p_vdoth, F0_BODY);
-  let spec = (D * G * F) / max(4.0 * p_ndotl * p_ndotv, 0.001);
+  let spec = (D * G * F) / max(4.0 * p_ndotl * p_ndotv, 0.001) * ltc_brdf_scale(p_ndotv, BODY_ROUGHNESS);
   let kd = (1.0 - F) * principled_base / PI_B;
   let direct = (kd + spec) * sun * p_ndotl * shadow;
+  // Indirect diffuse = base_color × L_w per Blender closure_eval_surface_lib.glsl line 302;
+  // probe_evaluate_world_diff returns radiance (SH-projected, not cosine-convolved).
   let ambient = principled_base * light.ambientColor.xyz;
   let principled = ambient + direct + p_emission + vec3f(sss);
 

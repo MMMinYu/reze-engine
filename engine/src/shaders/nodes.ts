@@ -4,6 +4,17 @@
 
 export const NODES_WGSL = /* wgsl */ `
 
+// Baked 64×64 rg16float DFG LUT — created once at engine init by dfg_lut.ts.
+// Paired with group(0) binding(2) diffuseSampler (linear filter, clamp implicit
+// via the half-texel bias inside brdf_lut_baked). Bound by the main per-frame
+// bind group to every material pipeline that includes this module.
+@group(0) @binding(9) var dfgLut: texture_2d<f32>;
+
+// Baked 64×64 rg16float LTC GGX magnitude LUT — ltc_mag_ggx from Blender eevee_lut.c.
+// Heitz 2016 LTC fit amplitude — same UV addressing as dfgLut.
+// Used for direct-specular energy compensation (ltc_brdf_scale in closure_eval_glossy_lib.glsl).
+@group(0) @binding(10) var ltcMag: texture_2d<f32>;
+
 // ─── RGB ↔ HSV ──────────────────────────────────────────────────────
 
 fn rgb_to_hsv(rgb: vec3f) -> vec3f {
@@ -365,6 +376,17 @@ fn brdf_lut_approx(NV: f32, roughness: f32) -> vec2f {
   return vec2f(-1.04, 1.04) * a004 + r.zw;
 }
 
+// Baked 64×64 EEVEE split-sum LUT — exact port of bsdf_lut_frag.glsl.
+// Addressed as Blender's common_utiltex_lib.glsl:lut_coords:
+//   coords = (roughness, sqrt(1 - NV)), then half-texel bias for filtering.
+// Requires group(0) binding(9) dfgLut + binding(2) diffuseSampler in the host shader.
+fn brdf_lut_baked(NV: f32, roughness: f32) -> vec2f {
+  let LUT_SIZE: f32 = 64.0;
+  var uv = vec2f(saturate(roughness), sqrt(saturate(1.0 - NV)));
+  uv = uv * ((LUT_SIZE - 1.0) / LUT_SIZE) + 0.5 / LUT_SIZE;
+  return textureSampleLevel(dfgLut, diffuseSampler, uv, 0.0).rg;
+}
+
 fn F_brdf_single_scatter(f0: vec3f, f90: vec3f, lut: vec2f) -> vec3f {
   return lut.y * f90 + lut.x * f0;
 }
@@ -377,6 +399,20 @@ fn F_brdf_multi_scatter(f0: vec3f, f90: vec3f, lut: vec2f) -> vec3f {
   let Favg = f0 + (1.0 - f0) / 21.0;
   let Fms = FssEss * Favg / (1.0 - (1.0 - Ess) * Favg);
   return FssEss + Fms * Ems;
+}
+
+// EEVEE direct-specular energy compensation factor — closure_eval_glossy_lib.glsl:79-81:
+//   ltc_brdf_scale = (ltc.x + ltc.y) / (split_sum.x + split_sum.y)
+// Because Blender evaluates direct lights via LTC (Heitz 2016) but indirect via split-sum,
+// direct radiance is rescaled so total-energy matches what the split-sum LUT expects.
+// Sample both LUTs at identical lut_coords and return the ratio.
+fn ltc_brdf_scale(NV: f32, roughness: f32) -> f32 {
+  let LUT_SIZE: f32 = 64.0;
+  var uv = vec2f(saturate(roughness), sqrt(saturate(1.0 - NV)));
+  uv = uv * ((LUT_SIZE - 1.0) / LUT_SIZE) + 0.5 / LUT_SIZE;
+  let ltc = textureSampleLevel(ltcMag, diffuseSampler, uv, 0.0).rg;
+  let dfg = textureSampleLevel(dfgLut, diffuseSampler, uv, 0.0).rg;
+  return (ltc.x + ltc.y) / max(dfg.x + dfg.y, 1e-6);
 }
 
 // Luminance-normalized hue extraction — Blender tint_from_color (isolates hue+sat).

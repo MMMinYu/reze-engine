@@ -206,7 +206,7 @@ export default function Home() {
       engineRef.current = engine
       await engine.init()
 
-      engine.setPhysicsEnabled(false)
+      // engine.setPhysicsEnabled(false)
 
 
       const m1 = await engine.loadModel("reze", "/models/塞尔凯特/塞尔凯特.pmx")
@@ -214,34 +214,24 @@ export default function Home() {
       modelRef.current = m1
 
       engine.setMaterialPresets("reze", {
-        eye: ["眼睛","眼白"],
-        face: ["脸"],
-        body: ["皮肤"],
+        eye: ["眼睛","眼白","目白","右瞳"],
+        face: ["脸","face01"],
+        body: ["皮肤","skin"],
         hair: ["头发", "hair_f"],
-        cloth_smooth: ["衣服", "裙子", "裙带", "裙布", "外套", "外套饰", "裤子", "裤子0", "腿环", "发饰"],
+        cloth_smooth: ["衣服", "裙子", "裙带", "裙布", "外套", "外套饰", "裤子", "裤子0", "腿环", "发饰","shirt","shoes","shorts","trigger"],
+        stockings: ["袜子","stockings"],
       })
 
-      const m2 = await engine.loadModel("reze2", "/models/塞尔凯特/塞尔凯特.pmx")
-
-      engine.setMaterialPresets("reze2", {
-        // face: ["脸"],
-        // body: ["皮肤"],
-        // hair: ["头发", "hair_f"],
-        // cloth_smooth: ["衣服", "裙子", "裙带", "裙布", "外套", "外套饰", "裤子", "裤子0", "腿环", "发饰"],
-      })
 
 
       engine.addGround()
 
       engine.runRenderLoop(() => setStats(engine.getStats()))
 
-      m1.moveBones({ "全ての親": new Vec3(-5, 0, 0) }, 0)
-
-      m2.moveBones({ "全ての親": new Vec3(5, 0, 0) }, 0)
-
-
+      await new Promise(resolve=>requestAnimationFrame(resolve))
+      
       await m1.loadVmd(IRIS_ANIM, "/animations/IRIS OUT.vmd")
-      // m1.show(IRIS_ANIM)
+      m1.show(IRIS_ANIM)
       console.log(m1.getMaterials())
 
       m1.setMorphWeight("抗穿模", 0.5)

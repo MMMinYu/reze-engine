@@ -14,6 +14,8 @@ import {
   type AssetReader,
 } from "./asset-reader"
 import { DEFAULT_SHADER_WGSL } from "./shaders/default"
+import { DFG_LUT_SIZE, DFG_LUT_WGSL } from "./shaders/dfg_lut"
+import { LTC_MAG_LUT_SIZE, LTC_MAG_LUT_DATA } from "./shaders/ltc_mag_lut"
 import { FACE_SHADER_WGSL } from "./shaders/face"
 import { HAIR_SHADER_WGSL } from "./shaders/hair"
 import { CLOTH_SMOOTH_SHADER_WGSL } from "./shaders/cloth_smooth"
@@ -21,6 +23,7 @@ import { CLOTH_ROUGH_SHADER_WGSL } from "./shaders/cloth_rough"
 import { METAL_SHADER_WGSL } from "./shaders/metal"
 import { BODY_SHADER_WGSL } from "./shaders/body"
 import { EYE_SHADER_WGSL } from "./shaders/eye"
+import { STOCKINGS_SHADER_WGSL } from "./shaders/stockings"
 import { resolvePreset, type MaterialPreset, type MaterialPresetMap } from "./shaders/classify"
 
 export type RaycastCallback = (modelName: string, material: string | null, screenX: number, screenY: number) => void
@@ -75,7 +78,7 @@ export const DEFAULT_BLOOM_OPTIONS: BloomOptions = {
   knee: 0.5,
   radius: 4.0,
   color: new Vec3(1.0, 0.7247558832168579, 0.6487361788749695),
-  intensity: 0.05,
+  intensity: 0.03,
   clamp: 0.0,
 }
 
@@ -194,6 +197,7 @@ export class Engine {
   private metalPipeline!: GPURenderPipeline
   private bodyPipeline!: GPURenderPipeline
   private eyePipeline!: GPURenderPipeline
+  private stockingsPipeline!: GPURenderPipeline
   private groundShadowPipeline!: GPURenderPipeline
   private groundShadowBindGroupLayout!: GPUBindGroupLayout
   private outlinePipeline!: GPURenderPipeline
@@ -252,6 +256,10 @@ export class Engine {
   private hasGround = false
   private shadowMapTexture!: GPUTexture
   private shadowMapDepthView!: GPUTextureView
+  private dfgLutTexture!: GPUTexture
+  private dfgLutView!: GPUTextureView
+  private ltcMagLutTexture!: GPUTexture
+  private ltcMagLutView!: GPUTextureView
   private static readonly SHADOW_MAP_SIZE = 4096
   private shadowDepthPipeline!: GPURenderPipeline
   private shadowLightVPBuffer!: GPUBuffer
@@ -465,6 +473,78 @@ export class Engine {
     Engine.instance = this
   }
 
+  // One-shot bake of EEVEE's BRDF split-sum DFG LUT — ported from
+  // bsdf_lut_frag.glsl. Runs once per engine init; resulting 64×64 rg16float
+  // texture is sampled by every material shader via group(0) binding(9).
+  private bakeDfgLut() {
+    this.dfgLutTexture = this.device.createTexture({
+      label: "DFG LUT",
+      size: [DFG_LUT_SIZE, DFG_LUT_SIZE],
+      format: "rg16float",
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+    })
+    this.dfgLutView = this.dfgLutTexture.createView()
+
+    const module = this.device.createShaderModule({ label: "DFG LUT bake", code: DFG_LUT_WGSL })
+    const pipeline = this.device.createRenderPipeline({
+      label: "DFG LUT bake pipeline",
+      layout: "auto",
+      vertex: { module, entryPoint: "vs" },
+      fragment: { module, entryPoint: "fs", targets: [{ format: "rg16float" }] },
+      primitive: { topology: "triangle-list" },
+    })
+
+    const enc = this.device.createCommandEncoder({ label: "DFG LUT bake encoder" })
+    const pass = enc.beginRenderPass({
+      colorAttachments: [
+        { view: this.dfgLutView, clearValue: { r: 0, g: 0, b: 0, a: 1 }, loadOp: "clear", storeOp: "store" },
+      ],
+    })
+    pass.setPipeline(pipeline)
+    pass.draw(3, 1, 0, 0)
+    pass.end()
+    this.device.queue.submit([enc.finish()])
+  }
+
+  // Upload Blender's static LTC GGX magnitude LUT (eevee_lut.c ltc_mag_ggx[]).
+  // Pairs with the DFG LUT to form ltc_brdf_scale — closure_eval_glossy_lib.glsl:79-81.
+  private uploadLtcMagLut() {
+    this.ltcMagLutTexture = this.device.createTexture({
+      label: "LTC mag LUT",
+      size: [LTC_MAG_LUT_SIZE, LTC_MAG_LUT_SIZE],
+      format: "rg16float",
+      usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
+    })
+    this.ltcMagLutView = this.ltcMagLutTexture.createView()
+
+    // Float32 → float16 bits. rg16float writeTexture expects packed half floats.
+    const n = LTC_MAG_LUT_DATA.length
+    const half = new Uint16Array(n)
+    const f32 = new Float32Array(1)
+    const u32 = new Uint32Array(f32.buffer)
+    for (let i = 0; i < n; i++) {
+      f32[0] = LTC_MAG_LUT_DATA[i]
+      const x = u32[0]
+      const sign = (x >>> 16) & 0x8000
+      let exp = ((x >>> 23) & 0xff) - 127 + 15
+      let mant = x & 0x7fffff
+      if (exp <= 0) {
+        half[i] = sign // flush tiny values to signed zero (data here is in [0, ~1])
+      } else if (exp >= 31) {
+        half[i] = sign | 0x7c00 // inf
+      } else {
+        half[i] = sign | (exp << 10) | (mant >>> 13)
+      }
+    }
+
+    this.device.queue.writeTexture(
+      { texture: this.ltcMagLutTexture },
+      half,
+      { bytesPerRow: LTC_MAG_LUT_SIZE * 4, rowsPerImage: LTC_MAG_LUT_SIZE },
+      { width: LTC_MAG_LUT_SIZE, height: LTC_MAG_LUT_SIZE, depthOrArrayLayers: 1 }
+    )
+  }
+
   private createRenderPipeline(config: {
     label: string
     layout: GPUPipelineLayout
@@ -601,6 +681,11 @@ export class Engine {
       code: EYE_SHADER_WGSL,
     })
 
+    const stockingsShaderModule = this.device.createShaderModule({
+      label: "stockings NPR shader",
+      code: STOCKINGS_SHADER_WGSL,
+    })
+
     // group 0: per-frame (camera + light + sampler + shadow) — bound once per pass
     this.mainPerFrameBindGroupLayout = this.device.createBindGroupLayout({
       label: "main per-frame bind group layout",
@@ -611,6 +696,8 @@ export class Engine {
         { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "depth" } },
         { binding: 4, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "comparison" } },
         { binding: 5, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+        { binding: 9, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+        { binding: 10, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
       ],
     })
     // group 1: per-instance (skinMats) — bound once per model
@@ -750,6 +837,20 @@ export class Engine {
       },
     })
 
+    this.stockingsPipeline = this.createRenderPipeline({
+      label: "stockings NPR pipeline",
+      layout: mainPipelineLayout,
+      shaderModule: stockingsShaderModule,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTarget: standardBlend,
+      cullMode: "none",
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        depthWriteEnabled: true,
+        depthCompare: "less-equal",
+      },
+    })
+
     this.shadowLightVPBuffer = this.device.createBuffer({
       size: 64,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -806,6 +907,11 @@ export class Engine {
     })
     this.shadowMapDepthView = this.shadowMapTexture.createView()
 
+    // One-shot bake of Blender EEVEE's BRDF split-sum DFG LUT (bsdf_lut_frag.glsl).
+    this.bakeDfgLut()
+    // Upload static LTC GGX magnitude LUT for direct-specular energy compensation.
+    this.uploadLtcMagLut()
+
     // Now that shadow resources exist, create the main per-frame bind group
     this.perFrameBindGroup = this.device.createBindGroup({
       label: "main per-frame bind group",
@@ -817,6 +923,8 @@ export class Engine {
         { binding: 3, resource: this.shadowMapDepthView },
         { binding: 4, resource: this.shadowComparisonSampler },
         { binding: 5, resource: { buffer: this.shadowLightVPBuffer } },
+        { binding: 9, resource: this.dfgLutView },
+        { binding: 10, resource: this.ltcMagLutView },
       ],
     })
 
@@ -1801,7 +1909,7 @@ export class Engine {
     const opts = {
       width: 160,
       height: 160,
-      diffuseColor: new Vec3(0.8, 0.1, 1.0),
+      diffuseColor: new Vec3(0.9, 0.1, 1.0),
       fadeStart: 10.0,
       fadeEnd: 80.0,
       shadowStrength: 1.0,
@@ -2719,6 +2827,7 @@ export class Engine {
     if (preset === "metal") return this.metalPipeline
     if (preset === "body") return this.bodyPipeline
     if (preset === "eye") return this.eyePipeline
+    if (preset === "stockings") return this.stockingsPipeline
     return this.modelPipeline
   }
 
