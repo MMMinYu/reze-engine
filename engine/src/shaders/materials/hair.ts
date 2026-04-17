@@ -176,7 +176,7 @@ struct FSOut {
   let final_color = mix(add_shader, principled, 0.2);
 
   var outAlpha = alpha;
-  if (IS_OVER_EYES) { outAlpha = alpha * 0.6; }
+  if (IS_OVER_EYES) { outAlpha = alpha * 0.5; }
 
   var out: FSOut;
   out.color = vec4f(final_color, outAlpha);
