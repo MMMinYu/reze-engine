@@ -13,6 +13,18 @@ import {
   normalizeAssetPath,
   type AssetReader,
 } from "./asset-reader"
+import { DEFAULT_SHADER_WGSL } from "./shaders/default"
+import { DFG_LUT_SIZE, DFG_LUT_WGSL } from "./shaders/dfg_lut"
+import { LTC_MAG_LUT_SIZE, LTC_MAG_LUT_DATA } from "./shaders/ltc_mag_lut"
+import { FACE_SHADER_WGSL } from "./shaders/face"
+import { HAIR_SHADER_WGSL } from "./shaders/hair"
+import { CLOTH_SMOOTH_SHADER_WGSL } from "./shaders/cloth_smooth"
+import { CLOTH_ROUGH_SHADER_WGSL } from "./shaders/cloth_rough"
+import { METAL_SHADER_WGSL } from "./shaders/metal"
+import { BODY_SHADER_WGSL } from "./shaders/body"
+import { EYE_SHADER_WGSL } from "./shaders/eye"
+import { STOCKINGS_SHADER_WGSL } from "./shaders/stockings"
+import { resolvePreset, type MaterialPreset, type MaterialPresetMap } from "./shaders/classify"
 
 export type RaycastCallback = (modelName: string, material: string | null, screenX: number, screenY: number) => void
 
@@ -22,30 +34,87 @@ export type LoadModelFromFilesOptions = {
   pmxFile?: File
 }
 
+// Blender-style scene config. World = environment lighting (ambient);
+// Sun = the single directional lamp; Camera = view framing.
+export type WorldOptions = {
+  /** Linear scene-referred color of the World Background (Blender: World > Surface > Color). */
+  color?: Vec3
+  /** Multiplier on world color (Blender: World > Surface > Strength). */
+  strength?: number
+}
+
+export type SunOptions = {
+  /** Linear color of the sun lamp (Blender: Light > Color). */
+  color?: Vec3
+  /** Lamp power in Blender units (Blender: Light > Strength). */
+  strength?: number
+  /** Direction sunlight travels (points FROM sun TO scene, Blender: -light.rotation.Z). */
+  direction?: Vec3
+}
+
+export type CameraOptions = {
+  /** Orbit distance from target. */
+  distance?: number
+  /** World-space orbit center. */
+  target?: Vec3
+  /** Vertical field of view in radians. */
+  fov?: number
+}
+
+/** EEVEE Bloom panel (3D Viewport > Render > Bloom). Fields map 1:1 to Blender's UI. */
+export type BloomOptions = {
+  enabled: boolean
+  threshold: number
+  knee: number
+  radius: number
+  color: Vec3
+  intensity: number
+  clamp: number
+}
+
+export const DEFAULT_BLOOM_OPTIONS: BloomOptions = {
+  enabled: true,
+  threshold: 0.5,
+  knee: 0.5,
+  radius: 4.0,
+  color: new Vec3(1.0, 0.7247558832168579, 0.6487361788749695),
+  intensity: 0.03,
+  clamp: 0.0,
+}
+
+/** Blender Color Management / View (rendering.txt: Filmic, exposure, gamma). `look` is reserved for future curve tweaks. */
+export type ViewTransformOptions = {
+  /** Stops applied before Filmic: `linear *= 2^exposure` (Blender default often ~−0.3). */
+  exposure: number
+  /** After Filmic, display gamma (`pow(rgb, 1/gamma)`). */
+  gamma: number
+  look: "default" | "medium_high_contrast"
+}
+
+export const DEFAULT_VIEW_TRANSFORM: ViewTransformOptions = {
+  exposure: -0.30000001192092896,
+  gamma: 1.0,
+  look: "medium_high_contrast",
+}
+
 export type EngineOptions = {
-  ambientColor?: Vec3
-  directionalLightIntensity?: number
-  minSpecularIntensity?: number
-  rimLightIntensity?: number
-  cameraDistance?: number
-  cameraTarget?: Vec3
-  cameraFov?: number
+  world?: WorldOptions
+  sun?: SunOptions
+  camera?: CameraOptions
+  /** Initial EEVEE-style bloom; tune at runtime with `setBloomOptions`. */
+  bloom?: Partial<BloomOptions>
+  /** View transform (exposure/gamma) applied in composite before/after Filmic. */
+  view?: Partial<ViewTransformOptions>
   onRaycast?: RaycastCallback
   physicsOptions?: PhysicsOptions
-  shadowLightDirection?: Vec3
 }
 
 export const DEFAULT_ENGINE_OPTIONS = {
-  ambientColor: new Vec3(0.88, 0.88, 0.88),
-  directionalLightIntensity: 0.24,
-  minSpecularIntensity: 0.3,
-  rimLightIntensity: 0.4,
-  cameraDistance: 26.6,
-  cameraTarget: new Vec3(0, 12.5, 0),
-  cameraFov: Math.PI / 4,
+  world: { color: new Vec3(0.4014, 0.4944, 0.647), strength: 0.3 },
+  sun: { color: new Vec3(1.0, 1.0, 1.0), strength: 2.0, direction: new Vec3(-0.0873, -0.3844, 0.919) },
+  camera: { distance: 26.6, target: new Vec3(0, 12.5, 0), fov: Math.PI / 4 },
   onRaycast: undefined,
   physicsOptions: { constraintSolverKeywords: ["胸"] },
-  shadowLightDirection: new Vec3(0.12, -1, 0.16),
 }
 
 export interface EngineStats {
@@ -53,12 +122,7 @@ export interface EngineStats {
   frameTime: number // ms
 }
 
-type DrawCallType =
-  | "opaque"
-  | "transparent"
-  | "ground"
-  | "opaque-outline"
-  | "transparent-outline"
+type DrawCallType = "opaque" | "transparent" | "ground" | "opaque-outline" | "transparent-outline"
 
 interface DrawCall {
   type: DrawCallType
@@ -66,6 +130,7 @@ interface DrawCall {
   firstIndex: number
   bindGroup: GPUBindGroup
   materialName: string
+  preset: MaterialPreset
 }
 
 interface PickDrawCall {
@@ -93,6 +158,7 @@ interface ModelInstance {
   pickPerInstanceBindGroup: GPUBindGroup
   pickDrawCalls: PickDrawCall[]
   hiddenMaterials: Set<string>
+  materialPresets: MaterialPresetMap | undefined
   physics: Physics | null
   vertexBufferNeedsUpdate: boolean
 }
@@ -114,15 +180,24 @@ export class Engine {
   private camera!: Camera
   private cameraUniformBuffer!: GPUBuffer
   private cameraMatrixData = new Float32Array(36)
-  private cameraDistance!: number
-  private cameraTarget!: Vec3
-  private cameraFov!: number
+  // Blender-style scene config groups (resolved from EngineOptions)
+  private world!: { color: Vec3; strength: number }
+  private sun!: { color: Vec3; strength: number; direction: Vec3 }
+  private cameraConfig!: { distance: number; target: Vec3; fov: number }
   private lightUniformBuffer!: GPUBuffer
   private lightData = new Float32Array(64)
   private lightCount = 0
   private resizeObserver: ResizeObserver | null = null
   private depthTexture!: GPUTexture
   private modelPipeline!: GPURenderPipeline
+  private facePipeline!: GPURenderPipeline
+  private hairPipeline!: GPURenderPipeline
+  private clothSmoothPipeline!: GPURenderPipeline
+  private clothRoughPipeline!: GPURenderPipeline
+  private metalPipeline!: GPURenderPipeline
+  private bodyPipeline!: GPURenderPipeline
+  private eyePipeline!: GPURenderPipeline
+  private stockingsPipeline!: GPURenderPipeline
   private groundShadowPipeline!: GPURenderPipeline
   private groundShadowBindGroupLayout!: GPUBindGroupLayout
   private outlinePipeline!: GPURenderPipeline
@@ -134,22 +209,58 @@ export class Engine {
   private perFrameBindGroup!: GPUBindGroup
   private outlinePerFrameBindGroup!: GPUBindGroup
   private multisampleTexture!: GPUTexture
+  private hdrResolveTexture!: GPUTexture
   private static readonly MULTISAMPLE_COUNT = 4
+  private static readonly HDR_FORMAT: GPUTextureFormat = "rgba16float"
   private renderPassDescriptor!: GPURenderPassDescriptor
+  private compositePassDescriptor!: GPURenderPassDescriptor
+  private compositePipeline!: GPURenderPipeline
+  private compositeBindGroupLayout!: GPUBindGroupLayout
+  private compositeBindGroup!: GPUBindGroup
+  private compositeUniformBuffer!: GPUBuffer
+  // [exposure, gamma, _, _,  bloomTint.x, bloomTint.y, bloomTint.z, bloomIntensity]
+  private readonly compositeUniformData = new Float32Array(8)
 
-  // Ambient light settings
-  private ambientColor!: Vec3
-  private directionalLightIntensity!: number
-  private minSpecularIntensity!: number
-  // Rim light settings
-  private rimLightIntensity!: number
+  // EEVEE-style bloom pyramid (mirrors Blender 3.6 effect_bloom_frag.glsl):
+  //   blit (HDR → half-res, 4-tap Karis + soft threshold/knee)
+  //   N-1 downsamples (13-tap Jimenez/COD box filter, 5 group averages)
+  //   N-1 upsamples (9-tap tent, additively combined with corresponding downsample mip)
+  //   composite adds bloomUp mip 0 × (color × intensity) to HDR before Filmic.
+  // Matches EEVEE energy: tint/intensity applied at composite, not prefilter.
+  private bloomSampler!: GPUSampler
+  private bloomBlitUniformBuffer!: GPUBuffer
+  private bloomUpsampleUniformBuffer!: GPUBuffer
+  private readonly bloomBlitUniformData = new Float32Array(4)
+  private readonly bloomUpsampleUniformData = new Float32Array(4)
+  private bloomBlitPipeline!: GPURenderPipeline
+  private bloomDownsamplePipeline!: GPURenderPipeline
+  private bloomUpsamplePipeline!: GPURenderPipeline
+  private bloomBlitBindGroupLayout!: GPUBindGroupLayout
+  private bloomDownsampleBindGroupLayout!: GPUBindGroupLayout
+  private bloomUpsampleBindGroupLayout!: GPUBindGroupLayout
+  private bloomDownTexture!: GPUTexture
+  private bloomUpTexture!: GPUTexture
+  private bloomMipCount = 0
+  private bloomDownMipViews: GPUTextureView[] = []
+  private bloomUpMipViews: GPUTextureView[] = []
+  private bloomBlitBindGroup!: GPUBindGroup
+  private bloomDownsampleBindGroups: GPUBindGroup[] = []
+  private bloomUpsampleBindGroups: GPUBindGroup[] = []
+  /** Single-attachment pass; colorAttachments[0].view set per bloom step. */
+  private bloomPassDescriptor!: GPURenderPassDescriptor
+  private static readonly BLOOM_MAX_LEVELS = 7
 
   // Ground properties (shadow only)
   private groundVertexBuffer?: GPUBuffer
   private groundIndexBuffer?: GPUBuffer
   private hasGround = false
-  private shadowMapTexture?: GPUTexture
-  private shadowMapDepthView?: GPUTextureView
+  private shadowMapTexture!: GPUTexture
+  private shadowMapDepthView!: GPUTextureView
+  private dfgLutTexture!: GPUTexture
+  private dfgLutView!: GPUTextureView
+  private ltcMagLutTexture!: GPUTexture
+  private ltcMagLutView!: GPUTextureView
+  private static readonly SHADOW_MAP_SIZE = 4096
   private shadowDepthPipeline!: GPURenderPipeline
   private shadowLightVPBuffer!: GPUBuffer
   private shadowLightVPMatrix = new Float32Array(16)
@@ -160,7 +271,6 @@ export class Engine {
 
   private onRaycast?: RaycastCallback
   private physicsOptions: PhysicsOptions = DEFAULT_ENGINE_OPTIONS.physicsOptions
-  private shadowLightDirection: Vec3 = DEFAULT_ENGINE_OPTIONS.shadowLightDirection
   private lastTouchTime = 0
   private readonly DOUBLE_TAP_DELAY = 300
   // GPU picking
@@ -199,22 +309,138 @@ export class Engine {
   }
   private animationFrameId: number | null = null
   private renderLoopCallback: (() => void) | null = null
+  private bloomSettings!: BloomOptions
+  private viewTransform!: ViewTransformOptions
 
   constructor(canvas: HTMLCanvasElement, options?: EngineOptions) {
     this.canvas = canvas
-    if (options) {
-      this.ambientColor = options.ambientColor ?? DEFAULT_ENGINE_OPTIONS.ambientColor
-      this.directionalLightIntensity =
-        options.directionalLightIntensity ?? DEFAULT_ENGINE_OPTIONS.directionalLightIntensity
-      this.minSpecularIntensity = options.minSpecularIntensity ?? DEFAULT_ENGINE_OPTIONS.minSpecularIntensity
-      this.rimLightIntensity = options.rimLightIntensity ?? DEFAULT_ENGINE_OPTIONS.rimLightIntensity
-      this.cameraDistance = options.cameraDistance ?? DEFAULT_ENGINE_OPTIONS.cameraDistance
-      this.cameraTarget = options.cameraTarget ?? DEFAULT_ENGINE_OPTIONS.cameraTarget
-      this.cameraFov = options.cameraFov ?? DEFAULT_ENGINE_OPTIONS.cameraFov
-      this.onRaycast = options.onRaycast
-      this.physicsOptions = options.physicsOptions ?? DEFAULT_ENGINE_OPTIONS.physicsOptions
-      this.shadowLightDirection = options.shadowLightDirection ?? DEFAULT_ENGINE_OPTIONS.shadowLightDirection
+    const d = DEFAULT_ENGINE_OPTIONS
+    this.world = {
+      color: options?.world?.color ?? d.world.color,
+      strength: options?.world?.strength ?? d.world.strength,
     }
+    this.sun = {
+      color: options?.sun?.color ?? d.sun.color,
+      strength: options?.sun?.strength ?? d.sun.strength,
+      direction: options?.sun?.direction ?? d.sun.direction,
+    }
+    this.cameraConfig = {
+      distance: options?.camera?.distance ?? d.camera.distance,
+      target: options?.camera?.target ?? d.camera.target,
+      fov: options?.camera?.fov ?? d.camera.fov,
+    }
+    this.onRaycast = options?.onRaycast
+    this.physicsOptions = options?.physicsOptions ?? d.physicsOptions
+    this.bloomSettings = Engine.mergeBloomDefaults(options?.bloom)
+    this.viewTransform = Engine.mergeViewTransformDefaults(options?.view)
+  }
+
+  /** Merge partial bloom with EEVEE defaults (same as constructor). */
+  static mergeBloomDefaults(partial?: Partial<BloomOptions>): BloomOptions {
+    const d = DEFAULT_BLOOM_OPTIONS
+    const c = partial?.color
+    return {
+      enabled: partial?.enabled ?? d.enabled,
+      threshold: partial?.threshold ?? d.threshold,
+      knee: partial?.knee ?? d.knee,
+      radius: partial?.radius ?? d.radius,
+      color: c ? new Vec3(c.x, c.y, c.z) : new Vec3(d.color.x, d.color.y, d.color.z),
+      intensity: partial?.intensity ?? d.intensity,
+      clamp: partial?.clamp ?? d.clamp,
+    }
+  }
+
+  static mergeViewTransformDefaults(partial?: Partial<ViewTransformOptions>): ViewTransformOptions {
+    const d = DEFAULT_VIEW_TRANSFORM
+    return {
+      exposure: partial?.exposure ?? d.exposure,
+      gamma: partial?.gamma ?? d.gamma,
+      look: partial?.look ?? d.look,
+    }
+  }
+
+  /** Current bloom settings (Blender names; tint is a copied `Vec3`). */
+  getBloomOptions(): BloomOptions {
+    const b = this.bloomSettings
+    return {
+      enabled: b.enabled,
+      threshold: b.threshold,
+      knee: b.knee,
+      radius: b.radius,
+      color: new Vec3(b.color.x, b.color.y, b.color.z),
+      intensity: b.intensity,
+      clamp: b.clamp,
+    }
+  }
+
+  getViewTransformOptions(): ViewTransformOptions {
+    const v = this.viewTransform
+    return { exposure: v.exposure, gamma: v.gamma, look: v.look }
+  }
+
+  setViewTransformOptions(patch: Partial<ViewTransformOptions>): void {
+    const v = this.viewTransform
+    if (patch.exposure !== undefined) v.exposure = patch.exposure
+    if (patch.gamma !== undefined) v.gamma = patch.gamma
+    if (patch.look !== undefined) v.look = patch.look
+    if (this.device && this.compositeUniformBuffer) {
+      this.writeCompositeViewUniforms()
+    }
+  }
+
+  private writeCompositeViewUniforms(): void {
+    const v = this.viewTransform
+    const b = this.bloomSettings
+    const effIntensity = b.enabled ? b.intensity : 0.0
+    const u = this.compositeUniformData
+    u[0] = v.exposure
+    u[1] = Math.max(v.gamma, 1e-4)
+    u[2] = 0.0
+    u[3] = 0.0
+    u[4] = b.color.x
+    u[5] = b.color.y
+    u[6] = b.color.z
+    u[7] = effIntensity
+    this.device.queue.writeBuffer(this.compositeUniformBuffer, 0, u)
+  }
+
+  /** Patch bloom; GPU uniforms update immediately if `init()` has run. */
+  setBloomOptions(patch: Partial<BloomOptions>): void {
+    const b = this.bloomSettings
+    if (patch.enabled !== undefined) b.enabled = patch.enabled
+    if (patch.threshold !== undefined) b.threshold = patch.threshold
+    if (patch.knee !== undefined) b.knee = patch.knee
+    if (patch.radius !== undefined) b.radius = patch.radius
+    if (patch.color !== undefined) {
+      b.color.x = patch.color.x
+      b.color.y = patch.color.y
+      b.color.z = patch.color.z
+    }
+    if (patch.intensity !== undefined) b.intensity = patch.intensity
+    if (patch.clamp !== undefined) b.clamp = patch.clamp
+    if (this.device && this.bloomBlitUniformBuffer) {
+      this.writeBloomUniforms()
+      this.writeCompositeViewUniforms()
+    }
+  }
+
+  // EEVEE prefilter uniforms (blit stage) + upsample sample scale. Intensity/tint live in composite.
+  private writeBloomUniforms(): void {
+    const b = this.bloomSettings
+    const bu = this.bloomBlitUniformData
+    // EEVEE prefilter: threshold, knee, clamp (0 → disabled), _unused
+    bu[0] = b.threshold
+    bu[1] = b.knee
+    bu[2] = b.clamp
+    bu[3] = 0.0
+    this.device.queue.writeBuffer(this.bloomBlitUniformBuffer, 0, bu)
+    const us = this.bloomUpsampleUniformData
+    // Blender: bloom.radius directly controls the tent-filter sample scale in texel units.
+    us[0] = Math.max(0.5, b.radius)
+    us[1] = 0
+    us[2] = 0
+    us[3] = 0
+    this.device.queue.writeBuffer(this.bloomUpsampleUniformBuffer, 0, us)
   }
 
   // Step 1: Get WebGPU device and context
@@ -245,6 +471,78 @@ export class Engine {
     this.createPipelines()
     this.setupResize()
     Engine.instance = this
+  }
+
+  // One-shot bake of EEVEE's BRDF split-sum DFG LUT — ported from
+  // bsdf_lut_frag.glsl. Runs once per engine init; resulting 64×64 rg16float
+  // texture is sampled by every material shader via group(0) binding(9).
+  private bakeDfgLut() {
+    this.dfgLutTexture = this.device.createTexture({
+      label: "DFG LUT",
+      size: [DFG_LUT_SIZE, DFG_LUT_SIZE],
+      format: "rg16float",
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+    })
+    this.dfgLutView = this.dfgLutTexture.createView()
+
+    const module = this.device.createShaderModule({ label: "DFG LUT bake", code: DFG_LUT_WGSL })
+    const pipeline = this.device.createRenderPipeline({
+      label: "DFG LUT bake pipeline",
+      layout: "auto",
+      vertex: { module, entryPoint: "vs" },
+      fragment: { module, entryPoint: "fs", targets: [{ format: "rg16float" }] },
+      primitive: { topology: "triangle-list" },
+    })
+
+    const enc = this.device.createCommandEncoder({ label: "DFG LUT bake encoder" })
+    const pass = enc.beginRenderPass({
+      colorAttachments: [
+        { view: this.dfgLutView, clearValue: { r: 0, g: 0, b: 0, a: 1 }, loadOp: "clear", storeOp: "store" },
+      ],
+    })
+    pass.setPipeline(pipeline)
+    pass.draw(3, 1, 0, 0)
+    pass.end()
+    this.device.queue.submit([enc.finish()])
+  }
+
+  // Upload Blender's static LTC GGX magnitude LUT (eevee_lut.c ltc_mag_ggx[]).
+  // Pairs with the DFG LUT to form ltc_brdf_scale — closure_eval_glossy_lib.glsl:79-81.
+  private uploadLtcMagLut() {
+    this.ltcMagLutTexture = this.device.createTexture({
+      label: "LTC mag LUT",
+      size: [LTC_MAG_LUT_SIZE, LTC_MAG_LUT_SIZE],
+      format: "rg16float",
+      usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
+    })
+    this.ltcMagLutView = this.ltcMagLutTexture.createView()
+
+    // Float32 → float16 bits. rg16float writeTexture expects packed half floats.
+    const n = LTC_MAG_LUT_DATA.length
+    const half = new Uint16Array(n)
+    const f32 = new Float32Array(1)
+    const u32 = new Uint32Array(f32.buffer)
+    for (let i = 0; i < n; i++) {
+      f32[0] = LTC_MAG_LUT_DATA[i]
+      const x = u32[0]
+      const sign = (x >>> 16) & 0x8000
+      let exp = ((x >>> 23) & 0xff) - 127 + 15
+      let mant = x & 0x7fffff
+      if (exp <= 0) {
+        half[i] = sign // flush tiny values to signed zero (data here is in [0, ~1])
+      } else if (exp >= 31) {
+        half[i] = sign | 0x7c00 // inf
+      } else {
+        half[i] = sign | (exp << 10) | (mant >>> 13)
+      }
+    }
+
+    this.device.queue.writeTexture(
+      { texture: this.ltcMagLutTexture },
+      half,
+      { bytesPerRow: LTC_MAG_LUT_SIZE * 4, rowsPerImage: LTC_MAG_LUT_SIZE },
+      { width: LTC_MAG_LUT_SIZE, height: LTC_MAG_LUT_SIZE, depthOrArrayLayers: 1 }
+    )
   }
 
   private createRenderPipeline(config: {
@@ -324,8 +622,11 @@ export class Engine {
       },
     ]
 
+    // Internal scene passes render into the HDR offscreen target; only the final
+    // composite pass writes the swapchain. Tonemap moved to composite so bloom
+    // (added next) can run on linear HDR.
     const standardBlend: GPUColorTargetState = {
-      format: this.presentationFormat,
+      format: Engine.HDR_FORMAT,
       blend: {
         color: {
           srcFactor: "src-alpha",
@@ -341,146 +642,68 @@ export class Engine {
     }
 
     const shaderModule = this.device.createShaderModule({
-      label: "model shaders",
-      code: /* wgsl */ `
-        struct CameraUniforms {
-          view: mat4x4f,
-          projection: mat4x4f,
-          viewPos: vec3f,
-          _padding: f32,
-        };
-
-        struct Light {
-          direction: vec4f,
-          color: vec4f,
-        };
-
-        struct LightUniforms {
-          ambientColor: vec4f,
-          lights: array<Light, 4>,
-        };
-
-        struct MaterialUniforms {
-          alpha: f32,
-          rimIntensity: f32,
-          shininess: f32,
-          _padding1: f32,
-          rimColor: vec3f,
-          _padding2: f32,
-          diffuseColor: vec3f,
-          _padding3: f32,
-          ambientColor: vec3f,
-          _padding4: f32,
-          specularColor: vec3f,
-          _padding5: f32,
-        };
-
-        struct VertexOutput {
-          @builtin(position) position: vec4f,
-          @location(0) normal: vec3f,
-          @location(1) uv: vec2f,
-          @location(2) worldPos: vec3f,
-        };
-
-        // group 0: per-frame (bound once per pass)
-        @group(0) @binding(0) var<uniform> camera: CameraUniforms;
-        @group(0) @binding(1) var<uniform> light: LightUniforms;
-        @group(0) @binding(2) var diffuseSampler: sampler;
-        // group 1: per-instance (bound once per model)
-        @group(1) @binding(0) var<storage, read> skinMats: array<mat4x4f>;
-        // group 2: per-material (bound per draw call)
-        @group(2) @binding(0) var diffuseTexture: texture_2d<f32>;
-        @group(2) @binding(1) var<uniform> material: MaterialUniforms;
-
-        @vertex fn vs(
-          @location(0) position: vec3f,
-          @location(1) normal: vec3f,
-          @location(2) uv: vec2f,
-          @location(3) joints0: vec4<u32>,
-          @location(4) weights0: vec4<f32>
-        ) -> VertexOutput {
-          var output: VertexOutput;
-          let pos4 = vec4f(position, 1.0);
-          
-          let weightSum = weights0.x + weights0.y + weights0.z + weights0.w;
-          let invWeightSum = select(1.0, 1.0 / weightSum, weightSum > 0.0001);
-          let normalizedWeights = select(vec4f(1.0, 0.0, 0.0, 0.0), weights0 * invWeightSum, weightSum > 0.0001);
-          
-          var skinnedPos = vec4f(0.0, 0.0, 0.0, 0.0);
-          var skinnedNrm = vec3f(0.0, 0.0, 0.0);
-          for (var i = 0u; i < 4u; i++) {
-            let j = joints0[i];
-            let w = normalizedWeights[i];
-            let m = skinMats[j];
-            skinnedPos += (m * pos4) * w;
-            let r3 = mat3x3f(m[0].xyz, m[1].xyz, m[2].xyz);
-            skinnedNrm += (r3 * normal) * w;
-          }
-          let worldPos = skinnedPos.xyz;
-          output.position = camera.projection * camera.view * vec4f(worldPos, 1.0);
-          output.normal = normalize(skinnedNrm);
-          output.uv = uv;
-          output.worldPos = worldPos;
-          return output;
-        }
-
-        @fragment fn fs(input: VertexOutput) -> @location(0) vec4f {
-          let finalAlpha = material.alpha;
-          if (finalAlpha < 0.001) {
-            discard;
-          }
-          
-          let n = normalize(input.normal);
-          let textureColor = textureSample(diffuseTexture, diffuseSampler, input.uv).rgb;
-
-          let viewDir = normalize(camera.viewPos - input.worldPos);
-
-          let albedo = textureColor * material.diffuseColor;
-          
-          let minSpec = light.ambientColor.w;
-          let effectiveSpecular = max(material.specularColor, vec3f(minSpec));
-          let specPower = max(material.shininess, 1.0);
-          
-          let l = -light.lights[0].direction.xyz;
-          let nDotL = max(dot(n, l), 0.0);
-          let intensity = light.lights[0].color.w;
-          let radiance = light.lights[0].color.xyz * intensity;
-          
-          let lightAccum = light.ambientColor.xyz + radiance * nDotL;
-
-          let h = normalize(l + viewDir);
-          let nDotH = max(dot(n, h), 0.0);
-          let specFactor = pow(nDotH, specPower);
-          let specularAccum = effectiveSpecular * radiance * specFactor * nDotL;
-          
-          let litColor = albedo * lightAccum;
-
-          let fresnel = 1.0 - abs(dot(n, viewDir));
-          let rimFactor = pow(fresnel, 4.0);
-          let rimLight = material.rimColor * material.rimIntensity * rimFactor;
-
-          let color = litColor + specularAccum + rimLight;
-          
-          return vec4f(color, finalAlpha);
-        }
-      `,
+      label: "default model shader",
+      code: DEFAULT_SHADER_WGSL,
     })
 
-    // group 0: per-frame (camera + light + sampler) — bound once per pass
+    const faceShaderModule = this.device.createShaderModule({
+      label: "face NPR shader",
+      code: FACE_SHADER_WGSL,
+    })
+
+    const hairShaderModule = this.device.createShaderModule({
+      label: "hair NPR shader",
+      code: HAIR_SHADER_WGSL,
+    })
+
+    const clothSmoothShaderModule = this.device.createShaderModule({
+      label: "cloth smooth NPR shader",
+      code: CLOTH_SMOOTH_SHADER_WGSL,
+    })
+
+    const clothRoughShaderModule = this.device.createShaderModule({
+      label: "cloth rough NPR shader",
+      code: CLOTH_ROUGH_SHADER_WGSL,
+    })
+
+    const metalShaderModule = this.device.createShaderModule({
+      label: "metal NPR shader",
+      code: METAL_SHADER_WGSL,
+    })
+
+    const bodyShaderModule = this.device.createShaderModule({
+      label: "body NPR shader",
+      code: BODY_SHADER_WGSL,
+    })
+
+    const eyeShaderModule = this.device.createShaderModule({
+      label: "eye shader",
+      code: EYE_SHADER_WGSL,
+    })
+
+    const stockingsShaderModule = this.device.createShaderModule({
+      label: "stockings NPR shader",
+      code: STOCKINGS_SHADER_WGSL,
+    })
+
+    // group 0: per-frame (camera + light + sampler + shadow) — bound once per pass
     this.mainPerFrameBindGroupLayout = this.device.createBindGroupLayout({
       label: "main per-frame bind group layout",
       entries: [
         { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
         { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
         { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "depth" } },
+        { binding: 4, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "comparison" } },
+        { binding: 5, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+        { binding: 9, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+        { binding: 10, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
       ],
     })
     // group 1: per-instance (skinMats) — bound once per model
     this.mainPerInstanceBindGroupLayout = this.device.createBindGroupLayout({
       label: "main per-instance bind group layout",
-      entries: [
-        { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } },
-      ],
+      entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } }],
     })
     // group 2: per-material (texture + material uniforms) — bound per draw call
     this.mainPerMaterialBindGroupLayout = this.device.createBindGroupLayout({
@@ -493,23 +716,131 @@ export class Engine {
 
     const mainPipelineLayout = this.device.createPipelineLayout({
       label: "main pipeline layout",
-      bindGroupLayouts: [this.mainPerFrameBindGroupLayout, this.mainPerInstanceBindGroupLayout, this.mainPerMaterialBindGroupLayout],
-    })
-
-    this.perFrameBindGroup = this.device.createBindGroup({
-      label: "main per-frame bind group",
-      layout: this.mainPerFrameBindGroupLayout,
-      entries: [
-        { binding: 0, resource: { buffer: this.cameraUniformBuffer } },
-        { binding: 1, resource: { buffer: this.lightUniformBuffer } },
-        { binding: 2, resource: this.materialSampler },
+      bindGroupLayouts: [
+        this.mainPerFrameBindGroupLayout,
+        this.mainPerInstanceBindGroupLayout,
+        this.mainPerMaterialBindGroupLayout,
       ],
     })
+
+    // perFrameBindGroup is created after shadow resources below
 
     this.modelPipeline = this.createRenderPipeline({
       label: "model pipeline",
       layout: mainPipelineLayout,
       shaderModule,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTarget: standardBlend,
+      cullMode: "none",
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        depthWriteEnabled: true,
+        depthCompare: "less-equal",
+      },
+    })
+
+    this.facePipeline = this.createRenderPipeline({
+      label: "face NPR pipeline",
+      layout: mainPipelineLayout,
+      shaderModule: faceShaderModule,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTarget: standardBlend,
+      cullMode: "none",
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        depthWriteEnabled: true,
+        depthCompare: "less-equal",
+      },
+    })
+
+    this.hairPipeline = this.createRenderPipeline({
+      label: "hair NPR pipeline",
+      layout: mainPipelineLayout,
+      shaderModule: hairShaderModule,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTarget: standardBlend,
+      cullMode: "none",
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        depthWriteEnabled: true,
+        depthCompare: "less-equal",
+      },
+    })
+
+    this.clothSmoothPipeline = this.createRenderPipeline({
+      label: "cloth smooth NPR pipeline",
+      layout: mainPipelineLayout,
+      shaderModule: clothSmoothShaderModule,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTarget: standardBlend,
+      cullMode: "none",
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        depthWriteEnabled: true,
+        depthCompare: "less-equal",
+      },
+    })
+
+    this.clothRoughPipeline = this.createRenderPipeline({
+      label: "cloth rough NPR pipeline",
+      layout: mainPipelineLayout,
+      shaderModule: clothRoughShaderModule,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTarget: standardBlend,
+      cullMode: "none",
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        depthWriteEnabled: true,
+        depthCompare: "less-equal",
+      },
+    })
+
+    this.metalPipeline = this.createRenderPipeline({
+      label: "metal NPR pipeline",
+      layout: mainPipelineLayout,
+      shaderModule: metalShaderModule,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTarget: standardBlend,
+      cullMode: "none",
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        depthWriteEnabled: true,
+        depthCompare: "less-equal",
+      },
+    })
+
+    this.bodyPipeline = this.createRenderPipeline({
+      label: "body NPR pipeline",
+      layout: mainPipelineLayout,
+      shaderModule: bodyShaderModule,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTarget: standardBlend,
+      cullMode: "none",
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        depthWriteEnabled: true,
+        depthCompare: "less-equal",
+      },
+    })
+
+    this.eyePipeline = this.createRenderPipeline({
+      label: "eye pipeline",
+      layout: mainPipelineLayout,
+      shaderModule: eyeShaderModule,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTarget: standardBlend,
+      cullMode: "none",
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        depthWriteEnabled: true,
+        depthCompare: "less-equal",
+      },
+    })
+
+    this.stockingsPipeline = this.createRenderPipeline({
+      label: "stockings NPR pipeline",
+      layout: mainPipelineLayout,
+      shaderModule: stockingsShaderModule,
       vertexBuffers: fullVertexBuffers,
       fragmentTarget: standardBlend,
       cullMode: "none",
@@ -568,6 +899,35 @@ export class Engine {
       magFilter: "linear",
       minFilter: "linear",
     })
+    this.shadowMapTexture = this.device.createTexture({
+      label: "shadow map",
+      size: [Engine.SHADOW_MAP_SIZE, Engine.SHADOW_MAP_SIZE],
+      format: "depth32float",
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+    })
+    this.shadowMapDepthView = this.shadowMapTexture.createView()
+
+    // One-shot bake of Blender EEVEE's BRDF split-sum DFG LUT (bsdf_lut_frag.glsl).
+    this.bakeDfgLut()
+    // Upload static LTC GGX magnitude LUT for direct-specular energy compensation.
+    this.uploadLtcMagLut()
+
+    // Now that shadow resources exist, create the main per-frame bind group
+    this.perFrameBindGroup = this.device.createBindGroup({
+      label: "main per-frame bind group",
+      layout: this.mainPerFrameBindGroupLayout,
+      entries: [
+        { binding: 0, resource: { buffer: this.cameraUniformBuffer } },
+        { binding: 1, resource: { buffer: this.lightUniformBuffer } },
+        { binding: 2, resource: this.materialSampler },
+        { binding: 3, resource: this.shadowMapDepthView },
+        { binding: 4, resource: this.shadowComparisonSampler },
+        { binding: 5, resource: { buffer: this.shadowLightVPBuffer } },
+        { binding: 9, resource: this.dfgLutView },
+        { binding: 10, resource: this.ltcMagLutView },
+      ],
+    })
+
     this.groundShadowBindGroupLayout = this.device.createBindGroupLayout({
       label: "ground shadow layout",
       entries: [
@@ -698,15 +1058,17 @@ export class Engine {
 
     const outlinePipelineLayout = this.device.createPipelineLayout({
       label: "outline pipeline layout",
-      bindGroupLayouts: [this.outlinePerFrameBindGroupLayout, this.mainPerInstanceBindGroupLayout, this.outlinePerMaterialBindGroupLayout],
+      bindGroupLayouts: [
+        this.outlinePerFrameBindGroupLayout,
+        this.mainPerInstanceBindGroupLayout,
+        this.outlinePerMaterialBindGroupLayout,
+      ],
     })
 
     this.outlinePerFrameBindGroup = this.device.createBindGroup({
       label: "outline per-frame bind group",
       layout: this.outlinePerFrameBindGroupLayout,
-      entries: [
-        { binding: 0, resource: { buffer: this.cameraUniformBuffer } },
-      ],
+      entries: [{ binding: 0, resource: { buffer: this.cameraUniformBuffer } }],
     })
 
     const outlineShaderModule = this.device.createShaderModule({
@@ -763,12 +1125,27 @@ export class Engine {
           }
           let worldPos = skinnedPos.xyz;
           let worldNormal = normalize(skinnedNrm);
-          // Screen-stable edgeline: extrusion ∝ camera distance (same idea as MMD viewers / babylon-mmd-style scaling)
-          let camDist = max(length(camera.viewPos - worldPos), 0.25);
-          let refDist = 30.0;
-          let edgeScale = 0.025;
-          let expandedPos = worldPos + worldNormal * material.edgeSize * edgeScale * (camDist / refDist);
-          output.position = camera.projection * camera.view * vec4f(expandedPos, 1.0);
+
+          // Screen-space outline extrusion — MMD-style pixel-stable edge line.
+          // 1. Project position and normal-as-direction to clip space.
+          // 2. Normalize the 2D clip-space normal, aspect-compensated so "one pixel horizontally"
+          //    matches "one pixel vertically" (otherwise wide viewports squash the outline in X).
+          // 3. Offset clip-space xy by (normal * edgeSize * edgeScale), then multiply by w
+          //    so the perspective divide cancels out → offset stays constant in NDC regardless
+          //    of depth, matching how MMD / babylon-mmd style outlines look identical when zooming.
+          // 4. edgeScale is in NDC-y units per PMX edgeSize. ≈ 0.006 gives ~3px at 1080p; it's
+          //    tied to viewport HEIGHT so resizing the window keeps pixel thickness stable.
+          let viewProj = camera.projection * camera.view;
+          let clipPos = viewProj * vec4f(worldPos, 1.0);
+          let clipNormal = (viewProj * vec4f(worldNormal, 0.0)).xy;
+          // projection is column-major: proj[0][0] = 1/(aspect·tan(fov/2)), proj[1][1] = 1/tan(fov/2).
+          // Ratio proj[1][1]/proj[0][0] recovers the viewport aspect (width/height).
+          let aspect = camera.projection[1][1] / camera.projection[0][0];
+          let pixelDir = normalize(vec2f(clipNormal.x * aspect, clipNormal.y));
+          let ndcDir = vec2f(pixelDir.x / aspect, pixelDir.y);
+          let edgeScale = 0.0016;
+          let offset = ndcDir * material.edgeSize * edgeScale * clipPos.w;
+          output.position = vec4f(clipPos.xy + offset, clipPos.z, clipPos.w);
           return output;
         }
 
@@ -792,6 +1169,289 @@ export class Engine {
         depthCompare: "less-equal",
       },
     })
+
+    // ─── Bloom (EEVEE 3.6 pyramid): blit(Karis prefilter) → 13-tap downsamples → 9-tap tent upsamples ───
+    // Mirrors source/blender/draw/engines/eevee/shaders/effect_bloom_frag.glsl.
+    // Firefly suppression lives in the blit (Karis luminance-weighted 4-tap average). A single-pass
+    // Gaussian cannot reproduce this — hot pixels dominate and produce the sparkle halo.
+    this.bloomSampler = this.device.createSampler({
+      label: "bloom sampler",
+      magFilter: "linear",
+      minFilter: "linear",
+      addressModeU: "clamp-to-edge",
+      addressModeV: "clamp-to-edge",
+    })
+    this.bloomBlitUniformBuffer = this.device.createBuffer({
+      label: "bloom blit uniforms",
+      size: 16,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    })
+    this.bloomUpsampleUniformBuffer = this.device.createBuffer({
+      label: "bloom upsample uniforms",
+      size: 16,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    })
+
+    this.bloomBlitBindGroupLayout = this.device.createBindGroupLayout({
+      label: "bloom blit layout",
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "unfilterable-float" } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+      ],
+    })
+    this.bloomDownsampleBindGroupLayout = this.device.createBindGroupLayout({
+      label: "bloom downsample layout",
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+      ],
+    })
+    this.bloomUpsampleBindGroupLayout = this.device.createBindGroupLayout({
+      label: "bloom upsample layout",
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: {} }, // coarser-mip accumulator
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: {} }, // matching downsample mip (base add)
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+      ],
+    })
+
+    const bloomFullscreenVs = /* wgsl */ `
+      @vertex fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
+        let x = f32((vi & 1u) << 2u) - 1.0;
+        let y = f32((vi & 2u) << 1u) - 1.0;
+        return vec4f(x, y, 0.0, 1.0);
+      }
+    `
+
+    // Blit: full-res HDR → half-res. Karis 4-tap firefly average + EEVEE quadratic knee threshold + clamp.
+    const bloomBlitShader = this.device.createShaderModule({
+      label: "bloom blit (Karis prefilter)",
+      code: `${bloomFullscreenVs}
+        @group(0) @binding(0) var hdrTex: texture_2d<f32>;
+        @group(0) @binding(1) var<uniform> prefilter: vec4<f32>; // threshold, knee, clamp, _unused
+
+        fn luminance(c: vec3f) -> f32 {
+          return dot(max(c, vec3f(0.0)), vec3f(0.2126, 0.7152, 0.0722));
+        }
+        fn fetch(c: vec2<i32>, clampV: f32) -> vec3f {
+          let d = vec2<i32>(textureDimensions(hdrTex));
+          let cc = clamp(c, vec2<i32>(0), d - vec2<i32>(1));
+          let s = textureLoad(hdrTex, cc, 0);
+          // Scene pass uses src-alpha blend with clear alpha 0 → premultiplied. Unpremultiply.
+          let rgb = max(s.rgb / max(s.a, 1e-6), vec3f(0.0));
+          // Blender: clamp each tap BEFORE Karis average (eevee_bloom: color = min(clampIntensity, color)).
+          return select(rgb, min(rgb, vec3f(clampV)), clampV > 0.0);
+        }
+
+        @fragment fn fs(@builtin(position) p: vec4f) -> @location(0) vec4f {
+          let dst = vec2<i32>(p.xy - vec2f(0.5));
+          let base = dst * 2;
+          let clampV = prefilter.z;
+          let a = fetch(base + vec2<i32>(0, 0), clampV);
+          let b = fetch(base + vec2<i32>(1, 0), clampV);
+          let c = fetch(base + vec2<i32>(0, 1), clampV);
+          let d = fetch(base + vec2<i32>(1, 1), clampV);
+          // Karis partial average: weight each tap by 1/(1+luma) — suppresses fireflies.
+          let wa = 1.0 / (1.0 + luminance(a));
+          let wb = 1.0 / (1.0 + luminance(b));
+          let wc = 1.0 / (1.0 + luminance(c));
+          let wd = 1.0 / (1.0 + luminance(d));
+          let avg = (a * wa + b * wb + c * wc + d * wd) / max(wa + wb + wc + wd, 1e-6);
+          // EEVEE quadratic threshold (brightness = max-channel, then soft-knee curve).
+          let bright = max(avg.r, max(avg.g, avg.b));
+          let soft = clamp(bright - prefilter.x + prefilter.y, 0.0, 2.0 * prefilter.y);
+          let q = (soft * soft) / (4.0 * max(prefilter.y, 1e-4) + 1e-6);
+          let contrib = max(q, bright - prefilter.x) / max(bright, 1e-4);
+          return vec4f(max(avg * contrib, vec3f(0.0)), 1.0);
+        }
+      `,
+    })
+
+    // Downsample: Jimenez/COD 13-tap dual-box — 5 weighted 2×2 averages, rejects nyquist ringing.
+    const bloomDownsampleShader = this.device.createShaderModule({
+      label: "bloom downsample 13-tap",
+      code: `${bloomFullscreenVs}
+        @group(0) @binding(0) var srcTex: texture_2d<f32>;
+        @group(0) @binding(1) var srcSamp: sampler;
+
+        fn samp(uv: vec2f, off: vec2f) -> vec3f {
+          return textureSampleLevel(srcTex, srcSamp, uv + off, 0.0).rgb;
+        }
+
+        @fragment fn fs(@builtin(position) p: vec4f) -> @location(0) vec4f {
+          let srcDims = vec2f(textureDimensions(srcTex));
+          let t = 1.0 / srcDims;
+          // fragCoord.xy reports pixel centers (e.g. 0.5,0.5 for first pixel) — divide by dst dims directly.
+          let dstDims = srcDims * 0.5;
+          let uv = p.xy / max(dstDims, vec2f(1.0));
+          let A = samp(uv, t * vec2f(-2.0, -2.0));
+          let B = samp(uv, t * vec2f( 0.0, -2.0));
+          let C = samp(uv, t * vec2f( 2.0, -2.0));
+          let D = samp(uv, t * vec2f(-1.0, -1.0));
+          let E = samp(uv, t * vec2f( 1.0, -1.0));
+          let F = samp(uv, t * vec2f(-2.0,  0.0));
+          let G = samp(uv, t * vec2f( 0.0,  0.0));
+          let H = samp(uv, t * vec2f( 2.0,  0.0));
+          let I = samp(uv, t * vec2f(-1.0,  1.0));
+          let J = samp(uv, t * vec2f( 1.0,  1.0));
+          let K = samp(uv, t * vec2f(-2.0,  2.0));
+          let L = samp(uv, t * vec2f( 0.0,  2.0));
+          let M = samp(uv, t * vec2f( 2.0,  2.0));
+          var o = (D + E + I + J) * (0.5 / 4.0);
+          o = o + (A + B + G + F) * (0.125 / 4.0);
+          o = o + (B + C + H + G) * (0.125 / 4.0);
+          o = o + (F + G + L + K) * (0.125 / 4.0);
+          o = o + (G + H + M + L) * (0.125 / 4.0);
+          return vec4f(o, 1.0);
+        }
+      `,
+    })
+
+    // Upsample: 9-tap tent, progressively added to matching downsample mip. Blender radius = sample scale.
+    const bloomUpsampleShader = this.device.createShaderModule({
+      label: "bloom upsample 9-tap tent",
+      code: `${bloomFullscreenVs}
+        @group(0) @binding(0) var srcTex: texture_2d<f32>;   // coarser accumulator
+        @group(0) @binding(1) var baseTex: texture_2d<f32>;  // matching downsample mip
+        @group(0) @binding(2) var srcSamp: sampler;
+        @group(0) @binding(3) var<uniform> upU: vec4<f32>;   // sampleScale, _, _, _
+
+        @fragment fn fs(@builtin(position) p: vec4f) -> @location(0) vec4f {
+          let srcDims = vec2f(textureDimensions(srcTex));
+          let baseDims = vec2f(textureDimensions(baseTex));
+          let uv = p.xy / max(baseDims, vec2f(1.0));
+          let t = upU.x / srcDims;
+          var o = textureSampleLevel(srcTex, srcSamp, uv + t * vec2f(-1.0, -1.0), 0.0).rgb * 1.0;
+          o = o + textureSampleLevel(srcTex, srcSamp, uv + t * vec2f( 0.0, -1.0), 0.0).rgb * 2.0;
+          o = o + textureSampleLevel(srcTex, srcSamp, uv + t * vec2f( 1.0, -1.0), 0.0).rgb * 1.0;
+          o = o + textureSampleLevel(srcTex, srcSamp, uv + t * vec2f(-1.0,  0.0), 0.0).rgb * 2.0;
+          o = o + textureSampleLevel(srcTex, srcSamp, uv + t * vec2f( 0.0,  0.0), 0.0).rgb * 4.0;
+          o = o + textureSampleLevel(srcTex, srcSamp, uv + t * vec2f( 1.0,  0.0), 0.0).rgb * 2.0;
+          o = o + textureSampleLevel(srcTex, srcSamp, uv + t * vec2f(-1.0,  1.0), 0.0).rgb * 1.0;
+          o = o + textureSampleLevel(srcTex, srcSamp, uv + t * vec2f( 0.0,  1.0), 0.0).rgb * 2.0;
+          o = o + textureSampleLevel(srcTex, srcSamp, uv + t * vec2f( 1.0,  1.0), 0.0).rgb * 1.0;
+          o = o * (1.0 / 16.0);
+          let base = textureSampleLevel(baseTex, srcSamp, uv, 0.0).rgb;
+          return vec4f(o + base, 1.0);
+        }
+      `,
+    })
+
+    const bloomBlitLayout = this.device.createPipelineLayout({ bindGroupLayouts: [this.bloomBlitBindGroupLayout] })
+    const bloomDownLayout = this.device.createPipelineLayout({ bindGroupLayouts: [this.bloomDownsampleBindGroupLayout] })
+    const bloomUpLayout = this.device.createPipelineLayout({ bindGroupLayouts: [this.bloomUpsampleBindGroupLayout] })
+
+    this.bloomBlitPipeline = this.device.createRenderPipeline({
+      label: "bloom blit pipeline",
+      layout: bloomBlitLayout,
+      vertex: { module: bloomBlitShader, entryPoint: "vs" },
+      fragment: { module: bloomBlitShader, entryPoint: "fs", targets: [{ format: Engine.HDR_FORMAT }] },
+      primitive: { topology: "triangle-list" },
+    })
+    this.bloomDownsamplePipeline = this.device.createRenderPipeline({
+      label: "bloom downsample pipeline",
+      layout: bloomDownLayout,
+      vertex: { module: bloomDownsampleShader, entryPoint: "vs" },
+      fragment: { module: bloomDownsampleShader, entryPoint: "fs", targets: [{ format: Engine.HDR_FORMAT }] },
+      primitive: { topology: "triangle-list" },
+    })
+    this.bloomUpsamplePipeline = this.device.createRenderPipeline({
+      label: "bloom upsample pipeline",
+      layout: bloomUpLayout,
+      vertex: { module: bloomUpsampleShader, entryPoint: "vs" },
+      fragment: { module: bloomUpsampleShader, entryPoint: "fs", targets: [{ format: Engine.HDR_FORMAT }] },
+      primitive: { topology: "triangle-list" },
+    })
+
+    // ─── Composite: HDR + bloom → Filmic → swapchain (premultiplied) ───
+    // Bloom color/intensity applied HERE (pyramid is pure energy; tint belongs to the combine step,
+    // mirroring EEVEE where bloom color/intensity are combine-stage params, not prefilter).
+    this.compositeUniformBuffer = this.device.createBuffer({
+      label: "composite view uniforms",
+      size: 32,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    })
+    this.compositeBindGroupLayout = this.device.createBindGroupLayout({
+      label: "composite bind group layout",
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "unfilterable-float" } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+      ],
+    })
+
+    const compositeShader = this.device.createShaderModule({
+      label: "composite shader",
+      code: /* wgsl */ `
+        @group(0) @binding(0) var hdrTex: texture_2d<f32>;
+        @group(0) @binding(1) var bloomTex: texture_2d<f32>;   // bloomUpTexture mip 0 (full pyramid top)
+        @group(0) @binding(2) var bloomSamp: sampler;
+        @group(0) @binding(3) var<uniform> viewU: array<vec4<f32>, 2>;
+        // viewU[0] = (exposure, gamma, _, _);  viewU[1] = (tint.rgb, intensity)
+
+        fn filmic(x: f32) -> f32 {
+          var lut = array<f32, 14>(
+            0.0067, 0.0141, 0.0272, 0.0499, 0.0885, 0.1512, 0.2462,
+            0.3753, 0.5273, 0.6776, 0.8031, 0.8929, 0.9495, 0.9814
+          );
+          let t = clamp(log2(max(x, 1e-10)) + 10.0, 0.0, 13.0);
+          let i = u32(t);
+          let j = min(i + 1u, 13u);
+          return mix(lut[i], lut[j], t - f32(i));
+        }
+
+        @vertex fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
+          let x = f32((vi & 1u) << 2u) - 1.0;
+          let y = f32((vi & 2u) << 1u) - 1.0;
+          return vec4f(x, y, 0.0, 1.0);
+        }
+
+        @fragment fn fs(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
+          let hdr = textureLoad(hdrTex, vec2<i32>(fragCoord.xy), 0);
+          let a = max(hdr.a, 1e-6);
+          let straight = hdr.rgb / a;
+          let fullSz = vec2f(textureDimensions(hdrTex));
+          let bloomSz = vec2f(textureDimensions(bloomTex));
+          // Bloom is at half-res (pyramid mip 0). Sampler interpolates back to full-res UVs.
+          let bloomUv = (fragCoord.xy + vec2f(0.5)) / max(fullSz, vec2f(1.0));
+          let tint = viewU[1].xyz;
+          let intensity = viewU[1].w;
+          let bloom = textureSampleLevel(bloomTex, bloomSamp, bloomUv, 0.0).rgb * tint * intensity;
+          let combined = straight + bloom;
+          let exposed = combined * exp2(viewU[0].x);
+          let tm = vec3f(filmic(exposed.r), filmic(exposed.g), filmic(exposed.b));
+          let g = max(viewU[0].y, 1e-4);
+          let disp = pow(max(tm, vec3f(0.0)), vec3f(1.0 / g));
+          return vec4f(disp * hdr.a, hdr.a);
+        }
+      `,
+    })
+
+    this.compositePipeline = this.device.createRenderPipeline({
+      label: "composite pipeline",
+      layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.compositeBindGroupLayout] }),
+      vertex: { module: compositeShader, entryPoint: "vs" },
+      fragment: {
+        module: compositeShader,
+        entryPoint: "fs",
+        targets: [{ format: this.presentationFormat }],
+      },
+      primitive: { topology: "triangle-list" },
+    })
+
+    this.bloomPassDescriptor = {
+      label: "bloom pass",
+      colorAttachments: [
+        {
+          view: undefined as unknown as GPUTextureView,
+          clearValue: { r: 0, g: 0, b: 0, a: 0 },
+          loadOp: "clear",
+          storeOp: "store",
+        },
+      ],
+    } as GPURenderPassDescriptor
 
     // GPU picking: encode (modelIndex, materialIndex) as color
     const pickShaderModule = this.device.createShaderModule({
@@ -838,34 +1498,30 @@ export class Engine {
 
     this.pickPerFrameBindGroupLayout = this.device.createBindGroupLayout({
       label: "pick per-frame layout",
-      entries: [
-        { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "uniform" } },
-      ],
+      entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "uniform" } }],
     })
     this.pickPerInstanceBindGroupLayout = this.device.createBindGroupLayout({
       label: "pick per-instance layout",
-      entries: [
-        { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } },
-      ],
+      entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } }],
     })
     this.pickPerMaterialBindGroupLayout = this.device.createBindGroupLayout({
       label: "pick per-material layout",
-      entries: [
-        { binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
-      ],
+      entries: [{ binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } }],
     })
 
     const pickPipelineLayout = this.device.createPipelineLayout({
       label: "pick pipeline layout",
-      bindGroupLayouts: [this.pickPerFrameBindGroupLayout, this.pickPerInstanceBindGroupLayout, this.pickPerMaterialBindGroupLayout],
+      bindGroupLayouts: [
+        this.pickPerFrameBindGroupLayout,
+        this.pickPerInstanceBindGroupLayout,
+        this.pickPerMaterialBindGroupLayout,
+      ],
     })
 
     this.pickPerFrameBindGroup = this.device.createBindGroup({
       label: "pick per-frame bind group",
       layout: this.pickPerFrameBindGroupLayout,
-      entries: [
-        { binding: 0, resource: { buffer: this.cameraUniformBuffer } },
-      ],
+      entries: [{ binding: 0, resource: { buffer: this.cameraUniformBuffer } }],
     })
 
     this.pickPipeline = this.device.createRenderPipeline({
@@ -890,7 +1546,6 @@ export class Engine {
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     })
   }
-
 
   // Step 3: Setup canvas resize handling
   private setupResize() {
@@ -918,12 +1573,56 @@ export class Engine {
       this.canvas.height = height
 
       this.multisampleTexture = this.device.createTexture({
-        label: "multisample render target",
+        label: "multisample HDR render target",
         size: [width, height],
         sampleCount: Engine.MULTISAMPLE_COUNT,
-        format: this.presentationFormat,
+        format: Engine.HDR_FORMAT,
         usage: GPUTextureUsage.RENDER_ATTACHMENT,
       })
+
+      this.hdrResolveTexture = this.device.createTexture({
+        label: "HDR resolve target",
+        size: [width, height],
+        format: Engine.HDR_FORMAT,
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+      })
+
+      // Bloom pyramid: mip 0 is half-res, each subsequent mip halves again.
+      // Mip count chosen so the coarsest mip is ≥4 px on the short side, capped at BLOOM_MAX_LEVELS.
+      const bw = Math.max(1, Math.floor(width / 2))
+      const bh = Math.max(1, Math.floor(height / 2))
+      const shortSide = Math.max(1, Math.min(bw, bh))
+      this.bloomMipCount = Math.max(
+        1,
+        Math.min(Engine.BLOOM_MAX_LEVELS, Math.floor(Math.log2(shortSide)) - 1),
+      )
+      this.bloomDownTexture = this.device.createTexture({
+        label: "bloom down pyramid",
+        size: [bw, bh],
+        mipLevelCount: this.bloomMipCount,
+        format: Engine.HDR_FORMAT,
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+      })
+      this.bloomUpTexture = this.device.createTexture({
+        label: "bloom up pyramid",
+        size: [bw, bh],
+        mipLevelCount: Math.max(1, this.bloomMipCount - 1),
+        format: Engine.HDR_FORMAT,
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+      })
+      this.bloomDownMipViews = []
+      for (let i = 0; i < this.bloomMipCount; i++) {
+        this.bloomDownMipViews.push(
+          this.bloomDownTexture.createView({ baseMipLevel: i, mipLevelCount: 1 }),
+        )
+      }
+      this.bloomUpMipViews = []
+      const upLevels = Math.max(1, this.bloomMipCount - 1)
+      for (let i = 0; i < upLevels; i++) {
+        this.bloomUpMipViews.push(
+          this.bloomUpTexture.createView({ baseMipLevel: i, mipLevelCount: 1 }),
+        )
+      }
 
       this.depthTexture = this.device.createTexture({
         label: "depth texture",
@@ -937,7 +1636,7 @@ export class Engine {
 
       const colorAttachment: GPURenderPassColorAttachment = {
         view: this.multisampleTexture.createView(),
-        resolveTarget: this.context.getCurrentTexture().createView(),
+        resolveTarget: this.hdrResolveTexture.createView(),
         clearValue: { r: 0, g: 0, b: 0, a: 0 },
         loadOp: "clear",
         storeOp: "store",
@@ -956,6 +1655,80 @@ export class Engine {
           stencilStoreOp: "discard",
         },
       }
+
+      // Composite pass descriptor (color attachment view patched per-frame to current swapchain).
+      this.compositePassDescriptor = {
+        label: "composite pass",
+        colorAttachments: [
+          {
+            view: undefined as unknown as GPUTextureView,
+            clearValue: { r: 0, g: 0, b: 0, a: 0 },
+            loadOp: "clear",
+            storeOp: "store",
+          },
+        ],
+      }
+
+      this.writeBloomUniforms()
+
+      if (this.compositeBindGroupLayout && this.bloomBlitBindGroupLayout) {
+        // Blit: reads HDR resolve texture (full-res), writes bloomDown mip 0.
+        this.bloomBlitBindGroup = this.device.createBindGroup({
+          label: "bloom blit bind group",
+          layout: this.bloomBlitBindGroupLayout,
+          entries: [
+            { binding: 0, resource: this.hdrResolveTexture.createView() },
+            { binding: 1, resource: { buffer: this.bloomBlitUniformBuffer } },
+          ],
+        })
+        // Downsample[i] reads bloomDown mip (i-1), writes bloomDown mip i. i ∈ [1..N-1].
+        this.bloomDownsampleBindGroups = []
+        for (let i = 1; i < this.bloomMipCount; i++) {
+          this.bloomDownsampleBindGroups.push(
+            this.device.createBindGroup({
+              label: `bloom downsample ${i}`,
+              layout: this.bloomDownsampleBindGroupLayout,
+              entries: [
+                { binding: 0, resource: this.bloomDownMipViews[i - 1] },
+                { binding: 1, resource: this.bloomSampler },
+              ],
+            }),
+          )
+        }
+        // Upsample[i] writes bloomUp mip i. Coarsest step reads bloomDown[N-1] (no prior up yet);
+        // subsequent steps read bloomUp[i+1]. Both read bloomDown[i] as the base (additive combine).
+        this.bloomUpsampleBindGroups = []
+        const topIdx = this.bloomMipCount - 2
+        for (let i = topIdx; i >= 0; i--) {
+          const srcView = i === topIdx ? this.bloomDownMipViews[this.bloomMipCount - 1] : this.bloomUpMipViews[i + 1]
+          this.bloomUpsampleBindGroups.push(
+            this.device.createBindGroup({
+              label: `bloom upsample ${i}`,
+              layout: this.bloomUpsampleBindGroupLayout,
+              entries: [
+                { binding: 0, resource: srcView },
+                { binding: 1, resource: this.bloomDownMipViews[i] },
+                { binding: 2, resource: this.bloomSampler },
+                { binding: 3, resource: { buffer: this.bloomUpsampleUniformBuffer } },
+              ],
+            }),
+          )
+        }
+        // Composite reads bloomUp mip 0 (full pyramid collapsed); fallback to bloomDown mip 0 if no upsample level.
+        const compositeBloomView = this.bloomMipCount > 1 ? this.bloomUpMipViews[0] : this.bloomDownMipViews[0]
+        this.compositeBindGroup = this.device.createBindGroup({
+          label: "composite bind group",
+          layout: this.compositeBindGroupLayout,
+          entries: [
+            { binding: 0, resource: this.hdrResolveTexture.createView() },
+            { binding: 1, resource: compositeBloomView },
+            { binding: 2, resource: this.bloomSampler },
+            { binding: 3, resource: { buffer: this.compositeUniformBuffer } },
+          ],
+        })
+      }
+
+      this.writeCompositeViewUniforms()
 
       this.camera.aspect = width / height
 
@@ -984,7 +1757,13 @@ export class Engine {
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     })
 
-    this.camera = new Camera(Math.PI, Math.PI / 2.5, this.cameraDistance, this.cameraTarget, this.cameraFov)
+    this.camera = new Camera(
+      Math.PI,
+      Math.PI / 2.5,
+      this.cameraConfig.distance,
+      this.cameraConfig.target,
+      this.cameraConfig.fov,
+    )
 
     this.camera.aspect = this.canvas.width / this.canvas.height
     this.camera.attachControl(this.canvas)
@@ -1026,55 +1805,92 @@ export class Engine {
     this.cameraTargetOffset.z = offset?.z ?? 0
   }
 
-  getCameraDistance(): number { return this.camera.radius }
-  setCameraDistance(d: number): void { this.camera.radius = d }
-  getCameraAlpha(): number { return this.camera.alpha }
-  setCameraAlpha(a: number): void { this.camera.alpha = a }
-  getCameraBeta(): number { return this.camera.beta }
-  setCameraBeta(b: number): void { this.camera.beta = b }
+  getCameraDistance(): number {
+    return this.camera.radius
+  }
+  setCameraDistance(d: number): void {
+    this.camera.radius = d
+  }
+  getCameraAlpha(): number {
+    return this.camera.alpha
+  }
+  setCameraAlpha(a: number): void {
+    this.camera.alpha = a
+  }
+  getCameraBeta(): number {
+    return this.camera.beta
+  }
+  setCameraBeta(b: number): void {
+    this.camera.beta = b
+  }
 
   // Step 5: Create lighting buffers
   private setupLighting() {
     this.lightUniformBuffer = this.device.createBuffer({
       label: "light uniforms",
-      size: 64 * 4, // 64 floats: ambientColor vec4f (4) + 4 lights * 2 vec4f each (32)
+      size: 64 * 4, // ambientColor vec4f (4) + 4 lights * 2 vec4f each (32) = 36 f32 padded to 64
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     })
-
-    // Initialize light buffer to zeros
     this.lightData.fill(0)
     this.lightCount = 0
-
-    this.setAmbientColor(this.ambientColor)
-    this.addLight(new Vec3(0.5, -1, 1).normalize(), new Vec3(1.0, 1.0, 1.0), this.directionalLightIntensity)
+    this.writeWorld()
+    this.writeSun(0)
   }
 
-  private setAmbientColor(color: Vec3) {
-    // Layout: ambientColor (0-3), lights (4-63) - 2 vec4f per light
-    this.lightData[0] = color.x // ambientColor.x
-    this.lightData[1] = color.y // ambientColor.y
-    this.lightData[2] = color.z // ambientColor.z
-    this.lightData[3] = this.minSpecularIntensity // ambientColor.w = minSpecularIntensity
+  /**
+   * Write world ambient. For a uniform-radiance world, hemispherical irradiance
+   * is E = π·L and a Lambertian BRDF reflects (albedo/π)·E = albedo·L, so the
+   * shader's ambient uniform is just `world.color × world.strength` — no /π.
+   */
+  private writeWorld() {
+    const s = this.world.strength
+    this.lightData[0] = this.world.color.x * s
+    this.lightData[1] = this.world.color.y * s
+    this.lightData[2] = this.world.color.z * s
+    this.lightData[3] = 0
     this.updateLightBuffer()
   }
 
-  private addLight(direction: Vec3, color: Vec3, intensity: number = 1.0): boolean {
-    if (this.lightCount >= 4) return false
-
-    const normalized = direction.normalize()
-    const baseIndex = 4 + this.lightCount * 8 // Start at index 4, 8 floats per light (2 vec4f)
-    this.lightData[baseIndex] = normalized.x // direction.x
-    this.lightData[baseIndex + 1] = normalized.y // direction.y
-    this.lightData[baseIndex + 2] = normalized.z // direction.z
-    this.lightData[baseIndex + 3] = 0 // direction.w
-    this.lightData[baseIndex + 4] = color.x // color.x
-    this.lightData[baseIndex + 5] = color.y // color.y
-    this.lightData[baseIndex + 6] = color.z // color.z
-    this.lightData[baseIndex + 7] = intensity // color.w / intensity
-
-    this.lightCount++
+  /** Write sun lamp into light slot `index` (0..3). Layout mirrors the WGSL struct. */
+  private writeSun(index: number) {
+    if (index < 0 || index >= 4) return
+    const normalized = this.sun.direction.normalize()
+    const base = 4 + index * 8 // 8 floats per light (direction vec4, color vec4)
+    this.lightData[base] = normalized.x
+    this.lightData[base + 1] = normalized.y
+    this.lightData[base + 2] = normalized.z
+    this.lightData[base + 3] = 0
+    this.lightData[base + 4] = this.sun.color.x
+    this.lightData[base + 5] = this.sun.color.y
+    this.lightData[base + 6] = this.sun.color.z
+    this.lightData[base + 7] = this.sun.strength
+    if (index >= this.lightCount) this.lightCount = index + 1
     this.updateLightBuffer()
-    return true
+  }
+
+  /** Update the world environment (Blender: World Background). Ambient recomputes immediately. */
+  setWorld(options: WorldOptions): void {
+    if (options.color) this.world.color = options.color
+    if (options.strength !== undefined) this.world.strength = options.strength
+    this.writeWorld()
+  }
+
+  /** Update the sun lamp (Blender: Light > Sun). Direction change marks shadow VP dirty. */
+  setSun(options: SunOptions): void {
+    if (options.color) this.sun.color = options.color
+    if (options.strength !== undefined) this.sun.strength = options.strength
+    if (options.direction) {
+      this.sun.direction = options.direction
+      this.shadowLightVPDirty = true
+    }
+    this.writeSun(0)
+  }
+
+  getWorld(): Readonly<{ color: Vec3; strength: number }> {
+    return this.world
+  }
+  getSun(): Readonly<{ color: Vec3; strength: number; direction: Vec3 }> {
+    return this.sun
   }
 
   addGround(options?: {
@@ -1083,7 +1899,6 @@ export class Engine {
     diffuseColor?: Vec3
     fadeStart?: number
     fadeEnd?: number
-    shadowMapSize?: number
     shadowStrength?: number
     gridSpacing?: number
     gridLineWidth?: number
@@ -1094,10 +1909,9 @@ export class Engine {
     const opts = {
       width: 160,
       height: 160,
-      diffuseColor: new Vec3(0.8, 0.1, 1.0),
+      diffuseColor: new Vec3(0.9, 0.1, 1.0),
       fadeStart: 10.0,
       fadeEnd: 80.0,
-      shadowMapSize: 4096,
       shadowStrength: 1.0,
       gridSpacing: 4.2,
       gridLineWidth: 0.012,
@@ -1115,6 +1929,7 @@ export class Engine {
       firstIndex: 0,
       bindGroup: this.groundShadowBindGroup!,
       materialName: "Ground",
+      preset: "cloth_rough",
     }
   }
 
@@ -1171,17 +1986,14 @@ export class Engine {
   async loadModel(path: string): Promise<Model>
   async loadModel(name: string, path: string): Promise<Model>
   async loadModel(name: string, options: LoadModelFromFilesOptions): Promise<Model>
-  async loadModel(
-    nameOrPath: string,
-    pathOrOptions?: string | LoadModelFromFilesOptions
-  ): Promise<Model> {
+  async loadModel(nameOrPath: string, pathOrOptions?: string | LoadModelFromFilesOptions): Promise<Model> {
     if (pathOrOptions !== undefined && typeof pathOrOptions === "object" && "files" in pathOrOptions) {
       const name = nameOrPath
       const pmxFile = pathOrOptions.pmxFile ?? findFirstPmxFileInList(pathOrOptions.files)
       if (!pmxFile) throw new Error("No .pmx file found in the selected folder")
       const map = fileListToMap(pathOrOptions.files)
       const pmxKey = normalizeAssetPath(
-        (pmxFile as File & { webkitRelativePath?: string }).webkitRelativePath ?? pmxFile.name
+        (pmxFile as File & { webkitRelativePath?: string }).webkitRelativePath ?? pmxFile.name,
       )
       const reader = createFileMapAssetReader(map)
       const model = await PmxLoader.loadFromReader(reader, pmxKey)
@@ -1252,6 +2064,15 @@ export class Engine {
     }
   }
 
+  setMaterialPresets(modelName: string, presets: MaterialPresetMap): void {
+    const inst = this.modelInstances.get(modelName)
+    if (!inst) return
+    inst.materialPresets = presets
+    for (const dc of inst.drawCalls) {
+      dc.preset = resolvePreset(dc.materialName, presets)
+    }
+  }
+
   setMaterialVisible(modelName: string, materialName: string, visible: boolean): void {
     const inst = this.modelInstances.get(modelName)
     if (!inst) return
@@ -1296,11 +2117,7 @@ export class Engine {
       const verticesChanged = inst.model.update(deltaTime, this.ikEnabled)
       if (verticesChanged) inst.vertexBufferNeedsUpdate = true
       if (inst.physics && this.physicsEnabled) {
-        inst.physics.step(
-          deltaTime,
-          inst.model.getWorldMatrices(),
-          inst.model.getBoneInverseBindMatrices()
-        )
+        inst.physics.step(deltaTime, inst.model.getWorldMatrices(), inst.model.getBoneInverseBindMatrices())
       }
       if (inst.vertexBufferNeedsUpdate) this.updateVertexBuffer(inst)
     })
@@ -1313,7 +2130,12 @@ export class Engine {
     inst.vertexBufferNeedsUpdate = false
   }
 
-  private async setupModelInstance(name: string, model: Model, basePath: string, assetReader: AssetReader): Promise<void> {
+  private async setupModelInstance(
+    name: string,
+    model: Model,
+    basePath: string,
+    assetReader: AssetReader,
+  ): Promise<void> {
     const vertices = model.getVertices()
     const skinning = model.getSkinning()
     const skeleton = model.getSkeleton()
@@ -1337,7 +2159,7 @@ export class Engine {
       0,
       skinning.joints.buffer,
       skinning.joints.byteOffset,
-      skinning.joints.byteLength
+      skinning.joints.byteLength,
     )
 
     const weightsBuffer = this.device.createBuffer({
@@ -1350,7 +2172,7 @@ export class Engine {
       0,
       skinning.weights.buffer,
       skinning.weights.byteOffset,
-      skinning.weights.byteLength
+      skinning.weights.byteLength,
     )
 
     const skinMatrixBuffer = this.device.createBuffer({
@@ -1383,26 +2205,16 @@ export class Engine {
     const mainPerInstanceBindGroup = this.device.createBindGroup({
       label: `${name}: main per-instance bind group`,
       layout: this.mainPerInstanceBindGroupLayout,
-      entries: [
-        { binding: 0, resource: { buffer: skinMatrixBuffer } },
-      ],
+      entries: [{ binding: 0, resource: { buffer: skinMatrixBuffer } }],
     })
 
     const pickPerInstanceBindGroup = this.device.createBindGroup({
       label: `${name}: pick per-instance bind group`,
       layout: this.pickPerInstanceBindGroupLayout,
-      entries: [
-        { binding: 0, resource: { buffer: skinMatrixBuffer } },
-      ],
+      entries: [{ binding: 0, resource: { buffer: skinMatrixBuffer } }],
     })
 
-    const gpuBuffers: GPUBuffer[] = [
-      vertexBuffer,
-      indexBuffer,
-      jointsBuffer,
-      weightsBuffer,
-      skinMatrixBuffer,
-    ]
+    const gpuBuffers: GPUBuffer[] = [vertexBuffer, indexBuffer, jointsBuffer, weightsBuffer, skinMatrixBuffer]
 
     const inst: ModelInstance = {
       name,
@@ -1423,6 +2235,7 @@ export class Engine {
       pickPerInstanceBindGroup,
       pickDrawCalls: [],
       hiddenMaterials: new Set(),
+      materialPresets: undefined,
       physics,
       vertexBufferNeedsUpdate: false,
     }
@@ -1503,7 +2316,6 @@ export class Engine {
   }
 
   private createShadowGroundResources(opts: {
-    shadowMapSize: number
     diffuseColor: Vec3
     fadeStart: number
     fadeEnd: number
@@ -1514,21 +2326,39 @@ export class Engine {
     gridLineColor: Vec3
     noiseStrength: number
   }) {
-    const { shadowMapSize, diffuseColor, fadeStart, fadeEnd, shadowStrength, gridSpacing, gridLineWidth, gridLineOpacity, gridLineColor, noiseStrength } = opts
-    this.shadowMapTexture = this.device.createTexture({
-      label: "shadow map",
-      size: [shadowMapSize, shadowMapSize],
-      format: "depth32float",
-      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-    })
-    this.shadowMapDepthView = this.shadowMapTexture.createView()
-    // Layout: diffuseColor(3f) fadeStart(1f) | fadeEnd(1f) shadowStrength(1f) pcfTexel(1f) gridSpacing(1f) | gridLineWidth(1f) gridOpacity(1f) noiseStrength(1f) _pad(1f) | gridColor(3f) _pad2(1f)
+    const {
+      diffuseColor,
+      fadeStart,
+      fadeEnd,
+      shadowStrength,
+      gridSpacing,
+      gridLineWidth,
+      gridLineOpacity,
+      gridLineColor,
+      noiseStrength,
+    } = opts
+    // Shadow map is already created in setupPipelines()
     const gb = new Float32Array(16)
-    gb[0] = diffuseColor.x; gb[1] = diffuseColor.y; gb[2] = diffuseColor.z; gb[3] = fadeStart
-    gb[4] = fadeEnd; gb[5] = shadowStrength; gb[6] = 1 / shadowMapSize; gb[7] = gridSpacing
-    gb[8] = gridLineWidth; gb[9] = gridLineOpacity; gb[10] = noiseStrength; gb[11] = 0
-    gb[12] = gridLineColor.x; gb[13] = gridLineColor.y; gb[14] = gridLineColor.z; gb[15] = 0
-    this.groundShadowMaterialBuffer = this.device.createBuffer({ size: gb.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
+    gb[0] = diffuseColor.x
+    gb[1] = diffuseColor.y
+    gb[2] = diffuseColor.z
+    gb[3] = fadeStart
+    gb[4] = fadeEnd
+    gb[5] = shadowStrength
+    gb[6] = 1 / Engine.SHADOW_MAP_SIZE
+    gb[7] = gridSpacing
+    gb[8] = gridLineWidth
+    gb[9] = gridLineOpacity
+    gb[10] = noiseStrength
+    gb[11] = 0
+    gb[12] = gridLineColor.x
+    gb[13] = gridLineColor.y
+    gb[14] = gridLineColor.z
+    gb[15] = 0
+    this.groundShadowMaterialBuffer = this.device.createBuffer({
+      size: gb.byteLength,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    })
     this.device.queue.writeBuffer(this.groundShadowMaterialBuffer, 0, gb)
     this.groundShadowBindGroup = this.device.createBindGroup({
       label: "ground shadow bind",
@@ -1544,12 +2374,12 @@ export class Engine {
     })
   }
 
-  // Shadow uses a fixed orthographic projection, independent of the visible light direction
+  // Shadow is cast from the visible sun direction — same vector the shader lights with.
   private shadowLightVPDirty = true
   private updateShadowLightVP() {
     if (!this.shadowLightVPDirty) return
     this.shadowLightVPDirty = false
-    const dir = new Vec3(this.shadowLightDirection.x, this.shadowLightDirection.y, this.shadowLightDirection.z)
+    const dir = new Vec3(this.sun.direction.x, this.sun.direction.y, this.sun.direction.z)
     dir.normalize()
     const target = new Vec3(0, 11, 0)
     const eye = new Vec3(target.x - dir.x * 72, target.y - dir.y * 72, target.z - dir.z * 72)
@@ -1589,14 +2419,11 @@ export class Engine {
       const materialAlpha = mat.diffuse[3]
       const isTransparent = materialAlpha < 1.0 - 0.001
 
-      const materialUniformBuffer = this.createMaterialUniformBuffer(
-        prefix + mat.name,
-        materialAlpha,
-        [mat.diffuse[0], mat.diffuse[1], mat.diffuse[2]],
-        mat.ambient,
-        mat.specular,
-        mat.shininess
-      )
+      const materialUniformBuffer = this.createMaterialUniformBuffer(prefix + mat.name, materialAlpha, [
+        mat.diffuse[0],
+        mat.diffuse[1],
+        mat.diffuse[2],
+      ])
       inst.gpuBuffers.push(materialUniformBuffer)
 
       const textureView = diffuseTexture.createView()
@@ -1610,24 +2437,43 @@ export class Engine {
       })
 
       const type: DrawCallType = isTransparent ? "transparent" : "opaque"
-      inst.drawCalls.push({ type, count: indexCount, firstIndex: currentIndexOffset, bindGroup, materialName: mat.name })
+      const preset = resolvePreset(mat.name, inst.materialPresets)
+      inst.drawCalls.push({
+        type,
+        count: indexCount,
+        firstIndex: currentIndexOffset,
+        bindGroup,
+        materialName: mat.name,
+        preset,
+      })
 
       if ((mat.edgeFlag & 0x10) !== 0 && mat.edgeSize > 0) {
         const materialUniformData = new Float32Array([
-          mat.edgeColor[0], mat.edgeColor[1], mat.edgeColor[2], mat.edgeColor[3],
-          mat.edgeSize, 0, 0, 0,
+          mat.edgeColor[0],
+          mat.edgeColor[1],
+          mat.edgeColor[2],
+          mat.edgeColor[3],
+          mat.edgeSize,
+          0,
+          0,
+          0,
         ])
         const outlineUniformBuffer = this.createUniformBuffer(`${prefix}outline: ${mat.name}`, materialUniformData)
         inst.gpuBuffers.push(outlineUniformBuffer)
         const outlineBindGroup = this.device.createBindGroup({
           label: `${prefix}outline: ${mat.name}`,
           layout: this.outlinePerMaterialBindGroupLayout,
-          entries: [
-            { binding: 0, resource: { buffer: outlineUniformBuffer } },
-          ],
+          entries: [{ binding: 0, resource: { buffer: outlineUniformBuffer } }],
         })
         const outlineType: DrawCallType = isTransparent ? "transparent-outline" : "opaque-outline"
-        inst.drawCalls.push({ type: outlineType, count: indexCount, firstIndex: currentIndexOffset, bindGroup: outlineBindGroup, materialName: mat.name })
+        inst.drawCalls.push({
+          type: outlineType,
+          count: indexCount,
+          firstIndex: currentIndexOffset,
+          bindGroup: outlineBindGroup,
+          materialName: mat.name,
+          preset,
+        })
       }
 
       if (this.onRaycast) {
@@ -1650,25 +2496,13 @@ export class Engine {
     }
   }
 
-  private createMaterialUniformBuffer(
-    label: string,
-    alpha: number,
-    diffuseColor: [number, number, number],
-    ambientColor: [number, number, number],
-    specularColor: [number, number, number],
-    shininess: number
-  ): GPUBuffer {
-    const data = new Float32Array(20)
-    data.set([
-      alpha,
-      this.rimLightIntensity,
-      shininess,
-      0.0,
-      1.0, 1.0, 1.0, 0.0, // rimColor (vec3), _padding2
-      diffuseColor[0], diffuseColor[1], diffuseColor[2], 0.0,
-      ambientColor[0], ambientColor[1], ambientColor[2], 0.0,
-      specularColor[0], specularColor[1], specularColor[2], 0.0,
-    ])
+  private createMaterialUniformBuffer(label: string, alpha: number, diffuseColor: [number, number, number]): GPUBuffer {
+    // Matches WGSL `struct MaterialUniforms { diffuseColor: vec3f, alpha: f32 }` — 16 bytes.
+    const data = new Float32Array(4)
+    data[0] = diffuseColor[0]
+    data[1] = diffuseColor[1]
+    data[2] = diffuseColor[2]
+    data[3] = alpha
     return this.createUniformBuffer(`material uniform: ${label}`, data)
   }
 
@@ -1703,7 +2537,7 @@ export class Engine {
       const texture = this.device.createTexture({
         label: `texture: ${cacheKey}`,
         size: [imageBitmap.width, imageBitmap.height],
-        format: "rgba8unorm",
+        format: "rgba8unorm-srgb",
         usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
       })
       this.device.queue.copyExternalImageToTexture({ source: imageBitmap }, { texture }, [
@@ -1719,7 +2553,6 @@ export class Engine {
     }
   }
 
-
   private renderGround(pass: GPURenderPassEncoder) {
     if (!this.hasGround || !this.groundVertexBuffer || !this.groundIndexBuffer || !this.groundDrawCall) return
     pass.setPipeline(this.groundShadowPipeline)
@@ -1728,7 +2561,6 @@ export class Engine {
     pass.setBindGroup(0, this.groundDrawCall.bindGroup)
     pass.drawIndexed(this.groundDrawCall.count, 1, this.groundDrawCall.firstIndex, 0, 0)
   }
-
 
   private handleCanvasDoubleClick = (event: MouseEvent) => {
     if (!this.onRaycast || this.modelInstances.size === 0) return
@@ -1777,12 +2609,14 @@ export class Engine {
     if (!this.pendingPick || !this.pickTexture || !this.pickDepthTexture) return
 
     const pass = encoder.beginRenderPass({
-      colorAttachments: [{
-        view: this.pickTexture.createView(),
-        clearValue: { r: 0, g: 0, b: 0, a: 0 },
-        loadOp: "clear",
-        storeOp: "store",
-      }],
+      colorAttachments: [
+        {
+          view: this.pickTexture.createView(),
+          clearValue: { r: 0, g: 0, b: 0, a: 0 },
+          loadOp: "clear",
+          storeOp: "store",
+        },
+      ],
       depthStencilAttachment: {
         view: this.pickDepthTexture.createView(),
         depthClearValue: 1.0,
@@ -1814,7 +2648,7 @@ export class Engine {
     encoder.copyTextureToBuffer(
       { texture: this.pickTexture, origin: { x: Math.max(0, px), y: Math.max(0, py) } },
       { buffer: this.pickReadbackBuffer, bytesPerRow: 256 },
-      { width: 1, height: 1 }
+      { width: 1, height: 1 },
     )
   }
 
@@ -1835,7 +2669,10 @@ export class Engine {
     let idx = 1
     let hitModel = ""
     for (const [name] of this.modelInstances) {
-      if (idx === modelId) { hitModel = name; break }
+      if (idx === modelId) {
+        hitModel = name
+        break
+      }
       idx++
     }
 
@@ -1849,7 +2686,10 @@ export class Engine {
         for (const mat of materials) {
           if (mat.vertexCount === 0) continue
           matIdx++
-          if (matIdx === materialId) { hitMaterial = mat.name; break }
+          if (matIdx === materialId) {
+            hitMaterial = mat.name
+            break
+          }
         }
       }
     }
@@ -1863,8 +2703,6 @@ export class Engine {
     const currentTime = performance.now()
     const deltaTime = this.lastFrameTime > 0 ? (currentTime - this.lastFrameTime) / 1000 : 0.016
     this.lastFrameTime = currentTime
-
-    this.updateRenderTarget()
 
     const hasModels = this.modelInstances.size > 0
     if (hasModels) {
@@ -1883,10 +2721,10 @@ export class Engine {
     }
 
     this.updateCameraUniforms()
-    if (this.hasGround) this.updateShadowLightVP()
+    this.updateShadowLightVP()
 
     const encoder = this.device.createCommandEncoder()
-    if (hasModels && this.hasGround && this.shadowMapDepthView) {
+    if (hasModels) {
       const sp = encoder.beginRenderPass({
         colorAttachments: [],
         depthStencilAttachment: {
@@ -1906,6 +2744,56 @@ export class Engine {
     if (this.hasGround) this.renderGround(pass)
     pass.end()
 
+    // Bloom pyramid (EEVEE 3.6):
+    //   1. Blit: HDR → bloomDown[0] (Karis prefilter, half-res)
+    //   2. Downsample: bloomDown[0] → bloomDown[1] → … → bloomDown[N-1] (13-tap)
+    //   3. Upsample (top-down): bloomUp[N-2] = tent(bloomDown[N-1]) + bloomDown[N-2],
+    //      then bloomUp[i] = tent(bloomUp[i+1]) + bloomDown[i] until i=0 (9-tap tent)
+    //   Composite reads bloomUp[0] and adds tint * intensity * bloom before Filmic.
+    if (this.bloomBlitBindGroup && this.compositeBindGroup && this.bloomMipCount > 0) {
+      const bloomAtt = this.bloomPassDescriptor.colorAttachments as GPURenderPassColorAttachment[]
+
+      // 1. Blit
+      bloomAtt[0].view = this.bloomDownMipViews[0]
+      const pBlit = encoder.beginRenderPass(this.bloomPassDescriptor)
+      pBlit.setPipeline(this.bloomBlitPipeline)
+      pBlit.setBindGroup(0, this.bloomBlitBindGroup)
+      pBlit.draw(3)
+      pBlit.end()
+
+      // 2. Downsample chain
+      for (let i = 1; i < this.bloomMipCount; i++) {
+        bloomAtt[0].view = this.bloomDownMipViews[i]
+        const p = encoder.beginRenderPass(this.bloomPassDescriptor)
+        p.setPipeline(this.bloomDownsamplePipeline)
+        p.setBindGroup(0, this.bloomDownsampleBindGroups[i - 1])
+        p.draw(3)
+        p.end()
+      }
+
+      // 3. Upsample chain (coarsest to finest; bindGroups[0] is the coarsest step)
+      const upSteps = this.bloomUpsampleBindGroups.length
+      const topIdx = this.bloomMipCount - 2
+      for (let k = 0; k < upSteps; k++) {
+        const levelIdx = topIdx - k // writes bloomUp[levelIdx]
+        bloomAtt[0].view = this.bloomUpMipViews[levelIdx]
+        const p = encoder.beginRenderPass(this.bloomPassDescriptor)
+        p.setPipeline(this.bloomUpsamplePipeline)
+        p.setBindGroup(0, this.bloomUpsampleBindGroups[k])
+        p.draw(3)
+        p.end()
+      }
+    }
+
+    // Composite: HDR + bloom → Filmic tonemap → swapchain.
+    const compositeAttachment = (this.compositePassDescriptor.colorAttachments as GPURenderPassColorAttachment[])[0]
+    compositeAttachment.view = this.context.getCurrentTexture().createView()
+    const cpass = encoder.beginRenderPass(this.compositePassDescriptor)
+    cpass.setPipeline(this.compositePipeline)
+    cpass.setBindGroup(0, this.compositeBindGroup)
+    cpass.draw(3)
+    cpass.end()
+
     const pick = this.pendingPick
     if (pick && hasModels) this.renderPickPass(encoder)
 
@@ -1920,11 +2808,6 @@ export class Engine {
     this.updateStats(performance.now() - currentTime)
   }
 
-  private updateRenderTarget() {
-    const colorAttachment = (this.renderPassDescriptor.colorAttachments as GPURenderPassColorAttachment[])[0]
-    colorAttachment.resolveTarget = this.context.getCurrentTexture().createView()
-  }
-
   private drawInstanceShadow(sp: GPURenderPassEncoder, inst: ModelInstance): void {
     sp.setBindGroup(0, inst.shadowBindGroup)
     sp.setVertexBuffer(0, inst.vertexBuffer)
@@ -1936,45 +2819,82 @@ export class Engine {
     }
   }
 
-  private drawOpaque(pass: GPURenderPassEncoder, inst: ModelInstance, pipeline: GPURenderPipeline): void {
-    pass.setPipeline(pipeline)
+  private pipelineForPreset(preset: MaterialPreset): GPURenderPipeline {
+    if (preset === "face") return this.facePipeline
+    if (preset === "hair") return this.hairPipeline
+    if (preset === "cloth_smooth") return this.clothSmoothPipeline
+    if (preset === "cloth_rough") return this.clothRoughPipeline
+    if (preset === "metal") return this.metalPipeline
+    if (preset === "body") return this.bodyPipeline
+    if (preset === "eye") return this.eyePipeline
+    if (preset === "stockings") return this.stockingsPipeline
+    return this.modelPipeline
+  }
+
+  /**
+   * Draw every material of a given type (`opaque` or `transparent`) using the main
+   * pipeline(s). Binds the per-frame and per-instance groups once at the top of the
+   * batch, then issues one draw per material. Early-outs if nothing to draw so we
+   * don't waste bindings when a model has no transparents, etc.
+   */
+  private drawMaterials(pass: GPURenderPassEncoder, inst: ModelInstance, type: "opaque" | "transparent"): void {
+    let currentPipeline: GPURenderPipeline | null = null
+    let bound = false
     for (const draw of inst.drawCalls) {
-      if (draw.type === "opaque" && this.shouldRenderDrawCall(inst, draw)) {
-        pass.setBindGroup(2, draw.bindGroup)
-        pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
+      if (draw.type !== type || !this.shouldRenderDrawCall(inst, draw)) continue
+      if (!bound) {
+        pass.setBindGroup(0, this.perFrameBindGroup)
+        pass.setBindGroup(1, inst.mainPerInstanceBindGroup)
+        bound = true
       }
+      const pipeline = this.pipelineForPreset(draw.preset)
+      if (pipeline !== currentPipeline) {
+        pass.setPipeline(pipeline)
+        currentPipeline = pipeline
+      }
+      pass.setBindGroup(2, draw.bindGroup)
+      pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
     }
   }
 
-  private drawTransparent(pass: GPURenderPassEncoder, inst: ModelInstance, pipeline: GPURenderPipeline): void {
-    pass.setPipeline(pipeline)
+  /**
+   * Draw every outline of a given type (`opaque-outline` or `transparent-outline`).
+   * Uses its own pipeline layout (group 0 = camera-only, group 2 = edge uniforms), so
+   * every batch binds its own groups from scratch — the next drawMaterials call will
+   * rebind group 0/1 correctly if needed.
+   */
+  private drawOutlines(pass: GPURenderPassEncoder, inst: ModelInstance, type: DrawCallType): void {
+    let bound = false
     for (const draw of inst.drawCalls) {
-      if (draw.type === "transparent" && this.shouldRenderDrawCall(inst, draw)) {
-        pass.setBindGroup(2, draw.bindGroup)
-        pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
+      if (draw.type !== type || !this.shouldRenderDrawCall(inst, draw)) continue
+      if (!bound) {
+        pass.setPipeline(this.outlinePipeline)
+        pass.setBindGroup(0, this.outlinePerFrameBindGroup)
+        pass.setBindGroup(1, inst.mainPerInstanceBindGroup)
+        bound = true
       }
+      pass.setBindGroup(2, draw.bindGroup)
+      pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
     }
   }
 
-  private bindMainGroups(pass: GPURenderPassEncoder, inst: ModelInstance): void {
-    pass.setBindGroup(0, this.perFrameBindGroup)
-    pass.setBindGroup(1, inst.mainPerInstanceBindGroup)
-  }
-
+  /**
+   * Main-pass render sequence for one model instance:
+   *   1) opaque bodies → 2) opaque outlines → 3) transparents → 4) transparent outlines.
+   * Each batch binds the groups it needs, so switching between main and outline
+   * pipelines is self-contained (no cross-batch dependencies).
+   */
   private renderOneModel(pass: GPURenderPassEncoder, inst: ModelInstance): void {
     pass.setVertexBuffer(0, inst.vertexBuffer)
     pass.setVertexBuffer(1, inst.jointsBuffer)
     pass.setVertexBuffer(2, inst.weightsBuffer)
     pass.setIndexBuffer(inst.indexBuffer, "uint32")
 
-    this.bindMainGroups(pass, inst)
-    this.drawOpaque(pass, inst, this.modelPipeline)
-    this.drawOutlines(pass, inst, false)
-    this.bindMainGroups(pass, inst)
-    this.drawTransparent(pass, inst, this.modelPipeline)
-    this.drawOutlines(pass, inst, true)
+    this.drawMaterials(pass, inst, "opaque")
+    this.drawOutlines(pass, inst, "opaque-outline")
+    this.drawMaterials(pass, inst, "transparent")
+    this.drawOutlines(pass, inst, "transparent-outline")
   }
-
 
   private updateCameraUniforms() {
     const viewMatrix = this.camera.getViewMatrix()
@@ -1988,7 +2908,6 @@ export class Engine {
     this.device.queue.writeBuffer(this.cameraUniformBuffer, 0, this.cameraMatrixData)
   }
 
-
   private updateSkinMatrices() {
     this.forEachInstance((inst) => {
       const skinMatrices = inst.model.getSkinMatrices()
@@ -1997,22 +2916,9 @@ export class Engine {
         0,
         skinMatrices.buffer,
         skinMatrices.byteOffset,
-        skinMatrices.byteLength
+        skinMatrices.byteLength,
       )
     })
-  }
-
-  private drawOutlines(pass: GPURenderPassEncoder, inst: ModelInstance, transparent: boolean) {
-    pass.setPipeline(this.outlinePipeline)
-    pass.setBindGroup(0, this.outlinePerFrameBindGroup)
-    pass.setBindGroup(1, inst.mainPerInstanceBindGroup)
-    const outlineType: DrawCallType = transparent ? "transparent-outline" : "opaque-outline"
-    for (const draw of inst.drawCalls) {
-      if (draw.type === outlineType && this.shouldRenderDrawCall(inst, draw)) {
-        pass.setBindGroup(2, draw.bindGroup)
-        pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
-      }
-    }
   }
 
   private updateStats(frameTime: number) {
@@ -2039,5 +2945,4 @@ export class Engine {
       this.lastFpsUpdate = now
     }
   }
-
 }

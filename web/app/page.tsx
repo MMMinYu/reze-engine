@@ -123,7 +123,7 @@ export default function Home() {
       if (audioRef.current) {
         audioRef.current.muted = false
         audioRef.current.volume = 1.0
-        audioRef.current.play().catch(() => { })
+        audioRef.current.play().catch(() => {})
       }
       modelRef.current.play()
       modelRef.current.setMorphWeight("抗穿模", 0.5)
@@ -138,7 +138,7 @@ export default function Home() {
       audioRef.current.volume = 1.0
       const atEnd = prog.duration > 0 && prog.current >= prog.duration - 1e-3
       audioRef.current.currentTime = atEnd ? 0 : prog.current
-      audioRef.current.play().catch(() => { })
+      audioRef.current.play().catch(() => {})
     }
     modelRef.current.play(IRIS_ANIM)
     modelRef.current.setMorphWeight("抗穿模", 0.5)
@@ -160,7 +160,7 @@ export default function Home() {
   const handleResume = useCallback(() => {
     if (engineRef.current) {
       if (audioRef.current) {
-        audioRef.current.play().catch(() => { })
+        audioRef.current.play().catch(() => {})
       }
       modelRef.current?.play()
       modelRef.current?.setMorphWeight("抗穿模", 0.5)
@@ -183,7 +183,7 @@ export default function Home() {
         }))
       }
     },
-    [progress.duration]
+    [progress.duration],
   )
 
   const initEngine = useCallback(async () => {
@@ -193,9 +193,7 @@ export default function Home() {
     }
     try {
       const engine = new Engine(canvasRef.current, {
-        ambientColor: new Vec3(0.9, 0.9, 0.99),
-        cameraDistance: 31.5,
-        cameraTarget: new Vec3(0, 11.5, 0),
+        camera: { distance: 31.5, target: new Vec3(0, 11.5, 0) },
         onRaycast: (modelName: string, material: string | null, screenX: number, screenY: number) => {
           if (material) {
             setMousePosition({ x: screenX, y: screenY })
@@ -207,16 +205,34 @@ export default function Home() {
       })
       engineRef.current = engine
       await engine.init()
-      const m1 = await engine.loadModel("reze", "/models/reze/reze.pmx")
+
+      // engine.setPhysicsEnabled(false)
+
+
+      const m1 = await engine.loadModel("reze", "/models/塞尔凯特/塞尔凯特.pmx")
 
       modelRef.current = m1
+
+      engine.setMaterialPresets("reze", {
+        eye: ["眼睛","眼白","目白","右瞳"],
+        face: ["脸","face01"],
+        body: ["皮肤","skin"],
+        hair: ["头发", "hair_f"],
+        cloth_smooth: ["衣服", "裙子", "裙带", "裙布", "外套", "外套饰", "裤子", "裤子0", "腿环", "发饰","shirt","shoes","shorts","trigger"],
+        stockings: ["袜子","stockings"],
+      })
+
+
 
       engine.addGround()
 
       engine.runRenderLoop(() => setStats(engine.getStats()))
 
+      await new Promise(resolve=>requestAnimationFrame(resolve))
+      
       await m1.loadVmd(IRIS_ANIM, "/animations/IRIS OUT.vmd")
       m1.show(IRIS_ANIM)
+      console.log(m1.getMaterials())
 
       m1.setMorphWeight("抗穿模", 0.5)
 

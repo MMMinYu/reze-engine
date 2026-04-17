@@ -1,0 +1,16 @@
+blender-3.6.9
+
+# Local Claude Code settings
+.claude/
+
+# Blender preset reference dumps + extraction scripts (used during shader porting,
+# kept locally for future material work; recoverable from git history if needed)
+m_graphs.json
+world_dump.json
+lights.json
+仿深空之眼渲染预设v1.0_by_小绿毛猫_material_graph_dump.json
+rendering.txt
+graph_traces.txt
+trace_graphs.py
+scripts/dump_material_graphs.py
+scripts/dump_scene_world.py
