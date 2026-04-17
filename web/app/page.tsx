@@ -207,7 +207,7 @@ export default function Home() {
       await engine.init()
 
 
-      const m1 = await engine.loadModel("reze", "/models/塞尔凯特2/塞尔凯特2.pmx")
+      const m1 = await engine.loadModel("reze", "/models/塞尔凯特/塞尔凯特.pmx")
 
       modelRef.current = m1
 
@@ -241,7 +241,6 @@ export default function Home() {
         metal: ["metal01","earring"],
       })
 
-      engine.setBloomOptions({color: new Vec3(0.9, 0.1, 0.8)})
       engine.addGround({
         diffuseColor: new Vec3(1, 0.3, 0.6),
       })
