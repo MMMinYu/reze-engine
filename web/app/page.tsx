@@ -212,7 +212,7 @@ export default function Home() {
       modelRef.current = m1
 
       engine.setMaterialPresets("reze", {
-        eye: ["眼睛", "眼白", "目白", "右瞳","左瞳"],
+        eye: ["眼睛", "眼白", "目白", "右瞳","左瞳","眉毛"],
         face: ["脸", "face01"],
         body: ["皮肤", "skin"],
         hair: ["头发", "hair_f"],

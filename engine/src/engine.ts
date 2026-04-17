@@ -232,6 +232,7 @@ export class Engine {
   private metalPipeline!: GPURenderPipeline
   private bodyPipeline!: GPURenderPipeline
   private eyePipeline!: GPURenderPipeline
+  private hairOverEyesPipeline!: GPURenderPipeline
   private stockingsPipeline!: GPURenderPipeline
   private groundShadowPipeline!: GPURenderPipeline
   private groundShadowBindGroupLayout!: GPUBindGroupLayout
@@ -247,6 +248,9 @@ export class Engine {
   private hdrResolveTexture!: GPUTexture
   private static readonly MULTISAMPLE_COUNT = 4
   private static readonly HDR_FORMAT: GPUTextureFormat = "rgba16float"
+  /** Stencil value stamped by eye draws so hair can stencil-test against it and
+   *  alpha-blend a second pass over eye silhouette pixels (see-through-hair effect). */
+  private static readonly STENCIL_EYE_VALUE = 1
   /** Single-channel mask written alongside HDR color — 1 = model geometry (contributes
    *  to bloom), 0 = ground (never blooms). Sampled by the bloom blit pass to gate the
    *  prefilter so ground brightness can't halo the scene. */
@@ -822,6 +826,9 @@ export class Engine {
       },
     })
 
+    // Hair opaque: stencil != EYE_VALUE so fragments on top of eyes are skipped entirely —
+    // depth and color stay as the eye wrote them; the follow-up hairOverEyesPipeline then
+    // draws those skipped fragments alpha-blended so the eye reads through the hair.
     this.hairPipeline = this.createRenderPipeline({
       label: "hair NPR pipeline",
       layout: mainPipelineLayout,
@@ -833,7 +840,37 @@ export class Engine {
         format: "depth24plus-stencil8",
         depthWriteEnabled: true,
         depthCompare: "less-equal",
+        stencilFront: { compare: "not-equal", failOp: "keep", depthFailOp: "keep", passOp: "keep" },
+        stencilBack: { compare: "not-equal", failOp: "keep", depthFailOp: "keep", passOp: "keep" },
+        stencilReadMask: 0xff,
+        stencilWriteMask: 0,
       },
+    })
+
+    // Hair-over-eyes: same shader with IS_OVER_EYES=true so alpha is halved at compile time.
+    // Only fragments where eye stencil == EYE_VALUE pass; depth test still culls fragments
+    // that are further from camera than the eye, so hair behind the eye never shows through.
+    // depthWriteEnabled=false keeps the eye's depth authoritative for everything drawn after.
+    this.hairOverEyesPipeline = this.device.createRenderPipeline({
+      label: "hair over eyes pipeline",
+      layout: mainPipelineLayout,
+      vertex: { module: hairShaderModule, buffers: fullVertexBuffers },
+      fragment: {
+        module: hairShaderModule,
+        constants: { IS_OVER_EYES: 1 },
+        targets: sceneTargets,
+      },
+      primitive: { cullMode: "none" },
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        depthWriteEnabled: false,
+        depthCompare: "less-equal",
+        stencilFront: { compare: "equal", failOp: "keep", depthFailOp: "keep", passOp: "keep" },
+        stencilBack: { compare: "equal", failOp: "keep", depthFailOp: "keep", passOp: "keep" },
+        stencilReadMask: 0xff,
+        stencilWriteMask: 0,
+      },
+      multisample: { count: Engine.MULTISAMPLE_COUNT },
     })
 
     this.clothSmoothPipeline = this.createRenderPipeline({
@@ -892,17 +929,30 @@ export class Engine {
       },
     })
 
+    // Eye: stamps stencil = EYE_VALUE on every fragment it writes. Later hair passes read
+    // this stamp to split into "draw normally (not over eye)" vs "draw alpha-blended".
+    // cullMode="front" + small negative depthBias is the MMD post-alpha-eye trick: only the
+    // back half of the eye sphere renders, it passes depth against the face (via bias) when
+    // viewed from the front, and it gets culled when viewed from behind — so eye fragments
+    // can't leak through the back of the head without needing a per-model skull occluder.
     this.eyePipeline = this.createRenderPipeline({
       label: "eye pipeline",
       layout: mainPipelineLayout,
       shaderModule: eyeShaderModule,
       vertexBuffers: fullVertexBuffers,
       fragmentTargets: sceneTargets,
-      cullMode: "none",
+      cullMode: "front",
       depthStencil: {
         format: "depth24plus-stencil8",
         depthWriteEnabled: true,
         depthCompare: "less-equal",
+        depthBias: -0.00005,
+        depthBiasSlopeScale: 0.0,
+        depthBiasClamp: 0.0,
+        stencilFront: { compare: "always", failOp: "keep", depthFailOp: "keep", passOp: "replace" },
+        stencilBack: { compare: "always", failOp: "keep", depthFailOp: "keep", passOp: "replace" },
+        stencilReadMask: 0xff,
+        stencilWriteMask: 0xff,
       },
     })
 
@@ -1052,6 +1102,13 @@ export class Engine {
         // Don’t write outline into depth buffer — stops z-fighting / black cracks vs body (MMD-style; body depth stays authoritative)
         depthWriteEnabled: false,
         depthCompare: "less-equal",
+        // Skip fragments where the eye stamped stencil=EYE_VALUE. Those pixels are owned by
+        // the see-through-hair blend (hair-over-eyes), so letting the outline's near-black
+        // edge color overwrite them would re-introduce the dark almond we just killed.
+        stencilFront: { compare: "not-equal", failOp: "keep", depthFailOp: "keep", passOp: "keep" },
+        stencilBack: { compare: "not-equal", failOp: "keep", depthFailOp: "keep", passOp: "keep" },
+        stencilReadMask: 0xff,
+        stencilWriteMask: 0,
       },
     })
 
@@ -2223,6 +2280,26 @@ export class Engine {
       currentIndexOffset += indexCount
     }
 
+    // Sort so the opaque bucket is emitted in the order the stencil-based
+    // see-through-hair effect requires: {non-hair, non-eye} → {eye} → {hair}.
+    // Eye writes stencil=EYE_VALUE; hair's pipeline stencil-tests "not equal" so
+    // it skips eye pixels; a follow-up hairOverEyes pass (see renderOneModel)
+    // re-fills those skipped pixels alpha-blended. Array.sort is stable in
+    // ES2019+, so within a bucket the PMX material order is preserved.
+    const typeOrder: Record<DrawCallType, number> = {
+      opaque: 0,
+      "opaque-outline": 1,
+      transparent: 2,
+      "transparent-outline": 3,
+      ground: 4,
+    }
+    const presetRank = (p: MaterialPreset): number => (p === "hair" ? 2 : p === "eye" ? 1 : 0)
+    inst.drawCalls.sort((a, b) => {
+      const ta = typeOrder[a.type] - typeOrder[b.type]
+      if (ta !== 0) return ta
+      return presetRank(a.preset) - presetRank(b.preset)
+    })
+
     for (const d of inst.drawCalls) {
       if (d.type === "opaque") inst.shadowDrawCalls.push(d)
     }
@@ -2675,10 +2752,36 @@ export class Engine {
     pass.setVertexBuffer(2, inst.weightsBuffer)
     pass.setIndexBuffer(inst.indexBuffer, "uint32")
 
+    // Single stencil-reference set covers eye (write), hair (read not-equal),
+    // and hairOverEyes (read equal). Non-stencil pipelines ignore the value.
+    pass.setStencilReference(Engine.STENCIL_EYE_VALUE)
+
     this.drawMaterials(pass, inst, "opaque")
     this.drawOutlines(pass, inst, "opaque-outline")
+    this.drawHairOverEyes(pass, inst)
     this.drawMaterials(pass, inst, "transparent")
     this.drawOutlines(pass, inst, "transparent-outline")
+  }
+
+  /**
+   * Second hair pass for the see-through-hair effect. Re-draws every hair opaque
+   * draw using `hairOverEyesPipeline` — which stencil-matches `EYE_VALUE` and runs
+   * the hair shader with `IS_OVER_EYES=true` so alpha is halved. depthWriteEnabled
+   * is off, so the eye's depth stays authoritative for anything drawn after.
+   */
+  private drawHairOverEyes(pass: GPURenderPassEncoder, inst: ModelInstance): void {
+    let bound = false
+    for (const draw of inst.drawCalls) {
+      if (draw.type !== "opaque" || draw.preset !== "hair" || !this.shouldRenderDrawCall(inst, draw)) continue
+      if (!bound) {
+        pass.setPipeline(this.hairOverEyesPipeline)
+        pass.setBindGroup(0, this.perFrameBindGroup)
+        pass.setBindGroup(1, inst.mainPerInstanceBindGroup)
+        bound = true
+      }
+      pass.setBindGroup(2, draw.bindGroup)
+      pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
+    }
   }
 
   private updateCameraUniforms() {

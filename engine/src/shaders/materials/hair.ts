@@ -7,6 +7,12 @@ export const HAIR_SHADER_WGSL = /* wgsl */ `
 
 ${NODES_WGSL}
 
+// Pipeline-override: the engine compiles two variants — the normal opaque hair pipeline
+// (IS_OVER_EYES=false) and a second pipeline that re-draws hair fragments stencil-matched
+// against the eye stamp with 50% alpha so eyes read through the hair silhouette. Resolved
+// at pipeline-compile time; the dead branch is dropped by the shader compiler.
+override IS_OVER_EYES: bool = false;
+
 struct CameraUniforms {
   view: mat4x4f,
   projection: mat4x4f,
@@ -169,8 +175,11 @@ struct FSOut {
 
   let final_color = mix(add_shader, principled, 0.2);
 
+  var outAlpha = alpha;
+  if (IS_OVER_EYES) { outAlpha = alpha * 0.6; }
+
   var out: FSOut;
-  out.color = vec4f(final_color, alpha);
+  out.color = vec4f(final_color, outAlpha);
   out.mask = 1.0;
   return out;
 }
