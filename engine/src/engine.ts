@@ -256,11 +256,15 @@ export class Engine {
   private maskResolveView!: GPUTextureView
   private renderPassDescriptor!: GPURenderPassDescriptor
   private compositePassDescriptor!: GPURenderPassDescriptor
-  private compositePipeline!: GPURenderPipeline
+  // Two specialized composite pipelines via WGSL pipeline-override constants.
+  // Identity variant skips the gamma pow entirely at shader-compile time —
+  // Safari's Metal backend won't fold pow(x, 1) to identity.
+  private compositePipelineIdentity!: GPURenderPipeline
+  private compositePipelineGamma!: GPURenderPipeline
   private compositeBindGroupLayout!: GPUBindGroupLayout
   private compositeBindGroup!: GPUBindGroup
   private compositeUniformBuffer!: GPUBuffer
-  // [exposure, gamma, _, _,  bloomTint.x, bloomTint.y, bloomTint.z, bloomIntensity]
+  // [exposure, invGamma, _, _,  bloomTint.x, bloomTint.y, bloomTint.z, bloomIntensity]
   private readonly compositeUniformData = new Float32Array(8)
 
   // EEVEE-style bloom pyramid (mirrors Blender 3.6 effect_bloom_frag.glsl):
@@ -436,7 +440,10 @@ export class Engine {
     const effIntensity = b.enabled ? b.intensity : 0.0
     const u = this.compositeUniformData
     u[0] = v.exposure
-    u[1] = Math.max(v.gamma, 1e-4)
+    // Store 1/gamma so the shader avoids a per-pixel divide. Safari's Metal
+    // compiler doesn't fold `pow(x, 1/g)` into identity when g=1, so also emit
+    // a uniform branch that skips the pow entirely in the common case.
+    u[1] = 1.0 / Math.max(v.gamma, 1e-4)
     u[2] = 0.0
     u[3] = 0.0
     u[4] = b.color.x
@@ -1161,17 +1168,24 @@ export class Engine {
       code: COMPOSITE_SHADER_WGSL,
     })
 
-    this.compositePipeline = this.device.createRenderPipeline({
-      label: "composite pipeline",
-      layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.compositeBindGroupLayout] }),
-      vertex: { module: compositeShader, entryPoint: "vs" },
-      fragment: {
-        module: compositeShader,
-        entryPoint: "fs",
-        targets: [{ format: this.presentationFormat }],
-      },
-      primitive: { topology: "triangle-list" },
+    const compositePipelineLayout = this.device.createPipelineLayout({
+      bindGroupLayouts: [this.compositeBindGroupLayout],
     })
+    const makeCompositePipeline = (applyGamma: boolean, label: string): GPURenderPipeline =>
+      this.device.createRenderPipeline({
+        label,
+        layout: compositePipelineLayout,
+        vertex: { module: compositeShader, entryPoint: "vs" },
+        fragment: {
+          module: compositeShader,
+          entryPoint: "fs",
+          constants: { APPLY_GAMMA: applyGamma ? 1 : 0 },
+          targets: [{ format: this.presentationFormat }],
+        },
+        primitive: { topology: "triangle-list" },
+      })
+    this.compositePipelineIdentity = makeCompositePipeline(false, "composite pipeline (gamma=1)")
+    this.compositePipelineGamma = makeCompositePipeline(true, "composite pipeline (gamma!=1)")
 
     this.bloomPassDescriptor = {
       label: "bloom pass",
@@ -1338,12 +1352,16 @@ export class Engine {
 
       const depthTextureView = this.depthTexture.createView()
 
+      // storeOp="discard" on MSAA views keeps per-sample data in Apple TBDR tile memory —
+      // only the resolveTarget (hdrResolveTexture / maskResolveView) gets written to RAM.
+      // With storeOp="store" Safari's Metal backend spills the full MS buffer every frame
+      // (rgba16f × 4 samples on a 4K canvas ≈ 256 MB/frame of dead bandwidth).
       const colorAttachment: GPURenderPassColorAttachment = {
         view: this.multisampleTexture.createView(),
         resolveTarget: this.hdrResolveTexture.createView(),
         clearValue: { r: 0, g: 0, b: 0, a: 0 },
         loadOp: "clear",
-        storeOp: "store",
+        storeOp: "discard",
       }
 
       const maskAttachment: GPURenderPassColorAttachment = {
@@ -1351,7 +1369,7 @@ export class Engine {
         resolveTarget: this.maskResolveView,
         clearValue: { r: 0, g: 0, b: 0, a: 0 },
         loadOp: "clear",
-        storeOp: "store",
+        storeOp: "discard",
       }
 
       this.renderPassDescriptor = {
@@ -1361,7 +1379,8 @@ export class Engine {
           view: depthTextureView,
           depthClearValue: 1.0,
           depthLoadOp: "clear",
-          depthStoreOp: "store",
+          // Main-pass depth is not sampled later (shadow uses its own map, composite is depthless).
+          depthStoreOp: "discard",
           stencilClearValue: 0,
           stencilLoadOp: "clear",
           stencilStoreOp: "discard",
@@ -2553,7 +2572,9 @@ export class Engine {
     const compositeAttachment = (this.compositePassDescriptor.colorAttachments as GPURenderPassColorAttachment[])[0]
     compositeAttachment.view = this.context.getCurrentTexture().createView()
     const cpass = encoder.beginRenderPass(this.compositePassDescriptor)
-    cpass.setPipeline(this.compositePipeline)
+    const compositePipeline =
+      this.viewTransform.gamma === 1.0 ? this.compositePipelineIdentity : this.compositePipelineGamma
+    cpass.setPipeline(compositePipeline)
     cpass.setBindGroup(0, this.compositeBindGroup)
     cpass.draw(3)
     cpass.end()

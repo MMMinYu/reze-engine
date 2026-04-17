@@ -206,43 +206,44 @@ export default function Home() {
       engineRef.current = engine
       await engine.init()
 
-      // engine.setPhysicsEnabled(false)
-      // engine.setWorld({strength:0.5})
-      // engine.setSun({strength:4})
-      // engine.setBloomOptions({intensity: 0.05, radius:4 })
 
-      const m1 = await engine.loadModel("reze", "/models/塞尔凯特/塞尔凯特.pmx")
+      const m1 = await engine.loadModel("reze", "/models/塞尔凯特2/塞尔凯特2.pmx")
 
       modelRef.current = m1
 
-      // engine.setMaterialPresets("reze", {
-      //   eye: ["眼睛", "眼白", "目白", "右瞳"],
-      //   face: ["脸", "face01"],
-      //   body: ["皮肤", "skin"],
-      //   hair: ["头发", "hair_f"],
-      //   cloth_smooth: [
-      //     "衣服",
-      //     "裙子",
-      //     "裙带",
-      //     "裙布",
-      //     "外套",
-      //     "外套饰",
-      //     "裤子",
-      //     "裤子0",
-      //     "腿环",
-      //     "发饰",
-      //     "鞋子",
-      //     "鞋子饰",
-      //     "shirt",
-      //     "shoes",
-      //     "shorts",
-      //     "trigger",
-      //   ],
-      //   stockings: ["袜子", "stockings"],
-      // })
+      engine.setMaterialPresets("reze", {
+        eye: ["眼睛", "眼白", "目白", "右瞳","左瞳"],
+        face: ["脸", "face01"],
+        body: ["皮肤", "skin"],
+        hair: ["头发", "hair_f"],
+        cloth_smooth: [
+          "衣服",
+          "裙子",
+          "裙带",
+          "裙布",
+          "外套",
+          "外套饰",
+          "裤子",
+          "裤子0",
+          "腿环",
+          "发饰",
+          "鞋子",
+          "鞋子饰",
+          "shirt",
+          "shoes",
+          "shorts",
+          "trigger",
+          "dress",
+          "hair_accessory",
+          "cloth01_shoes"
+        ],
+        stockings: ["袜子", "stockings"],
+        metal: ["metal01","earring"],
+      })
 
+      engine.setBloomOptions({color: new Vec3(0.9, 0.1, 0.8)})
       engine.addGround({
-        diffuseColor: new Vec3(244 / 255, 70 / 255, 149 / 255),
+        diffuseColor: new Vec3(1, 0.3, 0.6),
       })
 
       engine.runRenderLoop(() => setStats(engine.getStats()))

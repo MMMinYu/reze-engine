@@ -2,11 +2,19 @@
 // Bloom tint/intensity applied at combine (EEVEE treats them as combine-stage params, not prefilter).
 
 export const COMPOSITE_SHADER_WGSL = /* wgsl */ `
+// Pipeline-override constant: the engine creates two composite pipelines, one
+// with APPLY_GAMMA=false (gamma=1 fast path) and one with APPLY_GAMMA=true.
+// The 'if (APPLY_GAMMA)' below is resolved at pipeline-compile time — the
+// dead branch is dropped by the shader compiler (no runtime branch, no pow
+// invocation on Safari's Metal backend in the common case).
+override APPLY_GAMMA: bool = true;
+
 @group(0) @binding(0) var hdrTex: texture_2d<f32>;
 @group(0) @binding(1) var bloomTex: texture_2d<f32>;   // bloomUpTexture mip 0 (full pyramid top)
 @group(0) @binding(2) var bloomSamp: sampler;
 @group(0) @binding(3) var<uniform> viewU: array<vec4<f32>, 2>;
-// viewU[0] = (exposure, gamma, _, _);  viewU[1] = (tint.rgb, intensity)
+// viewU[0] = (exposure, invGamma, _, _);  viewU[1] = (tint.rgb, intensity)
+// invGamma = 1/gamma precomputed on CPU — avoids a per-pixel divide.
 
 fn filmic(x: f32) -> f32 {
   // Re-fit against Blender 3.6 Filmic MHC anchors (sobotka/filmic-blender
@@ -45,8 +53,10 @@ fn filmic(x: f32) -> f32 {
   let combined = straight + bloom;
   let exposed = combined * exp2(viewU[0].x);
   let tm = vec3f(filmic(exposed.r), filmic(exposed.g), filmic(exposed.b));
-  let g = max(viewU[0].y, 1e-4);
-  let disp = pow(max(tm, vec3f(0.0)), vec3f(1.0 / g));
+  var disp = max(tm, vec3f(0.0));
+  if (APPLY_GAMMA) {
+    disp = pow(disp, vec3f(viewU[0].y));
+  }
   return vec4f(disp * hdr.a, hdr.a);
 }
 `
