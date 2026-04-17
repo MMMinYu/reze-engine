@@ -72,6 +72,8 @@ const BODY_RIM2_POW: f32 = 1.4300000667572021;
 const BODY_RIM2_BG: vec3f = vec3f(1.0, 0.4303792119026184, 0.3315804898738861);
 const BODY_WARM_AO_MUL: f32 = 0.30000001192092896;
 const BODY_MIX_NPR: f32 = 0.5;
+// EEVEE Light Clamp equivalent — caps firefly specular from noise-bumped NDF aliasing.
+const BODY_SPEC_CLAMP: f32 = 10.0;
 
 fn ggx_d_body(ndoth: f32, a2: f32) -> f32 {
   let denom = ndoth * ndoth * (a2 - 1.0) + 1.0;
@@ -120,7 +122,12 @@ fn ramp_ease(f: f32, p0: f32, c0: vec4f, p1: f32, c1: vec4f) -> vec4f {
   return output;
 }
 
-@fragment fn fs(input: VertexOutput) -> @location(0) vec4f {
+struct FSOut {
+  @location(0) color: vec4f,
+  @location(1) mask: f32,
+};
+
+@fragment fn fs(input: VertexOutput) -> FSOut {
   let alpha = material.alpha;
   if (alpha < 0.001) { discard; }
 
@@ -194,9 +201,13 @@ fn ramp_ease(f: f32, p0: f32, c0: vec4f, p1: f32, c1: vec4f) -> vec4f {
   let D = ggx_d_body(p_ndoth, a2);
   let G = smith_g1_body(p_ndotl, a2) * smith_g1_body(p_ndotv, a2);
   let F = fresnel_schlick_body(p_vdoth, F0_BODY);
-  let spec = (D * G * F) / max(4.0 * p_ndotl * p_ndotv, 0.001) * ltc_brdf_scale(p_ndotv, BODY_ROUGHNESS);
+  let brdf_lut = brdf_lut_sample(p_ndotv, BODY_ROUGHNESS);
+  let spec = (D * G * F) / max(4.0 * p_ndotl * p_ndotv, 0.001) * ltc_brdf_scale_from_lut(brdf_lut);
   let kd = (1.0 - F) * principled_base / PI_B;
-  let direct = (kd + spec) * sun * p_ndotl * shadow;
+  // Split so we can clamp only the spec firefly contribution (EEVEE Light Clamp).
+  let spec_radiance = vec3f(spec) * sun * p_ndotl * shadow;
+  let spec_clamped = min(spec_radiance, vec3f(BODY_SPEC_CLAMP));
+  let direct = kd * sun * p_ndotl * shadow + spec_clamped;
   // Indirect diffuse = base_color × L_w per Blender closure_eval_surface_lib.glsl line 302;
   // probe_evaluate_world_diff returns radiance (SH-projected, not cosine-convolved).
   let ambient = principled_base * light.ambientColor.xyz;
@@ -205,7 +216,10 @@ fn ramp_ease(f: f32, p0: f32, c0: vec4f, p1: f32, c1: vec4f) -> vec4f {
   // 混合着色器.001: Shader=相加着色器.001, Shader_001=原理化BSDF
   let final_color = mix(npr_stack, principled, BODY_MIX_NPR);
 
-  return vec4f(final_color, alpha);
+  var out: FSOut;
+  out.color = vec4f(final_color, alpha);
+  out.mask = 1.0;
+  return out;
 }
 
 `

@@ -1,29 +1,37 @@
-// One-shot bake pass that precomputes EEVEE's BRDF split-sum DFG LUT.
-// Direct WGSL port of Blender 3.6 source/blender/draw/engines/eevee/shaders/
-//   bsdf_lut_frag.glsl + bsdf_sampling_lib.glsl (VNDF GGX branch).
+// One-shot bake pass that produces the combined EEVEE BRDF LUT.
+// Output: 64×64 rgba8unorm — .rg = split-sum DFG (Blender bsdf_lut_frag.glsl,
+// Karis convention: tint = f0·x + f90·y), .ba = Heitz 2016 LTC magnitude
+// (ltc_mag_ggx from eevee_lut.c), sampled from a temp rg16float source texture
+// passed in at bake time.
 //
-// Output texture: 64×64 rg16float, written once at engine init.
-//   R = (1 - Fc) × BRDF integrated over GGX VNDF — scales f0
-//   G = Fc × BRDF integrated over GGX VNDF — scales f90
-// Runtime sampler: see brdf_lut_baked() in nodes.ts. Plug into
-// F_brdf_single_scatter / F_brdf_multi_scatter verbatim.
+// Packing both LUTs into one texture lets runtime shaders do a SINGLE texture
+// fetch per fragment to get everything needed for F_brdf_multi_scatter AND
+// ltc_brdf_scale. Was 3 taps (dfg in brdf_lut_baked + dfg+ltc in ltc_brdf_scale);
+// now 1. Big win on Apple GPUs where fragment-stage texture fetches are the
+// dominant cost with MSAA.
+//
+// rgba8unorm (vs rgba16float) is a deliberate precision drop: DFG values live in
+// [0,1], LTC magnitude in [0,1], 1/255 quantization is below the perceptual
+// threshold for direct-spec energy compensation. Halves bandwidth per sample.
 
-export const DFG_LUT_SIZE = 64
-export const DFG_LUT_SAMPLE_COUNT = 32
+export const BRDF_LUT_SIZE = 64
+const BAKE_SAMPLE_COUNT = 32
 
-export const DFG_LUT_WGSL = /* wgsl */ `
-const LUT_SIZE: f32 = ${DFG_LUT_SIZE}.0;
-const SAMPLE_COUNT: u32 = ${DFG_LUT_SAMPLE_COUNT}u;
+export const BRDF_LUT_BAKE_WGSL = /* wgsl */ `
+const LUT_SIZE: f32 = ${BRDF_LUT_SIZE}.0;
+const SAMPLE_COUNT: u32 = ${BAKE_SAMPLE_COUNT}u;
 const M_2PI: f32 = 6.283185307179586;
 
+// Temp LTC magnitude source (rg16float, uploaded from eevee_lut.c ltc_mag_ggx).
+// Sampled 1:1 by pixel — bake coord mapping matches runtime sample coord mapping.
+@group(0) @binding(0) var ltcSrc: texture_2d<f32>;
+
 @vertex fn vs(@builtin(vertex_index) vid: u32) -> @builtin(position) vec4f {
-  // Full-screen triangle covering [-1,1]² in NDC.
   let x = f32((vid << 1u) & 2u) * 2.0 - 1.0;
   let y = f32(vid & 2u) * 2.0 - 1.0;
   return vec4f(x, y, 0.0, 1.0);
 }
 
-// common_math_geom_lib.glsl:165 — make_orthonormal_basis.
 fn orthonormal_basis(N: vec3f) -> mat2x3f {
   let up = select(vec3f(1.0, 0.0, 0.0), vec3f(0.0, 0.0, 1.0), abs(N.z) < 0.99999);
   let T = normalize(cross(up, N));
@@ -31,7 +39,6 @@ fn orthonormal_basis(N: vec3f) -> mat2x3f {
   return mat2x3f(T, B);
 }
 
-// bsdf_sampling_lib.glsl:27 — Heitz 2018 VNDF sampling in tangent space.
 fn sample_ggx_vndf(rand: vec3f, alpha: f32, Vt: vec3f) -> vec3f {
   let Vh = normalize(vec3f(alpha * Vt.xy, Vt.z));
   let tb = orthonormal_basis(Vh);
@@ -47,12 +54,10 @@ fn sample_ggx_vndf(rand: vec3f, alpha: f32, Vt: vec3f) -> vec3f {
   return normalize(vec3f(alpha * Hh.xy, saturate(Hh.z)));
 }
 
-// bsdf_common_lib.glsl:105 — G1 Smith GGX (Brian Karis opti form).
 fn G1_Smith_GGX_opti(NX: f32, a2: f32) -> f32 {
   return NX + sqrt(NX * (NX - NX * a2) + a2);
 }
 
-// bsdf_common_lib.glsl:50 — exact dielectric Fresnel (monochromatic).
 fn F_eta(eta: f32, cos_theta: f32) -> f32 {
   let c = abs(cos_theta);
   var g = eta * eta - 1.0 + c * c;
@@ -62,7 +67,7 @@ fn F_eta(eta: f32, cos_theta: f32) -> f32 {
     let B = (c * (g + c) - 1.0) / (c * (g - c) + 1.0);
     return 0.5 * A * A * (1.0 + B * B);
   }
-  return 1.0; // total internal reflection
+  return 1.0;
 }
 
 fn f0_from_ior(eta: f32) -> f32 {
@@ -70,13 +75,12 @@ fn f0_from_ior(eta: f32) -> f32 {
   return A * A;
 }
 
-// F_color_blend(eta, fresnel, vec3(0)).r — blend factor only.
 fn F_color_blend_zero(eta: f32, fresnel: f32) -> f32 {
   let f0 = f0_from_ior(eta);
   return saturate((fresnel - f0) / (1.0 - f0));
 }
 
-@fragment fn fs(@builtin(position) frag: vec4f) -> @location(0) vec2f {
+@fragment fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   let y_uv = floor(frag.y) / (LUT_SIZE - 1.0);
   let x_uv = floor(frag.x) / (LUT_SIZE - 1.0);
 
@@ -86,7 +90,6 @@ fn F_color_blend_zero(eta: f32, fresnel: f32) -> f32 {
 
   let V = vec3f(sqrt(1.0 - NV * NV), 0.0, NV);
 
-  // principled specular=1.0 — max value, matches bsdf_lut_frag.glsl:41.
   let eta = (2.0 / (1.0 - sqrt(0.08 * 1.0))) - 1.0;
 
   var brdf_accum = 0.0;
@@ -96,7 +99,6 @@ fn F_color_blend_zero(eta: f32, fresnel: f32) -> f32 {
     for (var i: u32 = 0u; i < SAMPLE_COUNT; i = i + 1u) {
       let ix = (f32(i) + 0.5) / sc_f;
       let iy = (f32(j) + 0.5) / sc_f;
-      // Xi.x = radial, Xi.yz = (cos, sin) of azimuth — bsdf_lut_frag.glsl:22.
       let Xi = vec3f(ix, cos(iy * M_2PI), sin(iy * M_2PI));
 
       let H = sample_ggx_vndf(Xi, a, V);
@@ -106,7 +108,6 @@ fn F_color_blend_zero(eta: f32, fresnel: f32) -> f32 {
         let NH = max(H.z, 0.0);
         let VH = max(dot(V, H), 0.0);
 
-        // G_smith (divided form): 4·NV·NL / (G1_v·G1_l). See bsdf_common_lib.glsl:105.
         let G1v = G1_Smith_GGX_opti(NV, a2);
         let G1l = G1_Smith_GGX_opti(NL, a2);
         let G_smith = 4.0 * NV * NL / (G1v * G1l);
@@ -122,6 +123,9 @@ fn F_color_blend_zero(eta: f32, fresnel: f32) -> f32 {
     }
   }
   let n2 = sc_f * sc_f;
-  return vec2f(brdf_accum / n2, fresnel_accum / n2);
+  let dfg = vec2f(brdf_accum / n2, fresnel_accum / n2);
+  // Pack preloaded LTC magnitude at matching (roughness, sqrt(1-NV)) pixel.
+  let ltc = textureLoad(ltcSrc, vec2i(i32(frag.x), i32(frag.y)), 0).rg;
+  return vec4f(dfg, ltc);
 }
 `

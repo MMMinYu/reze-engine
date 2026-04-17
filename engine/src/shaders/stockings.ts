@@ -150,7 +150,12 @@ fn ramp_ease_s(f: f32, p0: f32, p1: f32) -> f32 {
   return output;
 }
 
-@fragment fn fs(input: VertexOutput) -> @location(0) vec4f {
+struct FSOut {
+  @location(0) color: vec4f,
+  @location(1) bloom_mask: f32,
+};
+
+@fragment fn fs(input: VertexOutput) -> FSOut {
   let n = normalize(input.normal);
   let v = normalize(camera.viewPos - input.worldPos);
   let l = -light.lights[0].direction.xyz;
@@ -205,10 +210,10 @@ fn ramp_ease_s(f: f32, p0: f32, p1: f32) -> f32 {
   let dielectric_f0 = vec3f(0.08 * STOCK_SPECULAR);
   let f0 = mix(dielectric_f0, tex_rgb, STOCK_METALLIC);
   let f90 = mix(f0, vec3f(1.0), sqrt(STOCK_SPECULAR));
-  let split_sum = brdf_lut_baked(NV, STOCK_ROUGHNESS);
-  let reflection_color = F_brdf_multi_scatter(f0, f90, split_sum);
+  let brdf_lut = brdf_lut_sample(NV, STOCK_ROUGHNESS);
+  let reflection_color = F_brdf_multi_scatter(f0, f90, brdf_lut.xy);
 
-  let spec_direct = bsdf_ggx(n, l, v, STOCK_ROUGHNESS) * sun * shadow * ltc_brdf_scale(NV, STOCK_ROUGHNESS);
+  let spec_direct = bsdf_ggx(n, l, v, STOCK_ROUGHNESS) * sun * shadow * ltc_brdf_scale_from_lut(brdf_lut);
   let spec_indirect = amb;
   let spec_radiance = (spec_direct + spec_indirect) * reflection_color;
 
@@ -225,7 +230,10 @@ fn ramp_ease_s(f: f32, p0: f32, p1: f32) -> f32 {
   // ═══ MIX SHADER: Shader=Emission, Shader_001=Principled, Fac=mask ═══
   let final_color = mix(emission, principled, mask);
 
-  return vec4f(final_color, out_alpha);
+  var out: FSOut;
+  out.color = vec4f(final_color, out_alpha);
+  out.bloom_mask = 1.0;
+  return out;
 }
 
 `

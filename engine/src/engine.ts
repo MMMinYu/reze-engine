@@ -14,7 +14,7 @@ import {
   type AssetReader,
 } from "./asset-reader"
 import { DEFAULT_SHADER_WGSL } from "./shaders/default"
-import { DFG_LUT_SIZE, DFG_LUT_WGSL } from "./shaders/dfg_lut"
+import { BRDF_LUT_SIZE, BRDF_LUT_BAKE_WGSL } from "./shaders/dfg_lut"
 import { LTC_MAG_LUT_SIZE, LTC_MAG_LUT_DATA } from "./shaders/ltc_mag_lut"
 import { FACE_SHADER_WGSL } from "./shaders/face"
 import { HAIR_SHADER_WGSL } from "./shaders/hair"
@@ -74,11 +74,11 @@ export type BloomOptions = {
 
 export const DEFAULT_BLOOM_OPTIONS: BloomOptions = {
   enabled: true,
-  threshold: 0.5,
+  threshold: 1,
   knee: 0.5,
   radius: 4.0,
   color: new Vec3(1.0, 0.7247558832168579, 0.6487361788749695),
-  intensity: 0.03,
+  intensity: 0.05,
   clamp: 0.0,
 }
 
@@ -212,6 +212,13 @@ export class Engine {
   private hdrResolveTexture!: GPUTexture
   private static readonly MULTISAMPLE_COUNT = 4
   private static readonly HDR_FORMAT: GPUTextureFormat = "rgba16float"
+  /** Single-channel mask written alongside HDR color — 1 = model geometry (contributes
+   *  to bloom), 0 = ground (never blooms). Sampled by the bloom blit pass to gate the
+   *  prefilter so ground brightness can't halo the scene. */
+  private static readonly BLOOM_MASK_FORMAT: GPUTextureFormat = "r8unorm"
+  private multisampleMaskTexture!: GPUTexture
+  private maskResolveTexture!: GPUTexture
+  private maskResolveView!: GPUTextureView
   private renderPassDescriptor!: GPURenderPassDescriptor
   private compositePassDescriptor!: GPURenderPassDescriptor
   private compositePipeline!: GPURenderPipeline
@@ -256,10 +263,8 @@ export class Engine {
   private hasGround = false
   private shadowMapTexture!: GPUTexture
   private shadowMapDepthView!: GPUTextureView
-  private dfgLutTexture!: GPUTexture
-  private dfgLutView!: GPUTextureView
-  private ltcMagLutTexture!: GPUTexture
-  private ltcMagLutView!: GPUTextureView
+  private brdfLutTexture!: GPUTexture
+  private brdfLutView!: GPUTextureView
   private static readonly SHADOW_MAP_SIZE = 4096
   private shadowDepthPipeline!: GPURenderPipeline
   private shadowLightVPBuffer!: GPUBuffer
@@ -287,6 +292,8 @@ export class Engine {
   private modelInstances = new Map<string, ModelInstance>()
   private materialSampler!: GPUSampler
   private textureCache = new Map<string, GPUTexture>()
+  private mipBlitPipeline: GPURenderPipeline | null = null
+  private mipBlitSampler: GPUSampler | null = null
   private _nextDefaultModelId = 0
 
   // IK and physics enabled at engine level (same for all models)
@@ -473,51 +480,24 @@ export class Engine {
     Engine.instance = this
   }
 
-  // One-shot bake of EEVEE's BRDF split-sum DFG LUT — ported from
-  // bsdf_lut_frag.glsl. Runs once per engine init; resulting 64×64 rg16float
-  // texture is sampled by every material shader via group(0) binding(9).
-  private bakeDfgLut() {
-    this.dfgLutTexture = this.device.createTexture({
-      label: "DFG LUT",
-      size: [DFG_LUT_SIZE, DFG_LUT_SIZE],
-      format: "rg16float",
-      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-    })
-    this.dfgLutView = this.dfgLutTexture.createView()
+  // One-shot bake of EEVEE's combined BRDF LUT — DFG (bsdf_lut_frag.glsl) packed
+  // with ltc_mag_ggx (eevee_lut.c) into a single 64×64 rgba8unorm texture:
+  //   .rg = split-sum DFG   → F_brdf_*_scatter
+  //   .ba = LTC magnitude   → ltc_brdf_scale_from_lut
+  // One texture fetch per fragment replaces the previous 2–3 taps. rgba8unorm
+  // (vs rgba16float) halves sample bandwidth; DFG/LTC values fit [0,1] cleanly.
+  private bakeBrdfLut() {
+    if (BRDF_LUT_SIZE !== LTC_MAG_LUT_SIZE) {
+      throw new Error("BRDF LUT bake requires DFG size == LTC size (both 64).")
+    }
 
-    const module = this.device.createShaderModule({ label: "DFG LUT bake", code: DFG_LUT_WGSL })
-    const pipeline = this.device.createRenderPipeline({
-      label: "DFG LUT bake pipeline",
-      layout: "auto",
-      vertex: { module, entryPoint: "vs" },
-      fragment: { module, entryPoint: "fs", targets: [{ format: "rg16float" }] },
-      primitive: { topology: "triangle-list" },
-    })
-
-    const enc = this.device.createCommandEncoder({ label: "DFG LUT bake encoder" })
-    const pass = enc.beginRenderPass({
-      colorAttachments: [
-        { view: this.dfgLutView, clearValue: { r: 0, g: 0, b: 0, a: 1 }, loadOp: "clear", storeOp: "store" },
-      ],
-    })
-    pass.setPipeline(pipeline)
-    pass.draw(3, 1, 0, 0)
-    pass.end()
-    this.device.queue.submit([enc.finish()])
-  }
-
-  // Upload Blender's static LTC GGX magnitude LUT (eevee_lut.c ltc_mag_ggx[]).
-  // Pairs with the DFG LUT to form ltc_brdf_scale — closure_eval_glossy_lib.glsl:79-81.
-  private uploadLtcMagLut() {
-    this.ltcMagLutTexture = this.device.createTexture({
-      label: "LTC mag LUT",
+    // Temp rg16float LTC source — loaded 1:1 by the bake fragment shader, then dropped.
+    const ltcTemp = this.device.createTexture({
+      label: "LTC mag LUT (bake input)",
       size: [LTC_MAG_LUT_SIZE, LTC_MAG_LUT_SIZE],
       format: "rg16float",
       usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
     })
-    this.ltcMagLutView = this.ltcMagLutTexture.createView()
-
-    // Float32 → float16 bits. rg16float writeTexture expects packed half floats.
     const n = LTC_MAG_LUT_DATA.length
     const half = new Uint16Array(n)
     const f32 = new Float32Array(1)
@@ -527,22 +507,58 @@ export class Engine {
       const x = u32[0]
       const sign = (x >>> 16) & 0x8000
       let exp = ((x >>> 23) & 0xff) - 127 + 15
-      let mant = x & 0x7fffff
+      const mant = x & 0x7fffff
       if (exp <= 0) {
-        half[i] = sign // flush tiny values to signed zero (data here is in [0, ~1])
+        half[i] = sign
       } else if (exp >= 31) {
-        half[i] = sign | 0x7c00 // inf
+        half[i] = sign | 0x7c00
       } else {
         half[i] = sign | (exp << 10) | (mant >>> 13)
       }
     }
-
     this.device.queue.writeTexture(
-      { texture: this.ltcMagLutTexture },
+      { texture: ltcTemp },
       half,
       { bytesPerRow: LTC_MAG_LUT_SIZE * 4, rowsPerImage: LTC_MAG_LUT_SIZE },
       { width: LTC_MAG_LUT_SIZE, height: LTC_MAG_LUT_SIZE, depthOrArrayLayers: 1 }
     )
+
+    this.brdfLutTexture = this.device.createTexture({
+      label: "BRDF LUT (DFG + LTC packed)",
+      size: [BRDF_LUT_SIZE, BRDF_LUT_SIZE],
+      format: "rgba8unorm",
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+    })
+    this.brdfLutView = this.brdfLutTexture.createView()
+
+    const module = this.device.createShaderModule({ label: "BRDF LUT bake", code: BRDF_LUT_BAKE_WGSL })
+    const pipeline = this.device.createRenderPipeline({
+      label: "BRDF LUT bake pipeline",
+      layout: "auto",
+      vertex: { module, entryPoint: "vs" },
+      fragment: { module, entryPoint: "fs", targets: [{ format: "rgba8unorm" }] },
+      primitive: { topology: "triangle-list" },
+    })
+
+    const bakeBindGroup = this.device.createBindGroup({
+      label: "BRDF LUT bake bind group",
+      layout: pipeline.getBindGroupLayout(0),
+      entries: [{ binding: 0, resource: ltcTemp.createView() }],
+    })
+
+    const enc = this.device.createCommandEncoder({ label: "BRDF LUT bake encoder" })
+    const pass = enc.beginRenderPass({
+      colorAttachments: [
+        { view: this.brdfLutView, clearValue: { r: 0, g: 0, b: 0, a: 1 }, loadOp: "clear", storeOp: "store" },
+      ],
+    })
+    pass.setPipeline(pipeline)
+    pass.setBindGroup(0, bakeBindGroup)
+    pass.draw(3, 1, 0, 0)
+    pass.end()
+    this.device.queue.submit([enc.finish()])
+
+    ltcTemp.destroy()
   }
 
   private createRenderPipeline(config: {
@@ -551,11 +567,13 @@ export class Engine {
     shaderModule: GPUShaderModule
     vertexBuffers: GPUVertexBufferLayout[]
     fragmentTarget?: GPUColorTargetState
+    fragmentTargets?: GPUColorTargetState[]
     fragmentEntryPoint?: string
     cullMode?: GPUCullMode
     depthStencil?: GPUDepthStencilState
     multisample?: GPUMultisampleState
   }): GPURenderPipeline {
+    const targets = config.fragmentTargets ?? (config.fragmentTarget ? [config.fragmentTarget] : undefined)
     return this.device.createRenderPipeline({
       label: config.label,
       layout: config.layout,
@@ -563,11 +581,11 @@ export class Engine {
         module: config.shaderModule,
         buffers: config.vertexBuffers,
       },
-      fragment: config.fragmentTarget
+      fragment: targets
         ? {
             module: config.shaderModule,
             entryPoint: config.fragmentEntryPoint,
-            targets: [config.fragmentTarget],
+            targets,
           }
         : undefined,
       primitive: { cullMode: config.cullMode ?? "none" },
@@ -580,6 +598,7 @@ export class Engine {
     this.materialSampler = this.device.createSampler({
       magFilter: "linear",
       minFilter: "linear",
+      mipmapFilter: "linear",
       addressModeU: "repeat",
       addressModeV: "repeat",
     })
@@ -641,6 +660,12 @@ export class Engine {
       },
     }
 
+    // Bloom mask target — r8unorm has no alpha channel, so src-alpha blending is invalid.
+    // Use replace mode: depth test already rejects occluded fragments, so last-writer-wins
+    // on surviving pixels gives the right result (ground writes 0; models/outlines write 1).
+    const maskBlend: GPUColorTargetState = { format: Engine.BLOOM_MASK_FORMAT }
+    const sceneTargets: GPUColorTargetState[] = [standardBlend, maskBlend]
+
     const shaderModule = this.device.createShaderModule({
       label: "default model shader",
       code: DEFAULT_SHADER_WGSL,
@@ -697,7 +722,6 @@ export class Engine {
         { binding: 4, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "comparison" } },
         { binding: 5, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
         { binding: 9, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
-        { binding: 10, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
       ],
     })
     // group 1: per-instance (skinMats) — bound once per model
@@ -730,7 +754,7 @@ export class Engine {
       layout: mainPipelineLayout,
       shaderModule,
       vertexBuffers: fullVertexBuffers,
-      fragmentTarget: standardBlend,
+      fragmentTargets: sceneTargets,
       cullMode: "none",
       depthStencil: {
         format: "depth24plus-stencil8",
@@ -744,7 +768,7 @@ export class Engine {
       layout: mainPipelineLayout,
       shaderModule: faceShaderModule,
       vertexBuffers: fullVertexBuffers,
-      fragmentTarget: standardBlend,
+      fragmentTargets: sceneTargets,
       cullMode: "none",
       depthStencil: {
         format: "depth24plus-stencil8",
@@ -758,7 +782,7 @@ export class Engine {
       layout: mainPipelineLayout,
       shaderModule: hairShaderModule,
       vertexBuffers: fullVertexBuffers,
-      fragmentTarget: standardBlend,
+      fragmentTargets: sceneTargets,
       cullMode: "none",
       depthStencil: {
         format: "depth24plus-stencil8",
@@ -772,7 +796,7 @@ export class Engine {
       layout: mainPipelineLayout,
       shaderModule: clothSmoothShaderModule,
       vertexBuffers: fullVertexBuffers,
-      fragmentTarget: standardBlend,
+      fragmentTargets: sceneTargets,
       cullMode: "none",
       depthStencil: {
         format: "depth24plus-stencil8",
@@ -786,7 +810,7 @@ export class Engine {
       layout: mainPipelineLayout,
       shaderModule: clothRoughShaderModule,
       vertexBuffers: fullVertexBuffers,
-      fragmentTarget: standardBlend,
+      fragmentTargets: sceneTargets,
       cullMode: "none",
       depthStencil: {
         format: "depth24plus-stencil8",
@@ -800,7 +824,7 @@ export class Engine {
       layout: mainPipelineLayout,
       shaderModule: metalShaderModule,
       vertexBuffers: fullVertexBuffers,
-      fragmentTarget: standardBlend,
+      fragmentTargets: sceneTargets,
       cullMode: "none",
       depthStencil: {
         format: "depth24plus-stencil8",
@@ -814,7 +838,7 @@ export class Engine {
       layout: mainPipelineLayout,
       shaderModule: bodyShaderModule,
       vertexBuffers: fullVertexBuffers,
-      fragmentTarget: standardBlend,
+      fragmentTargets: sceneTargets,
       cullMode: "none",
       depthStencil: {
         format: "depth24plus-stencil8",
@@ -828,7 +852,7 @@ export class Engine {
       layout: mainPipelineLayout,
       shaderModule: eyeShaderModule,
       vertexBuffers: fullVertexBuffers,
-      fragmentTarget: standardBlend,
+      fragmentTargets: sceneTargets,
       cullMode: "none",
       depthStencil: {
         format: "depth24plus-stencil8",
@@ -842,7 +866,7 @@ export class Engine {
       layout: mainPipelineLayout,
       shaderModule: stockingsShaderModule,
       vertexBuffers: fullVertexBuffers,
-      fragmentTarget: standardBlend,
+      fragmentTargets: sceneTargets,
       cullMode: "none",
       depthStencil: {
         format: "depth24plus-stencil8",
@@ -907,10 +931,8 @@ export class Engine {
     })
     this.shadowMapDepthView = this.shadowMapTexture.createView()
 
-    // One-shot bake of Blender EEVEE's BRDF split-sum DFG LUT (bsdf_lut_frag.glsl).
-    this.bakeDfgLut()
-    // Upload static LTC GGX magnitude LUT for direct-specular energy compensation.
-    this.uploadLtcMagLut()
+    // One-shot bake of Blender EEVEE's combined BRDF LUT (DFG + LTC packed rgba8unorm).
+    this.bakeBrdfLut()
 
     // Now that shadow resources exist, create the main per-frame bind group
     this.perFrameBindGroup = this.device.createBindGroup({
@@ -923,8 +945,7 @@ export class Engine {
         { binding: 3, resource: this.shadowMapDepthView },
         { binding: 4, resource: this.shadowComparisonSampler },
         { binding: 5, resource: { buffer: this.shadowLightVPBuffer } },
-        { binding: 9, resource: this.dfgLutView },
-        { binding: 10, resource: this.ltcMagLutView },
+        { binding: 9, resource: this.brdfLutView },
       ],
     })
 
@@ -989,7 +1010,8 @@ export class Engine {
           var o: VO; o.worldPos = position; o.normal = normal;
           o.position = camera.projection * camera.view * vec4f(position, 1.0); return o;
         }
-        @fragment fn fs(i: VO) -> @location(0) vec4f {
+        struct FSOut { @location(0) color: vec4f, @location(1) mask: f32 };
+        @fragment fn fs(i: VO) -> FSOut {
           let n = normalize(i.normal);
           let centerDist = length(i.worldPos.xz);
           let edgeFade = 1.0 - smoothstep(0.0, 1.0, clamp((centerDist - material.fadeStart) / max(material.fadeEnd - material.fadeStart, 0.001), 0.0, 1.0));
@@ -1027,7 +1049,10 @@ export class Engine {
           var baseColor = material.diffuseColor * sun * (1.0 - dark * 0.65);
           baseColor *= noiseTint;
           let finalColor = mix(baseColor, material.gridLineColor, gridLine * material.gridLineOpacity * edgeFade);
-          return vec4f(finalColor * edgeFade, edgeFade);
+          var out: FSOut;
+          out.color = vec4f(finalColor * edgeFade, edgeFade);
+          out.mask = 0.0;
+          return out;
         }
       `,
     })
@@ -1036,7 +1061,7 @@ export class Engine {
       layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.groundShadowBindGroupLayout] }),
       shaderModule: groundShadowShader,
       vertexBuffers: fullVertexBuffers,
-      fragmentTarget: standardBlend,
+      fragmentTargets: sceneTargets,
       cullMode: "back",
       depthStencil: { format: "depth24plus-stencil8", depthWriteEnabled: true, depthCompare: "less-equal" },
     })
@@ -1149,8 +1174,12 @@ export class Engine {
           return output;
         }
 
-        @fragment fn fs() -> @location(0) vec4f {
-          return material.edgeColor;
+        struct FSOut { @location(0) color: vec4f, @location(1) mask: f32 };
+        @fragment fn fs() -> FSOut {
+          var out: FSOut;
+          out.color = material.edgeColor;
+          out.mask = 1.0;
+          return out;
         }
       `,
     })
@@ -1160,7 +1189,7 @@ export class Engine {
       layout: outlinePipelineLayout,
       shaderModule: outlineShaderModule,
       vertexBuffers: outlineVertexBuffers,
-      fragmentTarget: standardBlend,
+      fragmentTargets: sceneTargets,
       cullMode: "back",
       depthStencil: {
         format: "depth24plus-stencil8",
@@ -1197,6 +1226,7 @@ export class Engine {
       entries: [
         { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "unfilterable-float" } },
         { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "unfilterable-float" } },
       ],
     })
     this.bloomDownsampleBindGroupLayout = this.device.createBindGroupLayout({
@@ -1230,6 +1260,7 @@ export class Engine {
       code: `${bloomFullscreenVs}
         @group(0) @binding(0) var hdrTex: texture_2d<f32>;
         @group(0) @binding(1) var<uniform> prefilter: vec4<f32>; // threshold, knee, clamp, _unused
+        @group(0) @binding(2) var maskTex: texture_2d<f32>;
 
         fn luminance(c: vec3f) -> f32 {
           return dot(max(c, vec3f(0.0)), vec3f(0.2126, 0.7152, 0.0722));
@@ -1240,8 +1271,11 @@ export class Engine {
           let s = textureLoad(hdrTex, cc, 0);
           // Scene pass uses src-alpha blend with clear alpha 0 → premultiplied. Unpremultiply.
           let rgb = max(s.rgb / max(s.a, 1e-6), vec3f(0.0));
+          // Bloom mask: MRT r8unorm written by material shaders (1.0 = bloom, 0.0 = skip).
+          let mask = textureLoad(maskTex, cc, 0).r;
+          let masked = rgb * mask;
           // Blender: clamp each tap BEFORE Karis average (eevee_bloom: color = min(clampIntensity, color)).
-          return select(rgb, min(rgb, vec3f(clampV)), clampV > 0.0);
+          return select(masked, min(masked, vec3f(clampV)), clampV > 0.0);
         }
 
         @fragment fn fs(@builtin(position) p: vec4f) -> @location(0) vec4f {
@@ -1587,6 +1621,23 @@ export class Engine {
         usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
       })
 
+      // Bloom-mask MRT attachments — same dims + MSAA as HDR so they share the render pass.
+      // MS buffer gets resolved into maskResolveTexture, which the bloom blit pass samples.
+      this.multisampleMaskTexture = this.device.createTexture({
+        label: "multisample bloom mask",
+        size: [width, height],
+        sampleCount: Engine.MULTISAMPLE_COUNT,
+        format: Engine.BLOOM_MASK_FORMAT,
+        usage: GPUTextureUsage.RENDER_ATTACHMENT,
+      })
+      this.maskResolveTexture = this.device.createTexture({
+        label: "bloom mask resolve",
+        size: [width, height],
+        format: Engine.BLOOM_MASK_FORMAT,
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+      })
+      this.maskResolveView = this.maskResolveTexture.createView()
+
       // Bloom pyramid: mip 0 is half-res, each subsequent mip halves again.
       // Mip count chosen so the coarsest mip is ≥4 px on the short side, capped at BLOOM_MAX_LEVELS.
       const bw = Math.max(1, Math.floor(width / 2))
@@ -1642,9 +1693,17 @@ export class Engine {
         storeOp: "store",
       }
 
+      const maskAttachment: GPURenderPassColorAttachment = {
+        view: this.multisampleMaskTexture.createView(),
+        resolveTarget: this.maskResolveView,
+        clearValue: { r: 0, g: 0, b: 0, a: 0 },
+        loadOp: "clear",
+        storeOp: "store",
+      }
+
       this.renderPassDescriptor = {
         label: "renderPass",
-        colorAttachments: [colorAttachment],
+        colorAttachments: [colorAttachment, maskAttachment],
         depthStencilAttachment: {
           view: depthTextureView,
           depthClearValue: 1.0,
@@ -1679,6 +1738,7 @@ export class Engine {
           entries: [
             { binding: 0, resource: this.hdrResolveTexture.createView() },
             { binding: 1, resource: { buffer: this.bloomBlitUniformBuffer } },
+            { binding: 2, resource: this.maskResolveView },
           ],
         })
         // Downsample[i] reads bloomDown mip (i-1), writes bloomDown mip i. i ∈ [1..N-1].
@@ -2534,10 +2594,12 @@ export class Engine {
         colorSpaceConversion: "none",
       })
 
+      const mipLevelCount = Math.floor(Math.log2(Math.max(imageBitmap.width, imageBitmap.height))) + 1
       const texture = this.device.createTexture({
         label: `texture: ${cacheKey}`,
         size: [imageBitmap.width, imageBitmap.height],
         format: "rgba8unorm-srgb",
+        mipLevelCount,
         usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
       })
       this.device.queue.copyExternalImageToTexture({ source: imageBitmap }, { texture }, [
@@ -2545,12 +2607,72 @@ export class Engine {
         imageBitmap.height,
       ])
 
+      if (mipLevelCount > 1) this.generateMipmaps(texture, mipLevelCount)
+
       this.textureCache.set(cacheKey, texture)
       inst.textureCacheKeys.push(cacheKey)
       return texture
     } catch {
       return null
     }
+  }
+
+  // Bilinear box-filter downsample per level. Reads srgb view (hardware linearizes on sample,
+  // re-encodes on write), so intensities are filtered in linear space — matching EEVEE/Blender.
+  private generateMipmaps(texture: GPUTexture, mipLevelCount: number) {
+    if (!this.mipBlitPipeline || !this.mipBlitSampler) {
+      this.mipBlitSampler = this.device.createSampler({
+        magFilter: "linear",
+        minFilter: "linear",
+        addressModeU: "clamp-to-edge",
+        addressModeV: "clamp-to-edge",
+      })
+      const module = this.device.createShaderModule({
+        label: "mipmap blit",
+        code: /* wgsl */ `
+          @group(0) @binding(0) var src: texture_2d<f32>;
+          @group(0) @binding(1) var samp: sampler;
+          @vertex fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
+            let x = f32((vi & 1u) << 2u) - 1.0;
+            let y = f32((vi & 2u) << 1u) - 1.0;
+            return vec4f(x, y, 0.0, 1.0);
+          }
+          @fragment fn fs(@builtin(position) p: vec4f) -> @location(0) vec4f {
+            let dstDims = vec2f(textureDimensions(src)) * 0.5;
+            let uv = p.xy / max(dstDims, vec2f(1.0));
+            return textureSampleLevel(src, samp, uv, 0.0);
+          }
+        `,
+      })
+      this.mipBlitPipeline = this.device.createRenderPipeline({
+        label: "mipmap blit pipeline",
+        layout: "auto",
+        vertex: { module, entryPoint: "vs" },
+        fragment: { module, entryPoint: "fs", targets: [{ format: "rgba8unorm-srgb" }] },
+        primitive: { topology: "triangle-list" },
+      })
+    }
+
+    const encoder = this.device.createCommandEncoder({ label: "mipgen" })
+    for (let level = 1; level < mipLevelCount; level++) {
+      const srcView = texture.createView({ baseMipLevel: level - 1, mipLevelCount: 1 })
+      const dstView = texture.createView({ baseMipLevel: level, mipLevelCount: 1 })
+      const bindGroup = this.device.createBindGroup({
+        layout: this.mipBlitPipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: srcView },
+          { binding: 1, resource: this.mipBlitSampler },
+        ],
+      })
+      const pass = encoder.beginRenderPass({
+        colorAttachments: [{ view: dstView, clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: "clear", storeOp: "store" }],
+      })
+      pass.setPipeline(this.mipBlitPipeline)
+      pass.setBindGroup(0, bindGroup)
+      pass.draw(3)
+      pass.end()
+    }
+    this.device.queue.submit([encoder.finish()])
   }
 
   private renderGround(pass: GPURenderPassEncoder) {

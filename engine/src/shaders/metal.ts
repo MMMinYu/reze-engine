@@ -104,7 +104,12 @@ const METAL_VORONOI_SCALE: f32 = 4.3;
   return output;
 }
 
-@fragment fn fs(input: VertexOutput) -> @location(0) vec4f {
+struct FSOut {
+  @location(0) color: vec4f,
+  @location(1) mask: f32,
+};
+
+@fragment fn fs(input: VertexOutput) -> FSOut {
   let n = normalize(input.normal);
   let v = normalize(camera.viewPos - input.worldPos);
   let l = -light.lights[0].direction.xyz;
@@ -154,10 +159,10 @@ const METAL_VORONOI_SCALE: f32 = 4.3;
   let f0 = albedo;
   let f90 = mix(f0, vec3f(1.0), sqrt(METAL_SPECULAR));
   let NV = max(dot(n, v), 1e-4);
-  let split_sum = brdf_lut_baked(NV, METAL_ROUGHNESS);
-  let reflection_color = F_brdf_multi_scatter(f0, f90, split_sum);
+  let brdf_lut = brdf_lut_sample(NV, METAL_ROUGHNESS);
+  let reflection_color = F_brdf_multi_scatter(f0, f90, brdf_lut.xy);
 
-  let spec_direct = bsdf_ggx(n, l, v, METAL_ROUGHNESS) * sun * shadow * ltc_brdf_scale(NV, METAL_ROUGHNESS);
+  let spec_direct = bsdf_ggx(n, l, v, METAL_ROUGHNESS) * sun * shadow * ltc_brdf_scale_from_lut(brdf_lut);
   let spec_indirect = amb;
   let spec_radiance = (spec_direct + spec_indirect) * reflection_color;
 
@@ -167,7 +172,10 @@ const METAL_VORONOI_SCALE: f32 = 4.3;
   // 混合着色器.001 Fac=0.6967: Shader=npr_emission, Shader_001=principled
   let final_color = mix(npr_emission, principled, METAL_MIX_SHADER_FAC);
 
-  return vec4f(final_color, out_alpha);
+  var out: FSOut;
+  out.color = vec4f(final_color, out_alpha);
+  out.mask = 1.0;
+  return out;
 }
 
 `

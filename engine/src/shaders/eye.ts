@@ -106,7 +106,12 @@ fn sampleShadow(worldPos: vec3f, n: vec3f) -> f32 {
   return output;
 }
 
-@fragment fn fs(input: VertexOutput) -> @location(0) vec4f {
+struct FSOut {
+  @location(0) color: vec4f,
+  @location(1) mask: f32,
+};
+
+@fragment fn fs(input: VertexOutput) -> FSOut {
   let alpha = material.alpha;
   if (alpha < 0.001) { discard; }
 
@@ -137,7 +142,10 @@ fn sampleShadow(worldPos: vec3f, n: vec3f) -> f32 {
   // Principled Emission socket: emissive = emission_color × strength, added on top of shading.
   let emission = albedo * EYE_EMISSION_STRENGTH;
 
-  return vec4f(ambient + direct + emission, alpha);
+  var out: FSOut;
+  out.color = vec4f(ambient + direct + emission, alpha);
+  out.mask = 1.0;
+  return out;
 }
 
 `

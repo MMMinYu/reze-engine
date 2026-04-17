@@ -207,7 +207,9 @@ export default function Home() {
       await engine.init()
 
       // engine.setPhysicsEnabled(false)
-
+      // engine.setWorld({strength:0.5})
+      // engine.setSun({strength:4})
+      // engine.setBloomOptions({intensity: 0.05, radius:4 })
 
       const m1 = await engine.loadModel("reze", "/models/塞尔凯特/塞尔凯特.pmx")
 
@@ -221,7 +223,6 @@ export default function Home() {
         cloth_smooth: ["衣服", "裙子", "裙带", "裙布", "外套", "外套饰", "裤子", "裤子0", "腿环", "发饰","shirt","shoes","shorts","trigger"],
         stockings: ["袜子","stockings"],
       })
-
 
 
       engine.addGround()
