@@ -1,9 +1,17 @@
-// M_Rough_Cloth — NPR graph identical to M_Smooth_Cloth but bump chain IS live
-// (噪波→渐变→凹凸.Normal → 原理化BSDF.Normal in m_graphs) and Roughness=0.8187.
+// M_Metal — Metallic Principled (Metallic=1.0, Specular=1.0, Specular Tint=0.114, Roughness=0.3)
+// + NPR toon/AO emission stack (Strength=8.1), MixShader Fac=0.6967.
+// Base color uses a Voronoi pattern sampled in reflection-coord space (Blender 纹理坐标.Reflection)
+// to add subtle metallic sparkle variation. No Normal link in the graph.
+//
+// Graph's base color chain is: 纹理坐标.Reflection → 矢量运算.007(CROSS, Vec2=(0,1,0)) →
+// 沃罗诺伊纹理(F1, Color out) → 颜色渐变(linear) → 混合.005. The dumper did not capture the
+// VectorMath operation — CROSS is the assumed op based on the hardcoded (0,1,0) Vector_001
+// constant (MULTIPLY would zero X/Z producing 1D bands; CROSS produces horizontal ring
+// patterns consistent with metallic anisotropy).
 
 import { NODES_WGSL } from "./nodes"
 
-export const CLOTH_ROUGH_SHADER_WGSL = /* wgsl */ `
+export const METAL_SHADER_WGSL = /* wgsl */ `
 
 ${NODES_WGSL}
 
@@ -70,17 +78,16 @@ fn sampleShadow(worldPos: vec3f, n: vec3f) -> f32 {
   return (s00 + s10 + s20 + s01 + s11 + s21 + s02 + s12 + s22) * (1.0 / 9.0);
 }
 
-const PI_CR: f32 = 3.141592653589793;
-const CLOTH_R_SPECULAR: f32 = 0.8;
-const CLOTH_R_ROUGHNESS: f32 = 0.8187;
-const CLOTH_R_TOON_EDGE: f32 = 0.2966;
-const CLOTH_R_MIX04_MUL: f32 = 0.5;
-const CLOTH_R_EMIT_STR: f32 = 18.200000762939453;
-const CLOTH_R_MIX_SHADER_FAC: f32 = 0.8999999761581421;
-const CLOTH_R_NOISE_SCALE: f32 = 17.7;
-const CLOTH_R_BUMP_STR: f32 = 1.0;
-// EEVEE Light Clamp equivalent — caps firefly specular from noise-bumped NDF aliasing.
-const CLOTH_R_SPEC_CLAMP: f32 = 10.0;
+const PI_M: f32 = 3.141592653589793;
+const METAL_SPECULAR: f32 = 1.0;
+const METAL_METALLIC: f32 = 1.0;
+const METAL_ROUGHNESS: f32 = 0.3;
+const METAL_SPECULAR_TINT: f32 = 0.114;
+const METAL_TOON_EDGE: f32 = 0.2966;
+const METAL_MIX04_MUL: f32 = 0.5;
+const METAL_EMIT_STR: f32 = 8.100000381469727;
+const METAL_MIX_SHADER_FAC: f32 = 0.6967;
+const METAL_VORONOI_SCALE: f32 = 4.3;
 
 @vertex fn vs(
   @location(0) position: vec3f,
@@ -128,60 +135,46 @@ struct FSOut {
   let out_alpha = material.alpha * tex_s.a;
   if (out_alpha < 0.001) { discard; }
 
-  // Shader→RGB → 颜色渐变.008 CONSTANT (edge AA terminator)
+  let tex_tint = hue_sat_id(1.0, 0.800000011920929, 1.0, tex_rgb);
   let lum_shade = shader_to_rgb_diffuse(n, l, sun, amb, shadow);
-  let ramp008 = ramp_constant_edge_aa(lum_shade, CLOTH_R_TOON_EDGE, vec4f(0,0,0,1), vec4f(1,1,1,1));
-  let toon_r = ramp008.r;
-  let mix04_fac = math_multiply(toon_r, CLOTH_R_MIX04_MUL);
+  let ramp008 = ramp_constant_edge_aa(lum_shade, METAL_TOON_EDGE, vec4f(0,0,0,1), vec4f(1,1,1,1));
+  let mix04_fac = math_multiply(ramp008.r, METAL_MIX04_MUL);
 
-  // 混合.004: A=色相/饱和度/明度.002(Hue=0.5 Sat=1.0 Val=0.2), B=纹理
-  let dark_tex = hue_sat_id(1.0, 0.19999998807907104, 1.0, tex_rgb);
-  let mix04 = mix_blend(mix04_fac, dark_tex, tex_rgb);
+  let dark_tex = hue_sat_id(1.0, 0.19999998807907104, 1.0, tex_tint);
+  let mix04 = mix_blend(mix04_fac, dark_tex, tex_tint);
 
-  // 倒角.001.Z → 混合.003: A=混合.004, B=色相/饱和度/明度.002
-  let bevel_z = clamp(n.y, 0.0, 1.0);
-  let mix03 = mix_blend(bevel_z, mix04, dark_tex);
+  let hue004 = hue_sat_id(1.0, 2.0, 1.0, mix04);
+  let npr_rgb = mix_overlay(1.0, mix04, hue004);
+  let npr_emission = npr_rgb * METAL_EMIT_STR;
 
-  // 环境光遮蔽 → 颜色渐变.001 LINEAR → 混合.001 (white/black) → 混合.002 OVERLAY Fac
-  let ao = 1.0; // ao_fake(n, v) — no SSAO yet; inline 1.0 so the ramp/mix chain folds at compile time.
-  let ao_ramp_c = ramp_linear(ao, 0.0, vec4f(1,1,1,1), 0.8808, vec4f(0,0,0,1));
-  let mix01_fac = ao_ramp_c.r;
-  let mix01_rgb = mix(vec3f(1.0), vec3f(0.0), mix01_fac);
+  // Reflection-coord Voronoi produces the metallic sparkle variation.
+  // VALTORGB takes Color → Fac via Blender's BT.601 implicit color_to_value.
+  let refl_dir = reflect(-v, n);
+  let voro_input = cross(refl_dir, vec3f(0.0, 1.0, 0.0));
+  let voro_rgb = tex_voronoi_color(voro_input, METAL_VORONOI_SCALE);
+  let voro_scalar = color_to_value(voro_rgb);
+  let voro_ramp = ramp_linear(voro_scalar, 0.0, vec4f(0,0,0,1), 1.0, vec4f(1,1,1,1)).r;
+  let hue006 = hue_sat_id(1.5, 1.2999999523162842, 1.0, tex_tint);
+  let albedo = mix_blend(voro_ramp, vec3f(voro_ramp), hue006);
 
-  // 混合.002 OVERLAY: Fac=混合.001, A=混合.003, B=色相/饱和度/明度.004
-  let hue004 = hue_sat_id(0.800000011920929, 2.0, 1.0, mix03);
-  let overlay_fac = mix01_rgb.r;
-  let npr_rgb = mix_overlay(overlay_fac, mix03, hue004);
-  let npr_emission = npr_rgb * CLOTH_R_EMIT_STR;
-
-  // 噪波→渐变→凹凸 (LIVE in M_Rough_Cloth — unlike Smooth Cloth): Strength=1.0, noise Scale=17.7.
-  // mapping scale=(1,1,1), loc=rot=0 → identity; use worldPos directly.
-  let noise_val = tex_noise_d2(input.worldPos, CLOTH_R_NOISE_SCALE);
-  let noise_ramp = ramp_linear(noise_val, 0.0, vec4f(0,0,0,1), 1.0, vec4f(1,1,1,1)).r;
-  let bumped_n = bump_lh(CLOTH_R_BUMP_STR, noise_ramp, n, input.worldPos);
-
-  // 原理化BSDF (EEVEE port): metallic=0, specular=0.8, roughness=0.8187, specular_tint=0.
-  let principled_base = hue_sat_id(1.0, 0.800000011920929, 1.0, tex_rgb);
-  let NL = max(dot(bumped_n, l), 0.0);
-  let NV = max(dot(bumped_n, v), 1e-4);
-
-  let f0 = vec3f(0.08 * CLOTH_R_SPECULAR);
-  let f90 = mix(f0, vec3f(1.0), sqrt(CLOTH_R_SPECULAR));
-  let brdf_lut = brdf_lut_sample(NV, CLOTH_R_ROUGHNESS);
+  // Principled BSDF (EEVEE port): metallic=1 collapses f0 = mix(dielectric, albedo, 1) = albedo;
+  // specular_tint is dielectric-only and ignored here.
+  let f0 = albedo;
+  let f90 = mix(f0, vec3f(1.0), sqrt(METAL_SPECULAR));
+  let NL = max(dot(n, l), 0.0);
+  let NV = max(dot(n, v), 1e-4);
+  let brdf_lut = brdf_lut_sample(NV, METAL_ROUGHNESS);
   let reflection_color = F_brdf_multi_scatter(f0, f90, brdf_lut.xy);
 
-  let spec_direct_raw = bsdf_ggx(bumped_n, l, v, NL, NV, CLOTH_R_ROUGHNESS) * sun * shadow * ltc_brdf_scale_from_lut(brdf_lut);
-  let spec_direct = min(spec_direct_raw, vec3f(CLOTH_R_SPEC_CLAMP));
+  let spec_direct = bsdf_ggx(n, l, v, NL, NV, METAL_ROUGHNESS) * sun * shadow * ltc_brdf_scale_from_lut(brdf_lut);
   let spec_indirect = amb;
   let spec_radiance = (spec_direct + spec_indirect) * reflection_color;
 
-  // Indirect diffuse = base_color × L_w per Blender closure_eval_surface_lib.glsl line 302;
-  // probe_evaluate_world_diff returns radiance (SH-projected, not cosine-convolved).
-  let diffuse_radiance = principled_base * (sun * NL * shadow / PI_CR + amb);
-  let principled = diffuse_radiance + spec_radiance;
+  // Pure metal — no diffuse lobe (diffuse_weight = (1 - metallic) = 0).
+  let principled = spec_radiance;
 
-  // 混合着色器.001 Fac=0.9: Shader=自发光.005, Shader_001=原理化BSDF
-  let final_color = mix(npr_emission, principled, CLOTH_R_MIX_SHADER_FAC);
+  // 混合着色器.001 Fac=0.6967: Shader=npr_emission, Shader_001=principled
+  let final_color = mix(npr_emission, principled, METAL_MIX_SHADER_FAC);
 
   var out: FSOut;
   out.color = vec4f(final_color, out_alpha);

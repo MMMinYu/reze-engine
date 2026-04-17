@@ -13,18 +13,51 @@ import {
   normalizeAssetPath,
   type AssetReader,
 } from "./asset-reader"
-import { DEFAULT_SHADER_WGSL } from "./shaders/default"
+import { DEFAULT_SHADER_WGSL } from "./shaders/materials/default"
+import { FACE_SHADER_WGSL } from "./shaders/materials/face"
+import { HAIR_SHADER_WGSL } from "./shaders/materials/hair"
+import { CLOTH_SMOOTH_SHADER_WGSL } from "./shaders/materials/cloth_smooth"
+import { CLOTH_ROUGH_SHADER_WGSL } from "./shaders/materials/cloth_rough"
+import { METAL_SHADER_WGSL } from "./shaders/materials/metal"
+import { BODY_SHADER_WGSL } from "./shaders/materials/body"
+import { EYE_SHADER_WGSL } from "./shaders/materials/eye"
+import { STOCKINGS_SHADER_WGSL } from "./shaders/materials/stockings"
 import { BRDF_LUT_SIZE, BRDF_LUT_BAKE_WGSL } from "./shaders/dfg_lut"
 import { LTC_MAG_LUT_SIZE, LTC_MAG_LUT_DATA } from "./shaders/ltc_mag_lut"
-import { FACE_SHADER_WGSL } from "./shaders/face"
-import { HAIR_SHADER_WGSL } from "./shaders/hair"
-import { CLOTH_SMOOTH_SHADER_WGSL } from "./shaders/cloth_smooth"
-import { CLOTH_ROUGH_SHADER_WGSL } from "./shaders/cloth_rough"
-import { METAL_SHADER_WGSL } from "./shaders/metal"
-import { BODY_SHADER_WGSL } from "./shaders/body"
-import { EYE_SHADER_WGSL } from "./shaders/eye"
-import { STOCKINGS_SHADER_WGSL } from "./shaders/stockings"
-import { resolvePreset, type MaterialPreset, type MaterialPresetMap } from "./shaders/classify"
+import { SHADOW_DEPTH_SHADER_WGSL } from "./shaders/passes/shadow"
+import { GROUND_SHADOW_SHADER_WGSL } from "./shaders/passes/ground"
+import { OUTLINE_SHADER_WGSL } from "./shaders/passes/outline"
+import {
+  BLOOM_BLIT_SHADER_WGSL,
+  BLOOM_DOWNSAMPLE_SHADER_WGSL,
+  BLOOM_UPSAMPLE_SHADER_WGSL,
+} from "./shaders/passes/bloom"
+import { COMPOSITE_SHADER_WGSL } from "./shaders/passes/composite"
+import { PICK_SHADER_WGSL } from "./shaders/passes/pick"
+import { MIPMAP_BLIT_SHADER_WGSL } from "./shaders/passes/mipmap"
+
+// Material preset dispatch. Consumers supply a MaterialPresetMap assigning material names
+// to presets; unmapped materials fall back to "default" (Principled BSDF).
+export type MaterialPreset =
+  | "default"
+  | "face"
+  | "hair"
+  | "body"
+  | "eye"
+  | "stockings"
+  | "metal"
+  | "cloth_smooth"
+  | "cloth_rough"
+
+export type MaterialPresetMap = Partial<Record<MaterialPreset, string[]>>
+
+function resolvePreset(materialName: string, map: MaterialPresetMap | undefined): MaterialPreset {
+  if (!map) return "default"
+  for (const [preset, names] of Object.entries(map)) {
+    if (names && names.includes(materialName)) return preset as MaterialPreset
+  }
+  return "default"
+}
 
 export type RaycastCallback = (modelName: string, material: string | null, screenX: number, screenY: number) => void
 
@@ -893,21 +926,7 @@ export class Engine {
     })
     const shadowShader = this.device.createShaderModule({
       label: "shadow depth",
-      code: /* wgsl */ `
-        struct LightVP { viewProj: mat4x4f, };
-        @group(0) @binding(0) var<uniform> lp: LightVP;
-        @group(0) @binding(1) var<storage, read> skinMats: array<mat4x4f>;
-        @vertex fn vs(@location(0) position: vec3f, @location(1) normal: vec3f, @location(2) uv: vec2f,
-          @location(3) joints0: vec4<u32>, @location(4) weights0: vec4<f32>) -> @builtin(position) vec4f {
-          let pos4 = vec4f(position, 1.0);
-          let ws = weights0.x + weights0.y + weights0.z + weights0.w;
-          let inv = select(1.0, 1.0 / ws, ws > 0.0001);
-          let nw = select(vec4f(1.0,0.0,0.0,0.0), weights0 * inv, ws > 0.0001);
-          var sp = vec4f(0.0);
-          for (var i = 0u; i < 4u; i++) { sp += (skinMats[joints0[i]] * pos4) * nw[i]; }
-          return lp.viewProj * vec4f(sp.xyz, 1.0);
-        }
-      `,
+      code: SHADOW_DEPTH_SHADER_WGSL,
     })
     this.shadowDepthPipeline = this.device.createRenderPipeline({
       label: "shadow depth pipeline",
@@ -967,99 +986,7 @@ export class Engine {
     })
     const groundShadowShader = this.device.createShaderModule({
       label: "ground shadow",
-      code: /* wgsl */ `
-        struct CameraUniforms { view: mat4x4f, projection: mat4x4f, viewPos: vec3f, _p: f32, };
-        struct Light { direction: vec4f, color: vec4f, };
-        struct LightUniforms { ambientColor: vec4f, lights: array<Light, 4>, };
-        struct GroundShadowMat {
-          diffuseColor: vec3f, fadeStart: f32,
-          fadeEnd: f32, shadowStrength: f32, pcfTexel: f32, gridSpacing: f32,
-          gridLineWidth: f32, gridLineOpacity: f32, noiseStrength: f32, _pad: f32,
-          gridLineColor: vec3f, _pad2: f32,
-        };
-        struct LightVP { viewProj: mat4x4f, };
-        @group(0) @binding(0) var<uniform> camera: CameraUniforms;
-        @group(0) @binding(1) var<uniform> light: LightUniforms;
-        @group(0) @binding(2) var shadowMap: texture_depth_2d;
-        @group(0) @binding(3) var shadowSampler: sampler_comparison;
-        @group(0) @binding(4) var<uniform> material: GroundShadowMat;
-        @group(0) @binding(5) var<uniform> lightVP: LightVP;
-
-        // Hash-based noise for frosted/matte surface
-        fn hash2(p: vec2f) -> f32 {
-          var p3 = fract(vec3f(p.x, p.y, p.x) * 0.1031);
-          p3 += dot(p3, vec3f(p3.y + 33.33, p3.z + 33.33, p3.x + 33.33));
-          return fract((p3.x + p3.y) * p3.z);
-        }
-        fn valueNoise(p: vec2f) -> f32 {
-          let i = floor(p);
-          let f = fract(p);
-          let u = f * f * (3.0 - 2.0 * f);
-          return mix(mix(hash2(i), hash2(i + vec2f(1.0, 0.0)), u.x),
-                     mix(hash2(i + vec2f(0.0, 1.0)), hash2(i + vec2f(1.0, 1.0)), u.x), u.y);
-        }
-        fn fbmNoise(p: vec2f) -> f32 {
-          var v = 0.0;
-          var a = 0.5;
-          var pp = p;
-          for (var i = 0; i < 4; i++) {
-            v += a * valueNoise(pp);
-            pp *= 2.0;
-            a *= 0.5;
-          }
-          return v;
-        }
-
-        struct VO { @builtin(position) position: vec4f, @location(0) worldPos: vec3f, @location(1) normal: vec3f, };
-        @vertex fn vs(@location(0) position: vec3f, @location(1) normal: vec3f, @location(2) uv: vec2f) -> VO {
-          var o: VO; o.worldPos = position; o.normal = normal;
-          o.position = camera.projection * camera.view * vec4f(position, 1.0); return o;
-        }
-        struct FSOut { @location(0) color: vec4f, @location(1) mask: f32 };
-        @fragment fn fs(i: VO) -> FSOut {
-          let n = normalize(i.normal);
-          let centerDist = length(i.worldPos.xz);
-          let edgeFade = 1.0 - smoothstep(0.0, 1.0, clamp((centerDist - material.fadeStart) / max(material.fadeEnd - material.fadeStart, 0.001), 0.0, 1.0));
-
-          // Shadow sampling
-          let lclip = lightVP.viewProj * vec4f(i.worldPos, 1.0);
-          let ndc = lclip.xyz / max(lclip.w, 1e-6);
-          let suv = vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
-          let suv_c = clamp(suv, vec2f(0.02), vec2f(0.98));
-          let st = material.pcfTexel;
-          let compareZ = ndc.z - 0.0035;
-          var vis = 0.0;
-          for (var y = -2; y <= 2; y++) {
-            for (var x = -2; x <= 2; x++) {
-              vis += textureSampleCompare(shadowMap, shadowSampler, suv_c + vec2f(f32(x), f32(y)) * st, compareZ);
-            }
-          }
-          vis *= 0.04;
-
-          // Frosted/matte micro-texture (磨砂)
-          let noiseVal = fbmNoise(i.worldPos.xz * 3.0);
-          let noiseTint = 1.0 + (noiseVal - 0.5) * material.noiseStrength;
-
-          // Grid lines — anti-aliased via screen-space derivatives
-          let gp = i.worldPos.xz / material.gridSpacing;
-          let gridFrac = abs(fract(gp - 0.5) - 0.5);
-          let gridDeriv = fwidth(gp);
-          let halfLine = material.gridLineWidth * 0.5;
-          let gridLine = 1.0 - min(
-            smoothstep(halfLine - gridDeriv.x, halfLine + gridDeriv.x, gridFrac.x),
-            smoothstep(halfLine - gridDeriv.y, halfLine + gridDeriv.y, gridFrac.y)
-          );
-          let sun = light.ambientColor.xyz + light.lights[0].color.xyz * light.lights[0].color.w * max(dot(n, -light.lights[0].direction.xyz), 0.0);
-          let dark = (1.0 - vis) * material.shadowStrength;
-          var baseColor = material.diffuseColor * sun * (1.0 - dark * 0.65);
-          baseColor *= noiseTint;
-          let finalColor = mix(baseColor, material.gridLineColor, gridLine * material.gridLineOpacity * edgeFade);
-          var out: FSOut;
-          out.color = vec4f(finalColor * edgeFade, edgeFade);
-          out.mask = 0.0;
-          return out;
-        }
-      `,
+      code: GROUND_SHADOW_SHADER_WGSL,
     })
     this.groundShadowPipeline = this.createRenderPipeline({
       label: "ground shadow pipeline",
@@ -1103,90 +1030,7 @@ export class Engine {
 
     const outlineShaderModule = this.device.createShaderModule({
       label: "outline shaders",
-      code: /* wgsl */ `
-        struct CameraUniforms {
-          view: mat4x4f,
-          projection: mat4x4f,
-          viewPos: vec3f,
-          _padding: f32,
-        };
-
-        struct MaterialUniforms {
-          edgeColor: vec4f,
-          edgeSize: f32,
-          _padding1: f32,
-          _padding2: f32,
-          _padding3: f32,
-        };
-
-        // group 0: per-frame
-        @group(0) @binding(0) var<uniform> camera: CameraUniforms;
-        // group 1: per-instance
-        @group(1) @binding(0) var<storage, read> skinMats: array<mat4x4f>;
-        // group 2: per-material
-        @group(2) @binding(0) var<uniform> material: MaterialUniforms;
-
-        struct VertexOutput {
-          @builtin(position) position: vec4f,
-        };
-
-        @vertex fn vs(
-          @location(0) position: vec3f,
-          @location(1) normal: vec3f,
-          @location(3) joints0: vec4<u32>,
-          @location(4) weights0: vec4<f32>
-        ) -> VertexOutput {
-          var output: VertexOutput;
-          let pos4 = vec4f(position, 1.0);
-          
-          let weightSum = weights0.x + weights0.y + weights0.z + weights0.w;
-          let invWeightSum = select(1.0, 1.0 / weightSum, weightSum > 0.0001);
-          let normalizedWeights = select(vec4f(1.0, 0.0, 0.0, 0.0), weights0 * invWeightSum, weightSum > 0.0001);
-          
-          var skinnedPos = vec4f(0.0, 0.0, 0.0, 0.0);
-          var skinnedNrm = vec3f(0.0, 0.0, 0.0);
-          for (var i = 0u; i < 4u; i++) {
-            let j = joints0[i];
-            let w = normalizedWeights[i];
-            let m = skinMats[j];
-            skinnedPos += (m * pos4) * w;
-            let r3 = mat3x3f(m[0].xyz, m[1].xyz, m[2].xyz);
-            skinnedNrm += (r3 * normal) * w;
-          }
-          let worldPos = skinnedPos.xyz;
-          let worldNormal = normalize(skinnedNrm);
-
-          // Screen-space outline extrusion — MMD-style pixel-stable edge line.
-          // 1. Project position and normal-as-direction to clip space.
-          // 2. Normalize the 2D clip-space normal, aspect-compensated so "one pixel horizontally"
-          //    matches "one pixel vertically" (otherwise wide viewports squash the outline in X).
-          // 3. Offset clip-space xy by (normal * edgeSize * edgeScale), then multiply by w
-          //    so the perspective divide cancels out → offset stays constant in NDC regardless
-          //    of depth, matching how MMD / babylon-mmd style outlines look identical when zooming.
-          // 4. edgeScale is in NDC-y units per PMX edgeSize. ≈ 0.006 gives ~3px at 1080p; it's
-          //    tied to viewport HEIGHT so resizing the window keeps pixel thickness stable.
-          let viewProj = camera.projection * camera.view;
-          let clipPos = viewProj * vec4f(worldPos, 1.0);
-          let clipNormal = (viewProj * vec4f(worldNormal, 0.0)).xy;
-          // projection is column-major: proj[0][0] = 1/(aspect·tan(fov/2)), proj[1][1] = 1/tan(fov/2).
-          // Ratio proj[1][1]/proj[0][0] recovers the viewport aspect (width/height).
-          let aspect = camera.projection[1][1] / camera.projection[0][0];
-          let pixelDir = normalize(vec2f(clipNormal.x * aspect, clipNormal.y));
-          let ndcDir = vec2f(pixelDir.x / aspect, pixelDir.y);
-          let edgeScale = 0.0016;
-          let offset = ndcDir * material.edgeSize * edgeScale * clipPos.w;
-          output.position = vec4f(clipPos.xy + offset, clipPos.z, clipPos.w);
-          return output;
-        }
-
-        struct FSOut { @location(0) color: vec4f, @location(1) mask: f32 };
-        @fragment fn fs() -> FSOut {
-          var out: FSOut;
-          out.color = material.edgeColor;
-          out.mask = 1.0;
-          return out;
-        }
-      `,
+      code: OUTLINE_SHADER_WGSL,
     })
 
     this.outlinePipeline = this.createRenderPipeline({
@@ -1251,130 +1095,19 @@ export class Engine {
       ],
     })
 
-    const bloomFullscreenVs = /* wgsl */ `
-      @vertex fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
-        let x = f32((vi & 1u) << 2u) - 1.0;
-        let y = f32((vi & 2u) << 1u) - 1.0;
-        return vec4f(x, y, 0.0, 1.0);
-      }
-    `
-
-    // Blit: full-res HDR → half-res. Karis 4-tap firefly average + EEVEE quadratic knee threshold + clamp.
     const bloomBlitShader = this.device.createShaderModule({
       label: "bloom blit (Karis prefilter)",
-      code: `${bloomFullscreenVs}
-        @group(0) @binding(0) var hdrTex: texture_2d<f32>;
-        @group(0) @binding(1) var<uniform> prefilter: vec4<f32>; // threshold, knee, clamp, _unused
-        @group(0) @binding(2) var maskTex: texture_2d<f32>;
-
-        fn luminance(c: vec3f) -> f32 {
-          return dot(max(c, vec3f(0.0)), vec3f(0.2126, 0.7152, 0.0722));
-        }
-        fn fetch(c: vec2<i32>, clampV: f32) -> vec3f {
-          let d = vec2<i32>(textureDimensions(hdrTex));
-          let cc = clamp(c, vec2<i32>(0), d - vec2<i32>(1));
-          let s = textureLoad(hdrTex, cc, 0);
-          // Scene pass uses src-alpha blend with clear alpha 0 → premultiplied. Unpremultiply.
-          let rgb = max(s.rgb / max(s.a, 1e-6), vec3f(0.0));
-          // Bloom mask: MRT r8unorm written by material shaders (1.0 = bloom, 0.0 = skip).
-          let mask = textureLoad(maskTex, cc, 0).r;
-          let masked = rgb * mask;
-          // Blender: clamp each tap BEFORE Karis average (eevee_bloom: color = min(clampIntensity, color)).
-          return select(masked, min(masked, vec3f(clampV)), clampV > 0.0);
-        }
-
-        @fragment fn fs(@builtin(position) p: vec4f) -> @location(0) vec4f {
-          let dst = vec2<i32>(p.xy - vec2f(0.5));
-          let base = dst * 2;
-          let clampV = prefilter.z;
-          let a = fetch(base + vec2<i32>(0, 0), clampV);
-          let b = fetch(base + vec2<i32>(1, 0), clampV);
-          let c = fetch(base + vec2<i32>(0, 1), clampV);
-          let d = fetch(base + vec2<i32>(1, 1), clampV);
-          // Karis partial average: weight each tap by 1/(1+luma) — suppresses fireflies.
-          let wa = 1.0 / (1.0 + luminance(a));
-          let wb = 1.0 / (1.0 + luminance(b));
-          let wc = 1.0 / (1.0 + luminance(c));
-          let wd = 1.0 / (1.0 + luminance(d));
-          let avg = (a * wa + b * wb + c * wc + d * wd) / max(wa + wb + wc + wd, 1e-6);
-          // EEVEE quadratic threshold (brightness = max-channel, then soft-knee curve).
-          let bright = max(avg.r, max(avg.g, avg.b));
-          let soft = clamp(bright - prefilter.x + prefilter.y, 0.0, 2.0 * prefilter.y);
-          let q = (soft * soft) / (4.0 * max(prefilter.y, 1e-4) + 1e-6);
-          let contrib = max(q, bright - prefilter.x) / max(bright, 1e-4);
-          return vec4f(max(avg * contrib, vec3f(0.0)), 1.0);
-        }
-      `,
+      code: BLOOM_BLIT_SHADER_WGSL,
     })
 
-    // Downsample: Jimenez/COD 13-tap dual-box — 5 weighted 2×2 averages, rejects nyquist ringing.
     const bloomDownsampleShader = this.device.createShaderModule({
       label: "bloom downsample 13-tap",
-      code: `${bloomFullscreenVs}
-        @group(0) @binding(0) var srcTex: texture_2d<f32>;
-        @group(0) @binding(1) var srcSamp: sampler;
-
-        fn samp(uv: vec2f, off: vec2f) -> vec3f {
-          return textureSampleLevel(srcTex, srcSamp, uv + off, 0.0).rgb;
-        }
-
-        @fragment fn fs(@builtin(position) p: vec4f) -> @location(0) vec4f {
-          let srcDims = vec2f(textureDimensions(srcTex));
-          let t = 1.0 / srcDims;
-          // fragCoord.xy reports pixel centers (e.g. 0.5,0.5 for first pixel) — divide by dst dims directly.
-          let dstDims = srcDims * 0.5;
-          let uv = p.xy / max(dstDims, vec2f(1.0));
-          let A = samp(uv, t * vec2f(-2.0, -2.0));
-          let B = samp(uv, t * vec2f( 0.0, -2.0));
-          let C = samp(uv, t * vec2f( 2.0, -2.0));
-          let D = samp(uv, t * vec2f(-1.0, -1.0));
-          let E = samp(uv, t * vec2f( 1.0, -1.0));
-          let F = samp(uv, t * vec2f(-2.0,  0.0));
-          let G = samp(uv, t * vec2f( 0.0,  0.0));
-          let H = samp(uv, t * vec2f( 2.0,  0.0));
-          let I = samp(uv, t * vec2f(-1.0,  1.0));
-          let J = samp(uv, t * vec2f( 1.0,  1.0));
-          let K = samp(uv, t * vec2f(-2.0,  2.0));
-          let L = samp(uv, t * vec2f( 0.0,  2.0));
-          let M = samp(uv, t * vec2f( 2.0,  2.0));
-          var o = (D + E + I + J) * (0.5 / 4.0);
-          o = o + (A + B + G + F) * (0.125 / 4.0);
-          o = o + (B + C + H + G) * (0.125 / 4.0);
-          o = o + (F + G + L + K) * (0.125 / 4.0);
-          o = o + (G + H + M + L) * (0.125 / 4.0);
-          return vec4f(o, 1.0);
-        }
-      `,
+      code: BLOOM_DOWNSAMPLE_SHADER_WGSL,
     })
 
-    // Upsample: 9-tap tent, progressively added to matching downsample mip. Blender radius = sample scale.
     const bloomUpsampleShader = this.device.createShaderModule({
       label: "bloom upsample 9-tap tent",
-      code: `${bloomFullscreenVs}
-        @group(0) @binding(0) var srcTex: texture_2d<f32>;   // coarser accumulator
-        @group(0) @binding(1) var baseTex: texture_2d<f32>;  // matching downsample mip
-        @group(0) @binding(2) var srcSamp: sampler;
-        @group(0) @binding(3) var<uniform> upU: vec4<f32>;   // sampleScale, _, _, _
-
-        @fragment fn fs(@builtin(position) p: vec4f) -> @location(0) vec4f {
-          let srcDims = vec2f(textureDimensions(srcTex));
-          let baseDims = vec2f(textureDimensions(baseTex));
-          let uv = p.xy / max(baseDims, vec2f(1.0));
-          let t = upU.x / srcDims;
-          var o = textureSampleLevel(srcTex, srcSamp, uv + t * vec2f(-1.0, -1.0), 0.0).rgb * 1.0;
-          o = o + textureSampleLevel(srcTex, srcSamp, uv + t * vec2f( 0.0, -1.0), 0.0).rgb * 2.0;
-          o = o + textureSampleLevel(srcTex, srcSamp, uv + t * vec2f( 1.0, -1.0), 0.0).rgb * 1.0;
-          o = o + textureSampleLevel(srcTex, srcSamp, uv + t * vec2f(-1.0,  0.0), 0.0).rgb * 2.0;
-          o = o + textureSampleLevel(srcTex, srcSamp, uv + t * vec2f( 0.0,  0.0), 0.0).rgb * 4.0;
-          o = o + textureSampleLevel(srcTex, srcSamp, uv + t * vec2f( 1.0,  0.0), 0.0).rgb * 2.0;
-          o = o + textureSampleLevel(srcTex, srcSamp, uv + t * vec2f(-1.0,  1.0), 0.0).rgb * 1.0;
-          o = o + textureSampleLevel(srcTex, srcSamp, uv + t * vec2f( 0.0,  1.0), 0.0).rgb * 2.0;
-          o = o + textureSampleLevel(srcTex, srcSamp, uv + t * vec2f( 1.0,  1.0), 0.0).rgb * 1.0;
-          o = o * (1.0 / 16.0);
-          let base = textureSampleLevel(baseTex, srcSamp, uv, 0.0).rgb;
-          return vec4f(o + base, 1.0);
-        }
-      `,
+      code: BLOOM_UPSAMPLE_SHADER_WGSL,
     })
 
     const bloomBlitLayout = this.device.createPipelineLayout({ bindGroupLayouts: [this.bloomBlitBindGroupLayout] })
@@ -1425,55 +1158,7 @@ export class Engine {
 
     const compositeShader = this.device.createShaderModule({
       label: "composite shader",
-      code: /* wgsl */ `
-        @group(0) @binding(0) var hdrTex: texture_2d<f32>;
-        @group(0) @binding(1) var bloomTex: texture_2d<f32>;   // bloomUpTexture mip 0 (full pyramid top)
-        @group(0) @binding(2) var bloomSamp: sampler;
-        @group(0) @binding(3) var<uniform> viewU: array<vec4<f32>, 2>;
-        // viewU[0] = (exposure, gamma, _, _);  viewU[1] = (tint.rgb, intensity)
-
-        fn filmic(x: f32) -> f32 {
-          // Re-fit against Blender 3.6 Filmic MHC anchors (sobotka/filmic-blender
-          // look_medium-high-contrast.spi1d). Previous curve was compressed:
-          // midtones too bright, highlights too dim — flattened contrast, read
-          // as "washed-out" on saturated surfaces (hair especially).
-          // Reference checkpoints: linear 0.18 → ~0.395, linear 1.0 → ~0.83.
-          var lut = array<f32, 14>(
-            0.0028, 0.0068, 0.0151, 0.0313, 0.0610, 0.1120, 0.1920,
-            0.3060, 0.4590, 0.6310, 0.8200, 0.9070, 0.9620, 0.9890
-          );
-          let t = clamp(log2(max(x, 1e-10)) + 10.0, 0.0, 13.0);
-          let i = u32(t);
-          let j = min(i + 1u, 13u);
-          return mix(lut[i], lut[j], t - f32(i));
-        }
-
-        @vertex fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
-          let x = f32((vi & 1u) << 2u) - 1.0;
-          let y = f32((vi & 2u) << 1u) - 1.0;
-          return vec4f(x, y, 0.0, 1.0);
-        }
-
-        @fragment fn fs(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
-          let hdr = textureLoad(hdrTex, vec2<i32>(fragCoord.xy), 0);
-          let a = max(hdr.a, 1e-6);
-          let straight = hdr.rgb / a;
-          let fullSz = vec2f(textureDimensions(hdrTex));
-          let bloomSz = vec2f(textureDimensions(bloomTex));
-          // Bloom is at half-res (pyramid mip 0). Sampler interpolates back to full-res UVs.
-          // fragCoord.xy is already at pixel center (e.g. 0.5, 0.5 for first pixel).
-          let bloomUv = fragCoord.xy / max(fullSz, vec2f(1.0));
-          let tint = viewU[1].xyz;
-          let intensity = viewU[1].w;
-          let bloom = textureSampleLevel(bloomTex, bloomSamp, bloomUv, 0.0).rgb * tint * intensity;
-          let combined = straight + bloom;
-          let exposed = combined * exp2(viewU[0].x);
-          let tm = vec3f(filmic(exposed.r), filmic(exposed.g), filmic(exposed.b));
-          let g = max(viewU[0].y, 1e-4);
-          let disp = pow(max(tm, vec3f(0.0)), vec3f(1.0 / g));
-          return vec4f(disp * hdr.a, hdr.a);
-        }
-      `,
+      code: COMPOSITE_SHADER_WGSL,
     })
 
     this.compositePipeline = this.device.createRenderPipeline({
@@ -1500,47 +1185,9 @@ export class Engine {
       ],
     } as GPURenderPassDescriptor
 
-    // GPU picking: encode (modelIndex, materialIndex) as color
     const pickShaderModule = this.device.createShaderModule({
       label: "pick shader",
-      code: /* wgsl */ `
-        struct CameraUniforms {
-          view: mat4x4f,
-          projection: mat4x4f,
-          viewPos: vec3f,
-          _padding: f32,
-        };
-        struct PickId {
-          modelId: f32,
-          materialId: f32,
-          _p1: f32,
-          _p2: f32,
-        };
-
-        @group(0) @binding(0) var<uniform> camera: CameraUniforms;
-        @group(1) @binding(0) var<storage, read> skinMats: array<mat4x4f>;
-        @group(2) @binding(0) var<uniform> pickId: PickId;
-
-        @vertex fn vs(
-          @location(0) position: vec3f,
-          @location(1) normal: vec3f,
-          @location(2) uv: vec2f,
-          @location(3) joints0: vec4<u32>,
-          @location(4) weights0: vec4<f32>
-        ) -> @builtin(position) vec4f {
-          let pos4 = vec4f(position, 1.0);
-          let weightSum = weights0.x + weights0.y + weights0.z + weights0.w;
-          let invWeightSum = select(1.0, 1.0 / weightSum, weightSum > 0.0001);
-          let nw = select(vec4f(1.0, 0.0, 0.0, 0.0), weights0 * invWeightSum, weightSum > 0.0001);
-          var sp = vec4f(0.0);
-          for (var i = 0u; i < 4u; i++) { sp += (skinMats[joints0[i]] * pos4) * nw[i]; }
-          return camera.projection * camera.view * vec4f(sp.xyz, 1.0);
-        }
-
-        @fragment fn fs() -> @location(0) vec4f {
-          return vec4f(pickId.modelId / 255.0, pickId.materialId / 255.0, 0.0, 1.0);
-        }
-      `,
+      code: PICK_SHADER_WGSL,
     })
 
     this.pickPerFrameBindGroupLayout = this.device.createBindGroupLayout({
@@ -2635,20 +2282,7 @@ export class Engine {
       })
       const module = this.device.createShaderModule({
         label: "mipmap blit",
-        code: /* wgsl */ `
-          @group(0) @binding(0) var src: texture_2d<f32>;
-          @group(0) @binding(1) var samp: sampler;
-          @vertex fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
-            let x = f32((vi & 1u) << 2u) - 1.0;
-            let y = f32((vi & 2u) << 1u) - 1.0;
-            return vec4f(x, y, 0.0, 1.0);
-          }
-          @fragment fn fs(@builtin(position) p: vec4f) -> @location(0) vec4f {
-            let dstDims = vec2f(textureDimensions(src)) * 0.5;
-            let uv = p.xy / max(dstDims, vec2f(1.0));
-            return textureSampleLevel(src, samp, uv, 0.0);
-          }
-        `,
+        code: MIPMAP_BLIT_SHADER_WGSL,
       })
       this.mipBlitPipeline = this.device.createRenderPipeline({
         label: "mipmap blit pipeline",

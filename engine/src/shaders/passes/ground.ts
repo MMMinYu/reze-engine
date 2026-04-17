@@ -1,0 +1,94 @@
+// Ground shadow-catcher: receives directional shadow, grid lines, frosted noise,
+// radial distance fade. Writes bloom mask = 0 (ground never bloom-bleeds).
+
+export const GROUND_SHADOW_SHADER_WGSL = /* wgsl */ `
+struct CameraUniforms { view: mat4x4f, projection: mat4x4f, viewPos: vec3f, _p: f32, };
+struct Light { direction: vec4f, color: vec4f, };
+struct LightUniforms { ambientColor: vec4f, lights: array<Light, 4>, };
+struct GroundShadowMat {
+  diffuseColor: vec3f, fadeStart: f32,
+  fadeEnd: f32, shadowStrength: f32, pcfTexel: f32, gridSpacing: f32,
+  gridLineWidth: f32, gridLineOpacity: f32, noiseStrength: f32, _pad: f32,
+  gridLineColor: vec3f, _pad2: f32,
+};
+struct LightVP { viewProj: mat4x4f, };
+@group(0) @binding(0) var<uniform> camera: CameraUniforms;
+@group(0) @binding(1) var<uniform> light: LightUniforms;
+@group(0) @binding(2) var shadowMap: texture_depth_2d;
+@group(0) @binding(3) var shadowSampler: sampler_comparison;
+@group(0) @binding(4) var<uniform> material: GroundShadowMat;
+@group(0) @binding(5) var<uniform> lightVP: LightVP;
+
+fn hash2(p: vec2f) -> f32 {
+  var p3 = fract(vec3f(p.x, p.y, p.x) * 0.1031);
+  p3 += dot(p3, vec3f(p3.y + 33.33, p3.z + 33.33, p3.x + 33.33));
+  return fract((p3.x + p3.y) * p3.z);
+}
+fn valueNoise(p: vec2f) -> f32 {
+  let i = floor(p);
+  let f = fract(p);
+  let u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash2(i), hash2(i + vec2f(1.0, 0.0)), u.x),
+             mix(hash2(i + vec2f(0.0, 1.0)), hash2(i + vec2f(1.0, 1.0)), u.x), u.y);
+}
+fn fbmNoise(p: vec2f) -> f32 {
+  var v = 0.0;
+  var a = 0.5;
+  var pp = p;
+  for (var i = 0; i < 4; i++) {
+    v += a * valueNoise(pp);
+    pp *= 2.0;
+    a *= 0.5;
+  }
+  return v;
+}
+
+struct VO { @builtin(position) position: vec4f, @location(0) worldPos: vec3f, @location(1) normal: vec3f, };
+@vertex fn vs(@location(0) position: vec3f, @location(1) normal: vec3f, @location(2) uv: vec2f) -> VO {
+  var o: VO; o.worldPos = position; o.normal = normal;
+  o.position = camera.projection * camera.view * vec4f(position, 1.0); return o;
+}
+struct FSOut { @location(0) color: vec4f, @location(1) mask: f32 };
+@fragment fn fs(i: VO) -> FSOut {
+  let n = normalize(i.normal);
+  let centerDist = length(i.worldPos.xz);
+  let edgeFade = 1.0 - smoothstep(0.0, 1.0, clamp((centerDist - material.fadeStart) / max(material.fadeEnd - material.fadeStart, 0.001), 0.0, 1.0));
+
+  let lclip = lightVP.viewProj * vec4f(i.worldPos, 1.0);
+  let ndc = lclip.xyz / max(lclip.w, 1e-6);
+  let suv = vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+  let suv_c = clamp(suv, vec2f(0.02), vec2f(0.98));
+  let st = material.pcfTexel;
+  let compareZ = ndc.z - 0.0035;
+  var vis = 0.0;
+  for (var y = -2; y <= 2; y++) {
+    for (var x = -2; x <= 2; x++) {
+      vis += textureSampleCompare(shadowMap, shadowSampler, suv_c + vec2f(f32(x), f32(y)) * st, compareZ);
+    }
+  }
+  vis *= 0.04;
+
+  // Frosted/matte micro-texture
+  let noiseVal = fbmNoise(i.worldPos.xz * 3.0);
+  let noiseTint = 1.0 + (noiseVal - 0.5) * material.noiseStrength;
+
+  // Grid lines — anti-aliased via screen-space derivatives
+  let gp = i.worldPos.xz / material.gridSpacing;
+  let gridFrac = abs(fract(gp - 0.5) - 0.5);
+  let gridDeriv = fwidth(gp);
+  let halfLine = material.gridLineWidth * 0.5;
+  let gridLine = 1.0 - min(
+    smoothstep(halfLine - gridDeriv.x, halfLine + gridDeriv.x, gridFrac.x),
+    smoothstep(halfLine - gridDeriv.y, halfLine + gridDeriv.y, gridFrac.y)
+  );
+  let sun = light.ambientColor.xyz + light.lights[0].color.xyz * light.lights[0].color.w * max(dot(n, -light.lights[0].direction.xyz), 0.0);
+  let dark = (1.0 - vis) * material.shadowStrength;
+  var baseColor = material.diffuseColor * sun * (1.0 - dark * 0.65);
+  baseColor *= noiseTint;
+  let finalColor = mix(baseColor, material.gridLineColor, gridLine * material.gridLineOpacity * edgeFade);
+  var out: FSOut;
+  out.color = vec4f(finalColor * edgeFade, edgeFade);
+  out.mask = 0.0;
+  return out;
+}
+`

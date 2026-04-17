@@ -7,6 +7,8 @@ export {
   type BloomOptions,
   type ViewTransformOptions,
   type LoadModelFromFilesOptions,
+  type MaterialPreset,
+  type MaterialPresetMap,
 } from "./engine"
 export { parsePmxFolderInput, pmxFileAtRelativePath, type PmxFolderInputResult } from "./folder-upload"
 export { Model } from "./model"
@@ -22,4 +24,3 @@ export type {
 } from "./animation"
 export { FPS } from "./animation"
 export { Physics, type PhysicsOptions } from "./physics"
-export type { MaterialPreset, MaterialPresetMap } from "./shaders/classify"

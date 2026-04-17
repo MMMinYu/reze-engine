@@ -221,15 +221,6 @@ fn shader_to_rgb_diffuse(n: vec3f, l: vec3f, sun_rgb: vec3f, ambient_rgb: vec3f,
   return luminance_rec709_linear(rgb);
 }
 
-// ─── AMBIENT_OCCLUSION node (faked) ─────────────────────────────────
-// Real SSAO is a non-goal. We approximate: use the "inside" value from
-// concavity heuristic: 1.0 = fully lit, lower = occluded.
-// For now returns 1.0 (no darkening). Individual presets can override.
-
-fn ao_fake(n: vec3f, v: vec3f) -> f32 {
-  return 1.0;
-}
-
 // ─── BUMP node ──────────────────────────────────────────────────────
 // Screen-space bump from a scalar height field. Needs dFdx/dFdy which
 // WGSL provides as dpdx/dpdy.
@@ -326,8 +317,9 @@ fn tex_gradient_linear(uv: vec3f) -> f32 {
   return clamp(uv.x, 0.0, 1.0);
 }
 
-// ─── TEX_VORONOI (distance only) ────────────────────────────────────
-// Used by Metal preset. Simplified F1 cell noise.
+// ─── TEX_VORONOI ────────────────────────────────────────────────────
+// 3D F1 voronoi. _f1 returns Distance; _color returns per-cell hash color
+// (matches Blender voronoi.cc: outColor = hash_int3_to_float3(cell + targetOffset)).
 
 fn tex_voronoi_f1(p: vec3f, scale: f32) -> f32 {
   let coords = p * scale;
@@ -345,6 +337,31 @@ fn tex_voronoi_f1(p: vec3f, scale: f32) -> f32 {
     }
   }
   return sqrt(min_dist);
+}
+
+// The per-cell jitter hash IS the Color output in Blender — reuse the same hash
+// tap for jitter + color instead of computing two.
+fn tex_voronoi_color(p: vec3f, scale: f32) -> vec3f {
+  let coords = p * scale;
+  let i = floor(coords);
+  let f = fract(coords);
+  var min_dist = 1e10;
+  var min_hash = vec3f(0.5);
+  for (var z = -1; z <= 1; z++) {
+    for (var y = -1; y <= 1; y++) {
+      for (var x = -1; x <= 1; x++) {
+        let neighbor = vec3f(f32(x), f32(y), f32(z));
+        let h = _hash33(i + neighbor) * 0.5 + 0.5;
+        let diff = neighbor + h - f;
+        let d = dot(diff, diff);
+        if (d < min_dist) {
+          min_dist = d;
+          min_hash = h;
+        }
+      }
+    }
+  }
+  return min_hash;
 }
 
 // ─── SEPXYZ node ────────────────────────────────────────────────────

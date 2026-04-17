@@ -1,9 +1,8 @@
-// M_Hair — WGSL trace of 仿深空之眼渲染预设v1.0_by_小绿毛猫_material_graph_dump.json "M_Hair" (socket ids + defaults).
-// MixShader.001: Add→Shader (first), Principled→Shader_001 (second) → out = mix(first, second, Fac).
+// M_Smooth_Cloth — dump socket order + m_graphs ramps/overlay/noise-bump (dump omits 噪波→凹凸 subtree).
 
 import { NODES_WGSL } from "./nodes"
 
-export const HAIR_SHADER_WGSL = /* wgsl */ `
+export const CLOTH_SMOOTH_SHADER_WGSL = /* wgsl */ `
 
 ${NODES_WGSL}
 
@@ -70,13 +69,13 @@ fn sampleShadow(worldPos: vec3f, n: vec3f) -> f32 {
   return (s00 + s10 + s20 + s01 + s11 + s21 + s02 + s12 + s22) * (1.0 / 9.0);
 }
 
-const PI_H: f32 = 3.141592653589793;
-const HAIR_SPECULAR: f32 = 1.0;
-const HAIR_ROUGHNESS: f32 = 0.3;
-// Dump M_Hair: 运算.004 GREATER_THAN second operand Value_001; 运算.007 POWER exponent Value_001; 背景 Color
-const HAIR_TEX_GATE_THRESH: f32 = 0.15000000596046448;
-const HAIR_RIM2_POW: f32 = 0.6300000548362732;
-const HAIR_MIX_BG: vec3f = vec3f(0.1673291176557541);
+const PI_C: f32 = 3.141592653589793;
+const CLOTH_SPECULAR: f32 = 0.8;
+const CLOTH_ROUGHNESS: f32 = 0.5;
+const CLOTH_TOON_EDGE: f32 = 0.2966;
+const CLOTH_MIX04_MUL: f32 = 0.5; // 运算.004 MULTIPLY Value_001 (dump)
+const NPR_EMIT_STR: f32 = 18.200000762939453;
+const NPR_MIX_SHADER_FAC: f32 = 0.8999999761581421;
 
 @vertex fn vs(
   @location(0) position: vec3f,
@@ -112,85 +111,64 @@ struct FSOut {
 };
 
 @fragment fn fs(input: VertexOutput) -> FSOut {
-  let alpha = material.alpha;
-  if (alpha < 0.001) { discard; }
-
   let n = normalize(input.normal);
   let v = normalize(camera.viewPos - input.worldPos);
   let l = -light.lights[0].direction.xyz;
   let sun = light.lights[0].color.xyz * light.lights[0].color.w;
-
-  // 图像纹理 ← 纹理坐标.UV → 映射 (default 1,1,1 scale per JSON)
-  let tex_color = textureSample(diffuseTexture, diffuseSampler, input.uv).rgb;
+  let amb = light.ambientColor.xyz;
   let shadow = sampleShadow(input.worldPos, n);
 
-  // 色相/饱和度/明度 (Hue=0.5 Sat=1.2 Val=0.5 Fac=1) ← reroute from image
-  let hue_sat_shadow = hue_sat_id(1.2, 0.5, 1.0, tex_color);
-  // 色相/饱和度/明度.002 (0.48, 1.2, 0.7, 1) ← previous
-  let hue_sat_002 = hue_sat(0.48, 1.2, 0.7, 1.0, hue_sat_shadow);
-  // 色相/饱和度/明度.001 (0.5, 1.5, 1.0, 1) ← image reroute (lit path)
-  let hue_sat_001 = hue_sat_id(1.5, 1.0, 1.0, tex_color);
+  let tex_s = textureSample(diffuseTexture, diffuseSampler, input.uv);
+  let tex_rgb = tex_s.rgb;
+  let out_alpha = material.alpha * tex_s.a;
+  if (out_alpha < 0.001) { discard; }
 
-  // 漫射 BSDF.002 → Shader --> RGB → 颜色渐变.008 CONSTANT [0→0, 0.2966→1]
-  let ndotl_raw = shader_to_rgb_diffuse(n, l, sun, light.ambientColor.xyz, shadow);
-  let ramp_008 = ramp_constant(ndotl_raw, 0.0, vec4f(0,0,0,1), 0.2966, vec4f(1,1,1,1)).r;
+  let lum_shade = shader_to_rgb_diffuse(n, l, sun, amb, shadow);
+  // ramp_constant_edge_aa: avoids binary fac shimmer on terminator (fwidth + smoothstep).
+  let ramp008 = ramp_constant_edge_aa(lum_shade, CLOTH_TOON_EDGE, vec4f(0,0,0,1), vec4f(1,1,1,1));
+  let mix04_fac = math_multiply(ramp008.r, CLOTH_MIX04_MUL);
 
-  // 混合.004 MIX Fac=ramp_008, A=hue_sat_002, B=hue_sat_001
-  let mix_004 = mix_blend(ramp_008, hue_sat_002, hue_sat_001);
+  let dark_tex = hue_sat_id(1.0, 0.19999998807907104, 1.0, tex_rgb);
+  let mix04 = mix_blend(mix04_fac, dark_tex, tex_rgb);
 
-  // 亮度/对比度 (Bright=0.1 Contrast=0.2) ← mix_004 only (links: not bevel path)
-  let bc = bright_contrast(mix_004, 0.1, 0.2);
-
-  // 倒角.001 → 分离 XYZ.001 → Z → 混合.003 Factor; A=bc, B=hue_sat_002
   let bevel_z = clamp(n.y, 0.0, 1.0);
-  let mix_003 = mix_blend(bevel_z, bc, hue_sat_002);
+  let mix03 = mix_blend(bevel_z, mix04, dark_tex);
 
-  // 环境光遮蔽 (AO).001 → 颜色渐变.001 → 混合.001 → 混合.002 chain collapses with fake AO=1:
-  //   ramp_constant(1, 0→white, 0.3756→black).r = 0 → ao_factor = mix(1,0,0) = 1 → mix_002 = mix_003.
-  //   hue_sat_004 becomes unreachable. When real SSAO lands, restore the original 5-line port.
-  let emission3 = mix_003; // Emission.003 Strength=1.0 (×1 omitted)
+  let hue004 = hue_sat_id(0.800000011920929, 2.0, 1.0, mix03);
+  let npr_rgb = mix_overlay(1.0, mix03, hue004);
+  let npr_emission = npr_rgb * NPR_EMIT_STR;
 
-  // 菲涅尔.001 × 层权重.002 → 运算.003 MULTIPLY → 运算.007 POWER(exponent Value_001) → MixShader.002 Fac
-  let rim2_raw = fresnel(1.45, n, v) * layer_weight_fresnel(0.61, n, v);
-  let rim2_fac = math_power(rim2_raw, HAIR_RIM2_POW);
-  // MixShader.002: Shader=Emission.003, Shader_001=背景 — (1-Fac)*emission + Fac*bg
-  let mix_shader_002 = mix(emission3, HAIR_MIX_BG, rim2_fac);
-
-  // 运算.004 GREATER_THAN: 图像→Value, threshold Value_001. Blender converts Color→Float
-  // via BT.601 luminance, not raw R — same socket-semantic fix as M_Face.
-  let tex_gate = math_greater_than(color_to_value(tex_color), HAIR_TEX_GATE_THRESH);
-  let gate_emit = vec3f(tex_gate) * 0.1;
-
-  // 相加着色器: MixShader.002 + gate emission (color sum in linear space)
-  let add_shader = mix_shader_002 + gate_emit;
-
-  // 原理化BSDF (EEVEE port): metallic=0, specular=1.0, roughness=0.3, specular_tint=0.
-  // Blender graph has 噪波→法线贴图 Strength=0.1 on Principled.Normal, but MixShader.001
-  // weights Principled at only 0.2; spec contribution × that weight is imperceptible in
-  // A/B with the noise-bump port enabled, so we drop it and keep plain n — saves a full
-  // tex_noise + bump_lh per hair fragment.
+  // Principled BSDF (EEVEE port): metallic=0, specular=0.8, roughness=0.5, specular_tint=0.
+  // Bump subtree is dead in the Blender graph (noise→bump not linked to Principled.Normal).
+  let principled_base = hue_sat_id(1.0, 0.800000011920929, 1.0, tex_rgb);
   let NL = max(dot(n, l), 0.0);
   let NV = max(dot(n, v), 1e-4);
 
-  let f0 = vec3f(0.08 * HAIR_SPECULAR);
-  let f90 = mix(f0, vec3f(1.0), sqrt(HAIR_SPECULAR));
-  let brdf_lut = brdf_lut_sample(NV, HAIR_ROUGHNESS);
+  // f0/f90 per gpu_shader_material_principled.glsl — specular_tint=0 → dielectric_f0_color=white.
+  let f0 = vec3f(0.08 * CLOTH_SPECULAR);
+  let f90 = mix(f0, vec3f(1.0), sqrt(CLOTH_SPECULAR));
+  let brdf_lut = brdf_lut_sample(NV, CLOTH_ROUGHNESS);
   let reflection_color = F_brdf_multi_scatter(f0, f90, brdf_lut.xy);
 
-  let spec_direct = bsdf_ggx(n, l, v, NL, NV, HAIR_ROUGHNESS) * sun * shadow * ltc_brdf_scale_from_lut(brdf_lut);
-  let spec_indirect = light.ambientColor.xyz;
+  // Direct glossy — bsdf_ggx already includes NL; no F applied here (tinted after accum).
+  // ltc_brdf_scale: EEVEE direct path uses LTC; split-sum LUT path is rescaled to match.
+  let spec_direct = bsdf_ggx(n, l, v, NL, NV, CLOTH_ROUGHNESS) * sun * shadow * ltc_brdf_scale_from_lut(brdf_lut);
+  // Indirect glossy — flat world probe (solid color). Phase 2 adds cubemap.
+  let spec_indirect = amb;
   let spec_radiance = (spec_direct + spec_indirect) * reflection_color;
 
-  // Indirect diffuse = base_color × L_w per Blender closure_eval_surface_lib.glsl line 302;
-  // probe_evaluate_world_diff returns radiance (SH-projected, not cosine-convolved).
-  let diffuse_radiance = bc * (sun * NL * shadow / PI_H + light.ambientColor.xyz);
+  // Diffuse (Lambert), no (1-F) factor per EEVEE — it doesn't energy-conserve spec<->diffuse.
+  // probe_evaluate_world_diff returns radiance L_w (SH projected, not cosine-convolved); in
+  // closure_eval_surface_lib line 302: closure.radiance += diffuse_accum * L_w * diffuse.color.
+  // So indirect diffuse = base_color × L_w, no π factor.
+  let diffuse_radiance = principled_base * (sun * NL * shadow / PI_C + amb);
   let principled = diffuse_radiance + spec_radiance;
 
-  // 混合着色器.001 Fac=0.2: first socket=相加着色器, second=原理化BSDF
-  let final_color = mix(add_shader, principled, 0.2);
+  // 混合着色器.001: Shader=自发光.005, Shader_001=原理化BSDF, Fac=0.9
+  let final_color = mix(npr_emission, principled, NPR_MIX_SHADER_FAC);
 
   var out: FSOut;
-  out.color = vec4f(final_color, alpha);
+  out.color = vec4f(final_color, out_alpha);
   out.mask = 1.0;
   return out;
 }

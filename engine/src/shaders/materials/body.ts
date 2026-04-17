@@ -71,11 +71,10 @@ fn sampleShadow(worldPos: vec3f, n: vec3f) -> f32 {
 
 const PI_B: f32 = 3.141592653589793;
 const BODY_ROUGHNESS: f32 = 0.3;
-// Dump: 层权重.002 Blend; 运算.007 POWER exponent Value_001; 背景 Color; 运算.004 after invert
 const BODY_RIM2_LAYER_BLEND: f32 = 0.20000000298023224;
 const BODY_RIM2_POW: f32 = 1.4300000667572021;
 const BODY_RIM2_BG: vec3f = vec3f(1.0, 0.4303792119026184, 0.3315804898738861);
-const BODY_WARM_AO_MUL: f32 = 0.30000001192092896;
+const BODY_WARM_STR: f32 = 0.30000001192092896;
 const BODY_SPECULAR: f32 = 0.5;
 const BODY_MIX_NPR: f32 = 0.5;
 // EEVEE Light Clamp equivalent — caps firefly specular from noise-bumped NDF aliasing.
@@ -133,49 +132,33 @@ struct FSOut {
   let tex_color = textureSample(diffuseTexture, diffuseSampler, input.uv).rgb;
   let shadow = sampleShadow(input.worldPos, n);
 
-  // ═══ TOON MASK: ShaderToRGB → ramp.008 CONSTANT [0→black, 0.2966→white] ═══
   let ndotl_raw = shader_to_rgb_diffuse(n, l, sun, light.ambientColor.xyz, shadow);
   let toon = ramp_constant(ndotl_raw, 0.0, vec4f(0,0,0,1), 0.2966, vec4f(1,1,1,1)).r;
 
-  // ═══ TOON COLOR: Mix.004 A=HueSat, B=HueSat.001, Fac=ramp.008 (R) ═══
   let shadow_tint = hue_sat_id(2.0, 0.3499999940395355, 1.0, tex_color);
   let lit_tint = hue_sat_id(1.5, 1.0, 1.0, tex_color);
   let toon_color = mix_blend(toon, shadow_tint, lit_tint);
   let bc = bright_contrast(toon_color, 0.1, 0.2);
 
-  // ═══ AO CHAIN: AO → ramp CONSTANT [0→white, 0.5995→black] → Mix.003 ═══
-  let ao = 1.0; // ao_fake(n, v) — no SSAO yet; inline 1.0 so the ramp/mix chain folds at compile time.
-  let ao_ramp = ramp_constant(ao, 0.0, vec4f(1,1,1,1), 0.5995, vec4f(0,0,0,1)).r;
-  let ao_mixed = mix_blend(ao_ramp, bc, vec3f(0.8301780223846436, 0.3345769941806793, 0.27946099638938904));
+  let emission3 = bc * 4.0;
 
-  // ═══ EMISSION.003 (strength=4.0) ═══
-  let emission3 = ao_mixed * 4.0;
-
-  // ═══ WARM: 颜色渐变.008 → 运算.006 ADD +0.5 (m_graphs) → clamp → 颜色渐变.003 ═══
-  let ao_inv = invert_f(1.0, ao_ramp);
-  let warm_str = ao_inv * BODY_WARM_AO_MUL;
   let warm_input = clamp(toon + 0.5, 0.0, 1.0);
   let warm_color = ramp_cardinal(warm_input, 0.2409,
     vec4f(0.2426, 0.068, 0.0588, 1.0), 0.4663,
     vec4f(0.6677, 0.5024, 0.5126, 1.0)).rgb;
-  let warm_emission = warm_color * warm_str;
+  let warm_emission = warm_color * BODY_WARM_STR;
 
-  // ═══ RIM 1: 菲涅尔 × 层权重.001 Facing Blend=0.24 → 自发光 Strength ═══
   let rim1_str = fresnel(2.0, n, v) * layer_weight_facing(0.24000005424022675, n, v);
   let rim1 = vec3f(0.984157919883728, 0.6110184788703918, 0.5736401677131653) * rim1_str;
 
-  // ═══ RIM 2: 层权重.002 Facing → 运算.007 POWER → 颜色渐变.010 EASE → MixShader.002 Fac ═══
   let facing_raw = layer_weight_facing(BODY_RIM2_LAYER_BLEND, n, v);
   let facing_pow = math_power(facing_raw, BODY_RIM2_POW);
   let rim2_fac = ramp_ease(facing_pow, 0.0, vec4f(0,0,0,1), 0.5052, vec4f(1,1,1,1)).r;
   let rim2_mixed = mix(emission3, BODY_RIM2_BG, rim2_fac);
 
-  // ═══ NPR STACK: AddShader chain (no bright gate in body) ═══
-  let add0 = rim1 + rim2_mixed;
-  let npr_stack = add0 + warm_emission;
+  let npr_stack = rim1 + rim2_mixed + warm_emission;
 
-  // ═══ PRINCIPLED BSDF: noise bump, GGX specular, SSS from AO ═══
-  // Mapping loc=rot=0 → plain scale multiply, inline.
+  // Noise bump — Mapping loc=rot=0 folds to a plain scale multiply.
   let noise_val = tex_noise_d2(input.worldPos * vec3f(1.0, 1.0, 1.5), 1.0);
   let noise_ramp = ramp_linear(noise_val, 0.0, vec4f(0,0,0,1), 1.0, vec4f(1,1,1,1)).r;
   let bumped_n = bump_lh(0.324644535779953, noise_ramp, n, input.worldPos);
@@ -183,10 +166,7 @@ struct FSOut {
   let principled_base = mix_blend(noise_ramp, bc, vec3f(0.6831911206245422, 0.19474034011363983, 0.13732507824897766));
   let p_emission = bc * 0.2;
 
-  // Reuse 'ao' (ao_fake(n, v) above) — identical inputs, avoid a second procedural AO pass.
-  let sss = ramp_linear(ao, 0.003, vec4f(0,0,0,1), 1.0, vec4f(0.0786, 0.0786, 0.0786, 1.0)).r;
-
-  // 原理化BSDF (EEVEE port): metallic=0, specular=0.5, roughness=0.3, specular_tint=0.
+  // Principled BSDF (EEVEE port): metallic=0, specular=0.5, roughness=0.3, specular_tint=0.
   let NL = max(dot(bumped_n, l), 0.0);
   let NV = max(dot(bumped_n, v), 1e-4);
 
@@ -208,9 +188,8 @@ struct FSOut {
   // probe_evaluate_world_diff returns radiance (SH-projected, not cosine-convolved).
   // No (1-F) factor per EEVEE — it doesn't energy-conserve spec<->diffuse.
   let diffuse_radiance = principled_base * (sun * NL * shadow / PI_B + light.ambientColor.xyz);
-  let principled = diffuse_radiance + spec_radiance + p_emission + vec3f(sss);
+  let principled = diffuse_radiance + spec_radiance + p_emission;
 
-  // 混合着色器.001: Shader=相加着色器.001, Shader_001=原理化BSDF
   let final_color = mix(npr_stack, principled, BODY_MIX_NPR);
 
   var out: FSOut;
