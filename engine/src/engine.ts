@@ -74,7 +74,7 @@ export type BloomOptions = {
 
 export const DEFAULT_BLOOM_OPTIONS: BloomOptions = {
   enabled: true,
-  threshold: 1,
+  threshold: 0.5,
   knee: 0.5,
   radius: 4.0,
   color: new Vec3(1.0, 0.7247558832168579, 0.6487361788749695),
@@ -265,7 +265,7 @@ export class Engine {
   private shadowMapDepthView!: GPUTextureView
   private brdfLutTexture!: GPUTexture
   private brdfLutView!: GPUTextureView
-  private static readonly SHADOW_MAP_SIZE = 4096
+  private static readonly SHADOW_MAP_SIZE = 2048
   private shadowDepthPipeline!: GPURenderPipeline
   private shadowLightVPBuffer!: GPUBuffer
   private shadowLightVPMatrix = new Float32Array(16)

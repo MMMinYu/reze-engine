@@ -84,7 +84,7 @@ export default function Home() {
 
   // Create and preload audio element on mount
   useEffect(() => {
-    const audio = new Audio("/IRIS OUT.wav")
+    const audio = new Audio("/One More Last Time.wav")
     audio.preload = "auto"
     audio.setAttribute("playsinline", "true")
     audio.setAttribute("webkit-playsinline", "true")
@@ -225,13 +225,15 @@ export default function Home() {
       })
 
 
-      engine.addGround()
+      engine.addGround({
+        diffuseColor: new Vec3(244 / 255, 70 / 255, 149 / 255),
+      })
 
       engine.runRenderLoop(() => setStats(engine.getStats()))
 
       await new Promise(resolve=>requestAnimationFrame(resolve))
       
-      await m1.loadVmd(IRIS_ANIM, "/animations/IRIS OUT.vmd")
+      await m1.loadVmd(IRIS_ANIM, "/animations/One More Last Time.vmd")
       m1.show(IRIS_ANIM)
       console.log(m1.getMaterials())
 

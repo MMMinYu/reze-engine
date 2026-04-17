@@ -49,19 +49,25 @@ struct LightVP { viewProj: mat4x4f, };
 @group(2) @binding(1) var<uniform> material: MaterialUniforms;
 
 fn sampleShadow(worldPos: vec3f, n: vec3f) -> f32 {
+  // Back-facing to key light: direct contribution is zero anyway, skip 9 texture samples.
+  if (dot(n, -light.lights[0].direction.xyz) <= 0.0) { return 0.0; }
   let biasedPos = worldPos + n * 0.08;
   let lclip = lightVP.viewProj * vec4f(biasedPos, 1.0);
   let ndc = lclip.xyz / max(lclip.w, 1e-6);
   let suv = vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
   let cmpZ = ndc.z - 0.001;
-  let ts = 1.0 / 4096.0;
-  var vis = 0.0;
-  for (var y = -1; y <= 1; y++) {
-    for (var x = -1; x <= 1; x++) {
-      vis += textureSampleCompare(shadowMap, shadowSampler, suv + vec2f(f32(x), f32(y)) * ts, cmpZ);
-    }
-  }
-  return vis / 9.0;
+  let ts = 1.0 / 2048.0;
+  // 3x3 PCF unrolled — Safari's Metal backend doesn't unroll nested shadow loops reliably.
+  let s00 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts, -ts), cmpZ);
+  let s10 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(0.0, -ts), cmpZ);
+  let s20 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts, -ts), cmpZ);
+  let s01 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts, 0.0), cmpZ);
+  let s11 = textureSampleCompareLevel(shadowMap, shadowSampler, suv, cmpZ);
+  let s21 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts, 0.0), cmpZ);
+  let s02 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts,  ts), cmpZ);
+  let s12 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(0.0,  ts), cmpZ);
+  let s22 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts,  ts), cmpZ);
+  return (s00 + s10 + s20 + s01 + s11 + s21 + s02 + s12 + s22) * (1.0 / 9.0);
 }
 
 const PI_H: f32 = 3.141592653589793;
@@ -93,7 +99,8 @@ const HAIR_MIX_BG: vec3f = vec3f(0.1673291176557541);
     skinnedNrm += (mat3x3f(m[0].xyz, m[1].xyz, m[2].xyz) * normal) * w;
   }
   output.position = camera.projection * camera.view * vec4f(skinnedPos.xyz, 1.0);
-  output.normal = normalize(skinnedNrm);
+  // Skip VS normalize — interpolation denormalizes anyway, and FS always does normalize(input.normal).
+  output.normal = skinnedNrm;
   output.uv = uv;
   output.worldPos = skinnedPos.xyz;
   return output;
@@ -118,11 +125,11 @@ struct FSOut {
   let shadow = sampleShadow(input.worldPos, n);
 
   // 色相/饱和度/明度 (Hue=0.5 Sat=1.2 Val=0.5 Fac=1) ← reroute from image
-  let hue_sat_shadow = hue_sat(0.5, 1.2, 0.5, 1.0, tex_color);
+  let hue_sat_shadow = hue_sat_id(1.2, 0.5, 1.0, tex_color);
   // 色相/饱和度/明度.002 (0.48, 1.2, 0.7, 1) ← previous
   let hue_sat_002 = hue_sat(0.48, 1.2, 0.7, 1.0, hue_sat_shadow);
   // 色相/饱和度/明度.001 (0.5, 1.5, 1.0, 1) ← image reroute (lit path)
-  let hue_sat_001 = hue_sat(0.5, 1.5, 1.0, 1.0, tex_color);
+  let hue_sat_001 = hue_sat_id(1.5, 1.0, 1.0, tex_color);
 
   // 漫射 BSDF.002 → Shader --> RGB → 颜色渐变.008 CONSTANT [0→0, 0.2966→1]
   let ndotl_raw = shader_to_rgb_diffuse(n, l, sun, light.ambientColor.xyz, shadow);
@@ -138,19 +145,10 @@ struct FSOut {
   let bevel_z = clamp(n.y, 0.0, 1.0);
   let mix_003 = mix_blend(bevel_z, bc, hue_sat_002);
 
-  // 环境光遮蔽 (AO).001 → 颜色渐变.001 CONSTANT [0→1, 0.3756→0] → 混合.001 → ao_factor
-  let ao = ao_fake(n, v);
-  let ramp_001 = ramp_constant(ao, 0.0, vec4f(1,1,1,1), 0.3756, vec4f(0,0,0,1)).r;
-  let ao_factor = mix(1.0, 0.0, ramp_001);
-
-  // 色相/饱和度/明度.004 (0.5, 0.8, 0.1, 1) ← mix_003
-  let hue_sat_004 = hue_sat(0.5, 0.8, 0.1, 1.0, mix_003);
-
-  // 混合.002 MIX Fac=ao_factor, A=hue_sat_004, B=mix_003
-  let mix_002 = mix_blend(ao_factor, hue_sat_004, mix_003);
-
-  // 自发光(发射).003 Strength=1.0 ← mix_002
-  let emission3 = mix_002 * 1.0;
+  // 环境光遮蔽 (AO).001 → 颜色渐变.001 → 混合.001 → 混合.002 chain collapses with fake AO=1:
+  //   ramp_constant(1, 0→white, 0.3756→black).r = 0 → ao_factor = mix(1,0,0) = 1 → mix_002 = mix_003.
+  //   hue_sat_004 becomes unreachable. When real SSAO lands, restore the original 5-line port.
+  let emission3 = mix_003; // Emission.003 Strength=1.0 (×1 omitted)
 
   // 菲涅尔.001 × 层权重.002 → 运算.003 MULTIPLY → 运算.007 POWER(exponent Value_001) → MixShader.002 Fac
   let rim2_raw = fresnel(1.45, n, v) * layer_weight_fresnel(0.61, n, v);
@@ -158,15 +156,19 @@ struct FSOut {
   // MixShader.002: Shader=Emission.003, Shader_001=背景 — (1-Fac)*emission + Fac*bg
   let mix_shader_002 = mix(emission3, HAIR_MIX_BG, rim2_fac);
 
-  // 运算.004 GREATER_THAN: 图像→Value, threshold Value_001 (R when Color plugs float socket)
-  let tex_gate = math_greater_than(tex_color.r, HAIR_TEX_GATE_THRESH);
+  // 运算.004 GREATER_THAN: 图像→Value, threshold Value_001. Blender converts Color→Float
+  // via BT.601 luminance, not raw R — same socket-semantic fix as M_Face.
+  let tex_gate = math_greater_than(color_to_value(tex_color), HAIR_TEX_GATE_THRESH);
   let gate_emit = vec3f(tex_gate) * 0.1;
 
   // 相加着色器: MixShader.002 + gate emission (color sum in linear space)
   let add_shader = mix_shader_002 + gate_emit;
 
   // 原理化BSDF (EEVEE port): metallic=0, specular=1.0, roughness=0.3, specular_tint=0.
-  // Graph's 噪波→法线贴图 Strength=0.1 is near-identity; plain n matches visually.
+  // Blender graph has 噪波→法线贴图 Strength=0.1 on Principled.Normal, but MixShader.001
+  // weights Principled at only 0.2; spec contribution × that weight is imperceptible in
+  // A/B with the noise-bump port enabled, so we drop it and keep plain n — saves a full
+  // tex_noise + bump_lh per hair fragment.
   let NL = max(dot(n, l), 0.0);
   let NV = max(dot(n, v), 1e-4);
 
@@ -175,7 +177,7 @@ struct FSOut {
   let brdf_lut = brdf_lut_sample(NV, HAIR_ROUGHNESS);
   let reflection_color = F_brdf_multi_scatter(f0, f90, brdf_lut.xy);
 
-  let spec_direct = bsdf_ggx(n, l, v, HAIR_ROUGHNESS) * sun * shadow * ltc_brdf_scale_from_lut(brdf_lut);
+  let spec_direct = bsdf_ggx(n, l, v, NL, NV, HAIR_ROUGHNESS) * sun * shadow * ltc_brdf_scale_from_lut(brdf_lut);
   let spec_indirect = light.ambientColor.xyz;
   let spec_radiance = (spec_direct + spec_indirect) * reflection_color;
 

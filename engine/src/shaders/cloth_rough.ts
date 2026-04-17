@@ -49,19 +49,25 @@ struct LightVP { viewProj: mat4x4f, };
 @group(2) @binding(1) var<uniform> material: MaterialUniforms;
 
 fn sampleShadow(worldPos: vec3f, n: vec3f) -> f32 {
+  // Back-facing to key light: direct contribution is zero anyway, skip 9 texture samples.
+  if (dot(n, -light.lights[0].direction.xyz) <= 0.0) { return 0.0; }
   let biasedPos = worldPos + n * 0.08;
   let lclip = lightVP.viewProj * vec4f(biasedPos, 1.0);
   let ndc = lclip.xyz / max(lclip.w, 1e-6);
   let suv = vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
   let cmpZ = ndc.z - 0.001;
-  let ts = 1.0 / 4096.0;
-  var vis = 0.0;
-  for (var y = -1; y <= 1; y++) {
-    for (var x = -1; x <= 1; x++) {
-      vis += textureSampleCompare(shadowMap, shadowSampler, suv + vec2f(f32(x), f32(y)) * ts, cmpZ);
-    }
-  }
-  return vis / 9.0;
+  let ts = 1.0 / 2048.0;
+  // 3x3 PCF unrolled — Safari's Metal backend doesn't unroll nested shadow loops reliably.
+  let s00 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts, -ts), cmpZ);
+  let s10 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(0.0, -ts), cmpZ);
+  let s20 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts, -ts), cmpZ);
+  let s01 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts, 0.0), cmpZ);
+  let s11 = textureSampleCompareLevel(shadowMap, shadowSampler, suv, cmpZ);
+  let s21 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts, 0.0), cmpZ);
+  let s02 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts,  ts), cmpZ);
+  let s12 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(0.0,  ts), cmpZ);
+  let s22 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts,  ts), cmpZ);
+  return (s00 + s10 + s20 + s01 + s11 + s21 + s02 + s12 + s22) * (1.0 / 9.0);
 }
 
 const PI_CR: f32 = 3.141592653589793;
@@ -97,7 +103,8 @@ const CLOTH_R_SPEC_CLAMP: f32 = 10.0;
     skinnedNrm += (mat3x3f(m[0].xyz, m[1].xyz, m[2].xyz) * normal) * w;
   }
   output.position = camera.projection * camera.view * vec4f(skinnedPos.xyz, 1.0);
-  output.normal = normalize(skinnedNrm);
+  // Skip VS normalize — interpolation denormalizes anyway, and FS always does normalize(input.normal).
+  output.normal = skinnedNrm;
   output.uv = uv;
   output.worldPos = skinnedPos.xyz;
   return output;
@@ -128,7 +135,7 @@ struct FSOut {
   let mix04_fac = math_multiply(toon_r, CLOTH_R_MIX04_MUL);
 
   // 混合.004: A=色相/饱和度/明度.002(Hue=0.5 Sat=1.0 Val=0.2), B=纹理
-  let dark_tex = hue_sat(0.5, 1.0, 0.19999998807907104, 1.0, tex_rgb);
+  let dark_tex = hue_sat_id(1.0, 0.19999998807907104, 1.0, tex_rgb);
   let mix04 = mix_blend(mix04_fac, dark_tex, tex_rgb);
 
   // 倒角.001.Z → 混合.003: A=混合.004, B=色相/饱和度/明度.002
@@ -136,25 +143,25 @@ struct FSOut {
   let mix03 = mix_blend(bevel_z, mix04, dark_tex);
 
   // 环境光遮蔽 → 颜色渐变.001 LINEAR → 混合.001 (white/black) → 混合.002 OVERLAY Fac
-  let ao = ao_fake(n, v);
+  let ao = 1.0; // ao_fake(n, v) — no SSAO yet; inline 1.0 so the ramp/mix chain folds at compile time.
   let ao_ramp_c = ramp_linear(ao, 0.0, vec4f(1,1,1,1), 0.8808, vec4f(0,0,0,1));
   let mix01_fac = ao_ramp_c.r;
   let mix01_rgb = mix(vec3f(1.0), vec3f(0.0), mix01_fac);
 
   // 混合.002 OVERLAY: Fac=混合.001, A=混合.003, B=色相/饱和度/明度.004
-  let hue004 = hue_sat(0.5, 0.800000011920929, 2.0, 1.0, mix03);
+  let hue004 = hue_sat_id(0.800000011920929, 2.0, 1.0, mix03);
   let overlay_fac = mix01_rgb.r;
   let npr_rgb = mix_overlay(overlay_fac, mix03, hue004);
   let npr_emission = npr_rgb * CLOTH_R_EMIT_STR;
 
   // 噪波→渐变→凹凸 (LIVE in M_Rough_Cloth — unlike Smooth Cloth): Strength=1.0, noise Scale=17.7.
-  let noise_uv = mapping_point(input.worldPos, vec3f(0.0), vec3f(0.0), vec3f(1.0));
-  let noise_val = tex_noise(noise_uv, CLOTH_R_NOISE_SCALE, 2.0, 0.5, 0.0);
+  // mapping scale=(1,1,1), loc=rot=0 → identity; use worldPos directly.
+  let noise_val = tex_noise_d2(input.worldPos, CLOTH_R_NOISE_SCALE);
   let noise_ramp = ramp_linear(noise_val, 0.0, vec4f(0,0,0,1), 1.0, vec4f(1,1,1,1)).r;
   let bumped_n = bump_lh(CLOTH_R_BUMP_STR, noise_ramp, n, input.worldPos);
 
   // 原理化BSDF (EEVEE port): metallic=0, specular=0.8, roughness=0.8187, specular_tint=0.
-  let principled_base = hue_sat(0.5, 1.0, 0.800000011920929, 1.0, tex_rgb);
+  let principled_base = hue_sat_id(1.0, 0.800000011920929, 1.0, tex_rgb);
   let NL = max(dot(bumped_n, l), 0.0);
   let NV = max(dot(bumped_n, v), 1e-4);
 
@@ -163,7 +170,7 @@ struct FSOut {
   let brdf_lut = brdf_lut_sample(NV, CLOTH_R_ROUGHNESS);
   let reflection_color = F_brdf_multi_scatter(f0, f90, brdf_lut.xy);
 
-  let spec_direct_raw = bsdf_ggx(bumped_n, l, v, CLOTH_R_ROUGHNESS) * sun * shadow * ltc_brdf_scale_from_lut(brdf_lut);
+  let spec_direct_raw = bsdf_ggx(bumped_n, l, v, NL, NV, CLOTH_R_ROUGHNESS) * sun * shadow * ltc_brdf_scale_from_lut(brdf_lut);
   let spec_direct = min(spec_direct_raw, vec3f(CLOTH_R_SPEC_CLAMP));
   let spec_indirect = amb;
   let spec_radiance = (spec_direct + spec_indirect) * reflection_color;

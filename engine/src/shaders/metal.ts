@@ -51,19 +51,25 @@ struct LightVP { viewProj: mat4x4f, };
 @group(2) @binding(1) var<uniform> material: MaterialUniforms;
 
 fn sampleShadow(worldPos: vec3f, n: vec3f) -> f32 {
+  // Back-facing to key light: direct contribution is zero anyway, skip 9 texture samples.
+  if (dot(n, -light.lights[0].direction.xyz) <= 0.0) { return 0.0; }
   let biasedPos = worldPos + n * 0.08;
   let lclip = lightVP.viewProj * vec4f(biasedPos, 1.0);
   let ndc = lclip.xyz / max(lclip.w, 1e-6);
   let suv = vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
   let cmpZ = ndc.z - 0.001;
-  let ts = 1.0 / 4096.0;
-  var vis = 0.0;
-  for (var y = -1; y <= 1; y++) {
-    for (var x = -1; x <= 1; x++) {
-      vis += textureSampleCompare(shadowMap, shadowSampler, suv + vec2f(f32(x), f32(y)) * ts, cmpZ);
-    }
-  }
-  return vis / 9.0;
+  let ts = 1.0 / 2048.0;
+  // 3x3 PCF unrolled — Safari's Metal backend doesn't unroll nested shadow loops reliably.
+  let s00 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts, -ts), cmpZ);
+  let s10 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(0.0, -ts), cmpZ);
+  let s20 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts, -ts), cmpZ);
+  let s01 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts, 0.0), cmpZ);
+  let s11 = textureSampleCompareLevel(shadowMap, shadowSampler, suv, cmpZ);
+  let s21 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts, 0.0), cmpZ);
+  let s02 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts,  ts), cmpZ);
+  let s12 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(0.0,  ts), cmpZ);
+  let s22 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts,  ts), cmpZ);
+  return (s00 + s10 + s20 + s01 + s11 + s21 + s02 + s12 + s22) * (1.0 / 9.0);
 }
 
 const PI_M: f32 = 3.141592653589793;
@@ -98,7 +104,8 @@ const METAL_VORONOI_SCALE: f32 = 4.3;
     skinnedNrm += (mat3x3f(m[0].xyz, m[1].xyz, m[2].xyz) * normal) * w;
   }
   output.position = camera.projection * camera.view * vec4f(skinnedPos.xyz, 1.0);
-  output.normal = normalize(skinnedNrm);
+  // Skip VS normalize — interpolation denormalizes anyway, and FS always does normalize(input.normal).
+  output.normal = skinnedNrm;
   output.uv = uv;
   output.worldPos = skinnedPos.xyz;
   return output;
@@ -123,23 +130,23 @@ struct FSOut {
   if (out_alpha < 0.001) { discard; }
 
   // ═══ NPR toon stack (图像 → HSV.007 Val=0.8 → 转接点.001) ═══
-  let tex_tint = hue_sat(0.5, 1.0, 0.800000011920929, 1.0, tex_rgb);
+  let tex_tint = hue_sat_id(1.0, 0.800000011920929, 1.0, tex_rgb);
   let lum_shade = shader_to_rgb_diffuse(n, l, sun, amb, shadow);
   let ramp008 = ramp_constant_edge_aa(lum_shade, METAL_TOON_EDGE, vec4f(0,0,0,1), vec4f(1,1,1,1));
   let mix04_fac = math_multiply(ramp008.r, METAL_MIX04_MUL);
 
   // 混合.004: A=HSV.002(Val=0.2 dark), B=tex_tint
-  let dark_tex = hue_sat(0.5, 1.0, 0.19999998807907104, 1.0, tex_tint);
+  let dark_tex = hue_sat_id(1.0, 0.19999998807907104, 1.0, tex_tint);
   let mix04 = mix_blend(mix04_fac, dark_tex, tex_tint);
 
   // AO white/black ramp → 混合.002 factor
-  let ao = ao_fake(n, v);
+  let ao = 1.0; // ao_fake(n, v) — no SSAO yet; inline 1.0 so the ramp/mix chain folds at compile time.
   let ao_ramp_c = ramp_linear(ao, 0.0, vec4f(1,1,1,1), 0.8808, vec4f(0,0,0,1));
   let overlay_fac = mix(1.0, 0.0, ao_ramp_c.r);
 
   // 混合.002 OVERLAY: A=HSV.008(Val=1.0 identity) ← mix04, B=HSV.004(Val=2.0 bright) ← mix04
   let hue008 = mix04; // identity HSV
-  let hue004 = hue_sat(0.5, 1.0, 2.0, 1.0, mix04);
+  let hue004 = hue_sat_id(1.0, 2.0, 1.0, mix04);
   let npr_rgb = mix_overlay(overlay_fac, hue008, hue004);
   let npr_emission = npr_rgb * METAL_EMIT_STR;
 
@@ -150,7 +157,7 @@ struct FSOut {
   let voro = tex_voronoi_f1(refl_dir, METAL_VORONOI_SCALE);
   let voro_ramp = ramp_linear(voro, 0.0, vec4f(0,0,0,1), 1.0, vec4f(1,1,1,1)).r;
   // 混合.005: Fac=voro_ramp, A=voro_color(grayscale), B=HSV.006(Hue=0.5 Sat=1.5 Val=1.3)
-  let hue006 = hue_sat(0.5, 1.5, 1.2999999523162842, 1.0, tex_tint);
+  let hue006 = hue_sat_id(1.5, 1.2999999523162842, 1.0, tex_tint);
   let albedo = mix_blend(voro_ramp, vec3f(voro_ramp), hue006);
 
   // 原理化BSDF (EEVEE port): metallic=1.0, specular=1.0, roughness=0.3.
@@ -158,11 +165,12 @@ struct FSOut {
   // metallic=1 this is just albedo (specular_tint is dielectric-only and ignored here).
   let f0 = albedo;
   let f90 = mix(f0, vec3f(1.0), sqrt(METAL_SPECULAR));
+  let NL = max(dot(n, l), 0.0);
   let NV = max(dot(n, v), 1e-4);
   let brdf_lut = brdf_lut_sample(NV, METAL_ROUGHNESS);
   let reflection_color = F_brdf_multi_scatter(f0, f90, brdf_lut.xy);
 
-  let spec_direct = bsdf_ggx(n, l, v, METAL_ROUGHNESS) * sun * shadow * ltc_brdf_scale_from_lut(brdf_lut);
+  let spec_direct = bsdf_ggx(n, l, v, NL, NV, METAL_ROUGHNESS) * sun * shadow * ltc_brdf_scale_from_lut(brdf_lut);
   let spec_indirect = amb;
   let spec_radiance = (spec_direct + spec_indirect) * reflection_color;
 

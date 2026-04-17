@@ -68,6 +68,23 @@ fn hue_sat(hue: f32, saturation: f32, value: f32, fac: f32, color: vec3f) -> vec
   return mix(color, hsv_to_rgb(hsv), fac);
 }
 
+// hue_sat specialization for hue=0.5 (identity hue shift — fract(h + 0.5 - 0.5) = h).
+// Branchless equivalent that skips the rgb_to_hsv → hsv_to_rgb roundtrip: WebKit's
+// Metal backend serializes the 3-way if chain in rgb_to_hsv and the 6-way switch in
+// hsv_to_rgb, where this form compiles to linear SIMD ops + a single select.
+fn hue_sat_id(saturation: f32, value: f32, fac: f32, color: vec3f) -> vec3f {
+  let m = max(max(color.r, color.g), color.b);
+  let n = min(min(color.r, color.g), color.b);
+  // Unclamped (sat*old_s ≤ 1): reproj = mix(vec3f(m), color, saturation).
+  // Clamped (saturated to 1):   reproj = (color - n) * m / (m - n).
+  let range = max(m - n, 1e-6);
+  let unclamped = mix(vec3f(m), color, saturation);
+  let clamped = (color - vec3f(n)) * m / range;
+  let needs_clamp = (m - n) * saturation >= m;
+  let reproj = select(unclamped, clamped, needs_clamp);
+  return mix(color, reproj * value, fac);
+}
+
 // ─── BRIGHTCONTRAST node ────────────────────────────────────────────
 
 fn bright_contrast(color: vec3f, bright: f32, contrast: f32) -> vec3f {
@@ -161,18 +178,26 @@ fn luminance_rec709_linear(c: vec3f) -> f32 {
 // Schlick approximation matching Blender's Fresnel node
 
 fn fresnel(ior: f32, n: vec3f, v: vec3f) -> f32 {
-  let f0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
+  let r = (ior - 1.0) / (ior + 1.0);
+  let f0 = r * r;
   let cos_theta = clamp(dot(n, v), 0.0, 1.0);
-  return f0 + (1.0 - f0) * pow(1.0 - cos_theta, 5.0);
+  let m = 1.0 - cos_theta;
+  let m2 = m * m;
+  let m5 = m2 * m2 * m;
+  return f0 + (1.0 - f0) * m5;
 }
 
 // ─── LAYER_WEIGHT node ──────────────────────────────────────────────
 
 fn layer_weight_fresnel(blend: f32, n: vec3f, v: vec3f) -> f32 {
   let eta = max(1.0 - blend, 1e-4);
-  let f0 = pow((1.0 - eta) / (1.0 + eta), 2.0);
+  let r = (1.0 - eta) / (1.0 + eta);
+  let f0 = r * r;
   let cos_theta = clamp(abs(dot(n, v)), 0.0, 1.0);
-  return f0 + (1.0 - f0) * pow(1.0 - cos_theta, 5.0);
+  let m = 1.0 - cos_theta;
+  let m2 = m * m;
+  let m5 = m2 * m2 * m;
+  return f0 + (1.0 - f0) * m5;
 }
 
 fn layer_weight_facing(blend: f32, n: vec3f, v: vec3f) -> f32 {
@@ -231,13 +256,18 @@ fn bump_lh(strength: f32, height: f32, normal: vec3f, world_pos: vec3f) -> vec3f
 // ─── NOISE texture (Perlin-style) ───────────────────────────────────
 // Simplified gradient noise matching Blender's default noise output.
 
+// PCG-style integer hash. Replaces the classic 'fract(sin(q) * LARGE)' trick because
+// WebKit's Metal backend compiles 'sin' to a full transcendental op (slow), while
+// Safari's Apple-GPU scalar ALU handles int muls/xors near free. Inputs arrive as
+// integer-valued floats (floor(p) + unit offsets) from _noise3, so vec3i cast is exact.
 fn _hash33(p: vec3f) -> vec3f {
-  var q = vec3f(
-    dot(p, vec3f(127.1, 311.7, 74.7)),
-    dot(p, vec3f(269.5, 183.3, 246.1)),
-    dot(p, vec3f(113.5, 271.9, 124.6))
-  );
-  return fract(sin(q) * 43758.5453123) * 2.0 - 1.0;
+  var h = vec3u(vec3i(p) + vec3i(32768));
+  h = h * vec3u(1664525u, 1013904223u, 2654435761u);
+  h = (h.yzx ^ h) * vec3u(2246822519u, 3266489917u, 668265263u);
+  h = h ^ (h >> vec3u(16u));
+  // Mask to 24 bits — above that f32 loses precision on the u32→f32 convert.
+  let hm = h & vec3u(16777215u);
+  return vec3f(hm) * (2.0 / 16777216.0) - 1.0;
 }
 
 fn _noise3(p: vec3f) -> f32 {
@@ -278,6 +308,15 @@ fn tex_noise(p: vec3f, scale: f32, detail: f32, roughness: f32, distortion: f32)
     frequency *= 2.0;
   }
   return value / max(total_amp, 1e-6) * 0.5 + 0.5;
+}
+
+// tex_noise specialization: detail=2.0 (3 octaves), roughness=0.5, distortion=0.
+// WebKit can't unroll tex_noise's for-loop because 'octaves' is a runtime value;
+// this variant is fully unrolled with constants folded (total_amp = 1.75).
+fn tex_noise_d2(p: vec3f, scale: f32) -> f32 {
+  let c = p * scale;
+  let v = _noise3(c) + 0.5 * _noise3(c * 2.0) + 0.25 * _noise3(c * 4.0);
+  return v * (1.0 / 1.75) * 0.5 + 0.5;
 }
 
 // ─── TEX_GRADIENT (linear) ──────────────────────────────────────────
@@ -353,13 +392,15 @@ const EEVEE_PI: f32 = 3.141592653589793;
 
 // Fused analytic GGX specular (direct lights). Returns BRDF × NL.
 // 4·NL·NV is cancelled via G1_Smith reciprocal form — see bsdf_common_lib.glsl:115.
-fn bsdf_ggx(N: vec3f, L: vec3f, V: vec3f, roughness: f32) -> f32 {
+// Caller passes NL, NV (already computed for diffuse + brdf_lut_sample) so WebKit
+// can reuse them instead of recomputing dot products across the function boundary.
+fn bsdf_ggx(N: vec3f, L: vec3f, V: vec3f, NL_in: f32, NV_in: f32, roughness: f32) -> f32 {
   let a = max(roughness, 1e-4);
   let a2 = a * a;
   let H = normalize(L + V);
   let NH = max(dot(N, H), 1e-8);
-  let NL = max(dot(N, L), 1e-8);
-  let NV = max(dot(N, V), 1e-8);
+  let NL = max(NL_in, 1e-8);
+  let NV = max(NV_in, 1e-8);
   // G1_Smith_GGX_opti reciprocal form — denominator piece only.
   let G1L = NL + sqrt(NL * (NL - NL * a2) + a2);
   let G1V = NV + sqrt(NV * (NV - NV * a2) + a2);

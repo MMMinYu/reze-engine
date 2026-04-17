@@ -48,19 +48,25 @@ struct LightVP { viewProj: mat4x4f, };
 @group(2) @binding(1) var<uniform> material: MaterialUniforms;
 
 fn sampleShadow(worldPos: vec3f, n: vec3f) -> f32 {
+  // Back-facing to key light: direct contribution is zero anyway, skip 9 texture samples.
+  if (dot(n, -light.lights[0].direction.xyz) <= 0.0) { return 0.0; }
   let biasedPos = worldPos + n * 0.08;
   let lclip = lightVP.viewProj * vec4f(biasedPos, 1.0);
   let ndc = lclip.xyz / max(lclip.w, 1e-6);
   let suv = vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
   let cmpZ = ndc.z - 0.001;
-  let ts = 1.0 / 4096.0;
-  var vis = 0.0;
-  for (var y = -1; y <= 1; y++) {
-    for (var x = -1; x <= 1; x++) {
-      vis += textureSampleCompare(shadowMap, shadowSampler, suv + vec2f(f32(x), f32(y)) * ts, cmpZ);
-    }
-  }
-  return vis / 9.0;
+  let ts = 1.0 / 2048.0;
+  // 3x3 PCF unrolled — Safari's Metal backend doesn't unroll nested shadow loops reliably.
+  let s00 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts, -ts), cmpZ);
+  let s10 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(0.0, -ts), cmpZ);
+  let s20 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts, -ts), cmpZ);
+  let s01 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts, 0.0), cmpZ);
+  let s11 = textureSampleCompareLevel(shadowMap, shadowSampler, suv, cmpZ);
+  let s21 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts, 0.0), cmpZ);
+  let s02 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts,  ts), cmpZ);
+  let s12 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(0.0,  ts), cmpZ);
+  let s22 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts,  ts), cmpZ);
+  return (s00 + s10 + s20 + s01 + s11 + s21 + s02 + s12 + s22) * (1.0 / 9.0);
 }
 
 const PI_C: f32 = 3.141592653589793;
@@ -92,7 +98,8 @@ const NPR_MIX_SHADER_FAC: f32 = 0.8999999761581421;
     skinnedNrm += (mat3x3f(m[0].xyz, m[1].xyz, m[2].xyz) * normal) * w;
   }
   output.position = camera.projection * camera.view * vec4f(skinnedPos.xyz, 1.0);
-  output.normal = normalize(skinnedNrm);
+  // Skip VS normalize — interpolation denormalizes anyway, and FS always does normalize(input.normal).
+  output.normal = skinnedNrm;
   output.uv = uv;
   output.worldPos = skinnedPos.xyz;
   return output;
@@ -124,7 +131,7 @@ struct FSOut {
   let mix04_fac = math_multiply(toon_r, CLOTH_MIX04_MUL);
 
   // 混合.004: A=色相/饱和度/明度.002, B=纹理
-  let dark_tex = hue_sat(0.5, 1.0, 0.19999998807907104, 1.0, tex_rgb);
+  let dark_tex = hue_sat_id(1.0, 0.19999998807907104, 1.0, tex_rgb);
   let mix04 = mix_blend(mix04_fac, dark_tex, tex_rgb);
 
   // 倒角.001→Z → 混合.003 Factor; A=混合.004, B=色相/饱和度/明度.002
@@ -132,20 +139,20 @@ struct FSOut {
   let mix03 = mix_blend(bevel_z, mix04, dark_tex);
 
   // 环境光遮蔽 → 颜色渐变.001 LINEAR → 混合.001 (白/黑) → 混合.002 OVERLAY Fac
-  let ao = ao_fake(n, v);
+  let ao = 1.0; // ao_fake(n, v) — no SSAO yet; inline 1.0 so the ramp/mix chain folds at compile time.
   let ao_ramp_c = ramp_linear(ao, 0.0, vec4f(1,1,1,1), 0.8808, vec4f(0,0,0,1));
   let mix01_fac = ao_ramp_c.r;
   let mix01_rgb = mix(vec3f(1.0), vec3f(0.0), mix01_fac);
 
   // 混合.002 OVERLAY: Fac=混合.001, A=混合.003, B=色相/饱和度/明度.004
-  let hue004 = hue_sat(0.5, 0.800000011920929, 2.0, 1.0, mix03);
+  let hue004 = hue_sat_id(0.800000011920929, 2.0, 1.0, mix03);
   let overlay_fac = mix01_rgb.r;
   let npr_rgb = mix_overlay(overlay_fac, mix03, hue004);
   let npr_emission = npr_rgb * NPR_EMIT_STR;
 
   // 原理化BSDF (EEVEE port): metallic=0, specular=0.8, roughness=0.5, specular_tint=0.
   // Bump subtree is dead in the Blender graph (噪波→凹凸 not linked to Principled.Normal).
-  let principled_base = hue_sat(0.5, 1.0, 0.800000011920929, 1.0, tex_rgb);
+  let principled_base = hue_sat_id(1.0, 0.800000011920929, 1.0, tex_rgb);
   let NL = max(dot(n, l), 0.0);
   let NV = max(dot(n, v), 1e-4);
 
@@ -157,7 +164,7 @@ struct FSOut {
 
   // Direct glossy — bsdf_ggx already includes NL; no F applied here (tinted after accum).
   // ltc_brdf_scale: EEVEE direct path uses LTC; split-sum LUT path is rescaled to match.
-  let spec_direct = bsdf_ggx(n, l, v, CLOTH_ROUGHNESS) * sun * shadow * ltc_brdf_scale_from_lut(brdf_lut);
+  let spec_direct = bsdf_ggx(n, l, v, NL, NV, CLOTH_ROUGHNESS) * sun * shadow * ltc_brdf_scale_from_lut(brdf_lut);
   // Indirect glossy — flat world probe (solid color). Phase 2 adds cubemap.
   let spec_indirect = amb;
   let spec_radiance = (spec_direct + spec_indirect) * reflection_color;

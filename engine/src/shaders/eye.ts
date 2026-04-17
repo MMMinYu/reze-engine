@@ -60,23 +60,31 @@ fn smith_g1(ndotx: f32, a2: f32) -> f32 {
 }
 
 fn fresnel_schlick(cosTheta: f32, f0: f32) -> f32 {
-  return f0 + (1.0 - f0) * pow(1.0 - cosTheta, 5.0);
+  let m = 1.0 - cosTheta;
+  let m2 = m * m;
+  return f0 + (1.0 - f0) * (m2 * m2 * m);
 }
 
 fn sampleShadow(worldPos: vec3f, n: vec3f) -> f32 {
+  // Back-facing to key light: direct contribution is zero anyway, skip 9 texture samples.
+  if (dot(n, -light.lights[0].direction.xyz) <= 0.0) { return 0.0; }
   let biasedPos = worldPos + n * 0.08;
   let lclip = lightVP.viewProj * vec4f(biasedPos, 1.0);
   let ndc = lclip.xyz / max(lclip.w, 1e-6);
   let suv = vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
   let cmpZ = ndc.z - 0.001;
-  let ts = 1.0 / 4096.0;
-  var vis = 0.0;
-  for (var y = -1; y <= 1; y++) {
-    for (var x = -1; x <= 1; x++) {
-      vis += textureSampleCompare(shadowMap, shadowSampler, suv + vec2f(f32(x), f32(y)) * ts, cmpZ);
-    }
-  }
-  return vis / 9.0;
+  let ts = 1.0 / 2048.0;
+  // 3x3 PCF unrolled — Safari's Metal backend doesn't unroll nested shadow loops reliably.
+  let s00 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts, -ts), cmpZ);
+  let s10 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(0.0, -ts), cmpZ);
+  let s20 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts, -ts), cmpZ);
+  let s01 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts, 0.0), cmpZ);
+  let s11 = textureSampleCompareLevel(shadowMap, shadowSampler, suv, cmpZ);
+  let s21 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts, 0.0), cmpZ);
+  let s02 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts,  ts), cmpZ);
+  let s12 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(0.0,  ts), cmpZ);
+  let s22 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts,  ts), cmpZ);
+  return (s00 + s10 + s20 + s01 + s11 + s21 + s02 + s12 + s22) * (1.0 / 9.0);
 }
 
 @vertex fn vs(
@@ -100,7 +108,8 @@ fn sampleShadow(worldPos: vec3f, n: vec3f) -> f32 {
     skinnedNrm += (mat3x3f(m[0].xyz, m[1].xyz, m[2].xyz) * normal) * w;
   }
   output.position = camera.projection * camera.view * vec4f(skinnedPos.xyz, 1.0);
-  output.normal = normalize(skinnedNrm);
+  // Skip VS normalize — interpolation denormalizes anyway, and FS always does normalize(input.normal).
+  output.normal = skinnedNrm;
   output.uv = uv;
   output.worldPos = skinnedPos.xyz;
   return output;

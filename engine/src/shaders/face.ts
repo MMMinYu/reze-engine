@@ -47,21 +47,27 @@ struct LightVP { viewProj: mat4x4f, };
 @group(2) @binding(0) var diffuseTexture: texture_2d<f32>;
 @group(2) @binding(1) var<uniform> material: MaterialUniforms;
 
-// 3x3 PCF shadow sampling, 4096 map, normal-bias 0.08, depth-bias 0.001
+// 3x3 PCF shadow sampling, 2048 map, normal-bias 0.08, depth-bias 0.001
 fn sampleShadow(worldPos: vec3f, n: vec3f) -> f32 {
+  // Back-facing to key light: direct contribution is zero anyway, skip 9 texture samples.
+  if (dot(n, -light.lights[0].direction.xyz) <= 0.0) { return 0.0; }
   let biasedPos = worldPos + n * 0.08;
   let lclip = lightVP.viewProj * vec4f(biasedPos, 1.0);
   let ndc = lclip.xyz / max(lclip.w, 1e-6);
   let suv = vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
   let cmpZ = ndc.z - 0.001;
-  let ts = 1.0 / 4096.0;
-  var vis = 0.0;
-  for (var y = -1; y <= 1; y++) {
-    for (var x = -1; x <= 1; x++) {
-      vis += textureSampleCompare(shadowMap, shadowSampler, suv + vec2f(f32(x), f32(y)) * ts, cmpZ);
-    }
-  }
-  return vis / 9.0;
+  let ts = 1.0 / 2048.0;
+  // 3x3 PCF unrolled — Safari's Metal backend doesn't unroll nested shadow loops reliably.
+  let s00 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts, -ts), cmpZ);
+  let s10 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(0.0, -ts), cmpZ);
+  let s20 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts, -ts), cmpZ);
+  let s01 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts, 0.0), cmpZ);
+  let s11 = textureSampleCompareLevel(shadowMap, shadowSampler, suv, cmpZ);
+  let s21 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts, 0.0), cmpZ);
+  let s02 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts,  ts), cmpZ);
+  let s12 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(0.0,  ts), cmpZ);
+  let s22 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts,  ts), cmpZ);
+  return (s00 + s10 + s20 + s01 + s11 + s21 + s02 + s12 + s22) * (1.0 / 9.0);
 }
 
 const PI_F: f32 = 3.141592653589793;
@@ -99,7 +105,8 @@ const FACE_SPEC_CLAMP: f32 = 10.0;
     skinnedNrm += (mat3x3f(m[0].xyz, m[1].xyz, m[2].xyz) * normal) * w;
   }
   output.position = camera.projection * camera.view * vec4f(skinnedPos.xyz, 1.0);
-  output.normal = normalize(skinnedNrm);
+  // Skip VS normalize — interpolation denormalizes anyway, and FS always does normalize(input.normal).
+  output.normal = skinnedNrm;
   output.uv = uv;
   output.worldPos = skinnedPos.xyz;
   return output;
@@ -132,7 +139,7 @@ struct FSOut {
   let ndotl_raw = shader_to_rgb_diffuse(n, l, sun, light.ambientColor.xyz, shadow);
   // ramp.008 CONSTANT — edge AA avoids binary fac shimmer / white specks on terminator (fwidth + smoothstep)
   let toon = ramp_constant_edge_aa(ndotl_raw, 0.2966, vec4f(0,0,0,1), vec4f(1,1,1,1)).r;
-  let ao = ao_fake(n, v);
+  let ao = 1.0; // ao_fake(n, v) — no SSAO yet; inline 1.0 so the ramp/mix chain folds at compile time.
 
   // ═══ TOON COLOR ═══
   let shadow_tint = hue_sat(0.46000000834465027, 2.0, 0.3499999940395355, 1.0, tex_color); // HueSat.002
@@ -186,9 +193,8 @@ struct FSOut {
   let npr_stack = add0 + warm_emission; // AddShader.001
 
   // ═══ PRINCIPLED BSDF ═══
-  // Noise-based bump normal
-  let gen = mapping_point(input.worldPos, vec3f(0.0), vec3f(0.0), vec3f(1.0, 1.0, 1.5));
-  let noise_val = tex_noise(gen, 1.0, 2.0, 0.5, 0.0);
+  // Noise-based bump normal. Mapping loc=rot=0 → plain scale multiply, inline.
+  let noise_val = tex_noise_d2(input.worldPos * vec3f(1.0, 1.0, 1.5), 1.0);
   let noise_ramp = ramp_linear(noise_val, 0.0, vec4f(0,0,0,1), 1.0, vec4f(1,1,1,1)).r;
   let bumped_n = bump_lh(0.324644535779953, noise_ramp, n, input.worldPos); // 凹凸 Strength; LH bump
 
@@ -196,9 +202,9 @@ struct FSOut {
   let principled_base = mix_blend(noise_ramp, bc, vec3f(0.6832, 0.1947, 0.1373));
   // Emission input from reroute.011 (bc), Strength=0.2
   let p_emission = bc * 0.2;
-  // AO.002 → ramp.005 LINEAR [0.003→black, 1.0→gray] for subsurface approx
-  let ao2 = ao_fake(n, v);
-  let sss = ramp_linear(ao2, 0.003, vec4f(0,0,0,1), 1.0, vec4f(0.0786, 0.0786, 0.0786, 1.0)).r;
+  // AO.002 → ramp.005 LINEAR [0.003→black, 1.0→gray] for subsurface approx.
+  // Reuse 'ao' (ao_fake(n, v) above) — identical inputs, avoid a second procedural AO pass.
+  let sss = ramp_linear(ao, 0.003, vec4f(0,0,0,1), 1.0, vec4f(0.0786, 0.0786, 0.0786, 1.0)).r;
 
   // 原理化BSDF (EEVEE port): metallic=0, specular=0.5, roughness=0.3, specular_tint=0.
   let NL = max(dot(bumped_n, l), 0.0);
@@ -209,7 +215,7 @@ struct FSOut {
   let brdf_lut = brdf_lut_sample(NV, FACE_ROUGHNESS);
   let reflection_color = F_brdf_multi_scatter(f0, f90, brdf_lut.xy);
 
-  let spec_direct_raw = bsdf_ggx(bumped_n, l, v, FACE_ROUGHNESS) * sun * shadow * ltc_brdf_scale_from_lut(brdf_lut);
+  let spec_direct_raw = bsdf_ggx(bumped_n, l, v, NL, NV, FACE_ROUGHNESS) * sun * shadow * ltc_brdf_scale_from_lut(brdf_lut);
   let spec_direct = min(spec_direct_raw, vec3f(FACE_SPEC_CLAMP));
   let spec_indirect = light.ambientColor.xyz;
   let spec_radiance = (spec_direct + spec_indirect) * reflection_color;

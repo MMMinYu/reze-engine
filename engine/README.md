@@ -12,7 +12,7 @@ npm install reze-engine
 
 ## Features
 
-- Blender 3.6 EEVEE rendering port — Principled BSDF with multi-scatter + LTC energy compensation, NPR material presets (face / hair / body / eye / stockings / metal / cloth / default), Filmic tone mapping, alpha-hashed transparency, outlines, MSAA 4x
+- Anime/MMD-style hybrid renderer — toon-ramp NPR diffuse mixed with GGX specular (multi-scatter + LTC energy compensation), per-material presets (face / hair / body / eye / stockings / metal / cloth / default), HDR pipeline with bloom and Filmic tone mapping, alpha-hashed transparency, screen-space outlines, MSAA 4x
 - VMD animation with IK solver and Bullet physics
 - Orbit camera with bone-follow mode
 - GPU picking (double-click/tap)
@@ -193,31 +193,49 @@ The shadow map is cast from `sun.direction` — same vector the shader lights wi
 
 ## Rendering
 
-The renderer follows Blender 3.6 EEVEE — shading, tone mapping, and transparency decisions match the reference CPU/GPU paths so authors tuning a model in Blender see the same result on the web.
+The renderer pairs stylised toon shading with a physically-based specular core, so anime characters keep their flat illustrated look while highlights and reflections still feel grounded. Each surface runs through a per-material preset that mixes an NPR closure with a Principled-style BSDF.
 
-### Principled BSDF port
+### PBR specular core
 
-- GGX specular with Schlick Fresnel and Smith G1
-- **Multi-scatter compensation** via Fdez-Agüera 2019 (`F_brdf_multi_scatter`) — the closed-form version used in EEVEE's `bsdf_common_lib.glsl`
-- **DFG split-sum LUT** baked at `engine.init()` — port of Blender's `bsdf_lut_frag.glsl`. Used for indirect specular and as the denominator of the direct-spec energy compensation
-- **LTC direct-specular energy compensation** (`ltc_brdf_scale = (ltc.x + ltc.y) / (dfg.x + dfg.y)`, per `closure_eval_glossy_lib.glsl:79-81`) — keeps direct and indirect spec in the same energy budget. The LTC magnitude LUT is uploaded from `eevee_lut.c` constants
-- Sheen coarse approximation (`f³·0.077 + f·0.01 + 0.00026`) on cloth/stockings
+- GGX microfacet specular with Schlick Fresnel and Walter–Smith G1
+- **Multi-scatter compensation** (Fdez-Agüera 2019, `F_brdf_multi_scatter`) — restores energy at high roughness so metals don't darken
+- **Split-sum DFG LUT** (Karis 2013) baked at `engine.init()` — drives indirect specular and acts as the denominator of the direct-spec energy correction
+- **LTC direct-spec scale** (Heitz 2016 magnitude LUT) — keeps analytic-light specular in the same energy budget as image-based lighting
+- Sheen coarse approximation (`f³·0.077 + f·0.01 + 0.00026`) on cloth and stockings
 
-### NPR material presets
+### Stylised diffuse (NPR toolbox)
 
-Each PMX material is dispatched to one of the preset shaders, all ported from "仿深空之眼渲染预设v1.0" Blender node graphs:
+Every preset is built out of the same NPR primitives:
 
-| Preset         | Based on Blender material |
-| -------------- | ------------------------- |
-| `face`         | `M_Face` — toon ramp + rim + warm bleed + Principled mix |
-| `hair`         | `M_Hair` — anisotropic spec highlight + rim |
-| `body`         | `M_Body` — toon ramp + AO + rim + Principled mix |
-| `eye`          | `M_Eye` — iris mapping + highlight |
-| `stockings`    | `M_Stockings` — NPR mask × Principled with sheen, alpha-hashed |
-| `metal`        | `M_Metal` — anisotropic + environment rim |
-| `cloth_smooth` | `M_Cloth_Smooth` — Principled cloth with sheen |
-| `cloth_rough`  | `M_Cloth_Rough` — rougher variant |
-| `default`      | Principled BSDF (unmapped fallback) |
+- **Toon ramps** — quantised NdotL through constant or anti-aliased step ramps for hard cel-shaded transitions
+- **HSV remaps** — separate hue/sat/value tints for shadow vs lit zones, then layered with mix-overlay against AO masks for warm-shadow / cool-light shifts
+- **Fresnel rim & layer-weight wrap** — Fresnel × layer-weight feeds a MixShader against an emissive backdrop for anime-style back-light
+- **Procedural micro-detail** — fBM noise (PCG hash, three octaves) plus bump-from-height for fabric weave, skin micro-roughness, and metallic Voronoi sparkle in reflection-coord space
+- **Selective emission** — texture-gated emission boosts (eye iris, stockings pattern) that survive into bloom
+
+### Material presets
+
+Each PMX material is dispatched to one of these shaders:
+
+| Preset         | Look |
+| -------------- | ---- |
+| `face`         | toon ramp + rim + warm subsurface bleed + Principled mix |
+| `hair`         | layered hair toon + Fresnel rim + Principled spec mix |
+| `body`         | toon ramp + AO modulation + rim + Principled mix |
+| `eye`          | iris with emission boost (drives bloom) |
+| `stockings`    | NPR-tinted Principled with sheen, alpha-hashed |
+| `metal`        | full-metallic Principled + reflection-coord Voronoi sparkle + NPR toon overlay |
+| `cloth_smooth` | Principled cloth with sheen, smoother variant |
+| `cloth_rough`  | rougher cloth variant |
+| `default`      | plain Principled BSDF (unmapped fallback) |
+
+### Shadows, post, output
+
+- Directional shadow map (2048², depth32float, 3×3 PCF unrolled, normal + depth bias)
+- HDR (rgba16f) main pass with 4× MSAA, resolved before tonemap
+- Bloom via threshold + downsample/upsample mip pyramid, gated by an MRT mask channel emitted from emissive presets
+- Filmic tone mapping (LUT sampled from the same view-transform curve used by "Filmic / Medium High Contrast"), exposure baked in
+- Screen-space outline pass (inverted-hull) on opaque and transparent materials
 
 Assign presets per-model:
 
@@ -237,7 +255,7 @@ Material names not listed fall through to the `default` Principled BSDF.
 
 ### Alpha-hashed transparency
 
-`stockings` uses the Wyman & McGuire 2017 derivative-aware stochastic discard (port of EEVEE's `prepass_frag.glsl::hashed_alpha_threshold`) instead of alpha blend. Self-overlapping transparent meshes (stockings wrap the leg — front and back surfaces share screen pixels) can't be sorted per-fragment in one draw call, so blend produces "cracks". Hashed alpha keeps opaque-style depth writes, resolves under MSAA/TAA, and matches the fix the preset author documented.
+`stockings` uses the Wyman & McGuire 2017 derivative-aware stochastic discard instead of alpha blend. Self-overlapping transparent meshes (stockings wrap the leg — front and back surfaces share screen pixels) can't be sorted per-fragment in one draw call, so blend produces "cracks". Hashed alpha keeps opaque-style depth writes and resolves cleanly under MSAA.
 
 ## Projects Using This Engine
 
