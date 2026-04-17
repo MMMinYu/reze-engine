@@ -70,31 +70,16 @@ fn sampleShadow(worldPos: vec3f, n: vec3f) -> f32 {
 }
 
 const PI_B: f32 = 3.141592653589793;
-const F0_BODY: f32 = 0.04;
 const BODY_ROUGHNESS: f32 = 0.3;
 // Dump: 层权重.002 Blend; 运算.007 POWER exponent Value_001; 背景 Color; 运算.004 after invert
 const BODY_RIM2_LAYER_BLEND: f32 = 0.20000000298023224;
 const BODY_RIM2_POW: f32 = 1.4300000667572021;
 const BODY_RIM2_BG: vec3f = vec3f(1.0, 0.4303792119026184, 0.3315804898738861);
 const BODY_WARM_AO_MUL: f32 = 0.30000001192092896;
+const BODY_SPECULAR: f32 = 0.5;
 const BODY_MIX_NPR: f32 = 0.5;
 // EEVEE Light Clamp equivalent — caps firefly specular from noise-bumped NDF aliasing.
 const BODY_SPEC_CLAMP: f32 = 10.0;
-
-fn ggx_d_body(ndoth: f32, a2: f32) -> f32 {
-  let denom = ndoth * ndoth * (a2 - 1.0) + 1.0;
-  return a2 / (PI_B * denom * denom);
-}
-
-fn smith_g1_body(ndotx: f32, a2: f32) -> f32 {
-  return 2.0 * ndotx / (ndotx + sqrt(a2 + (1.0 - a2) * ndotx * ndotx));
-}
-
-fn fresnel_schlick_body(cosTheta: f32, f0: f32) -> f32 {
-  let m = 1.0 - cosTheta;
-  let m2 = m * m;
-  return f0 + (1.0 - f0) * (m2 * m2 * m);
-}
 
 // smoothstep-based ramp: t*t*(3-2*t) between two color stops
 fn ramp_ease(f: f32, p0: f32, c0: vec4f, p1: f32, c1: vec4f) -> vec4f {
@@ -201,26 +186,29 @@ struct FSOut {
   // Reuse 'ao' (ao_fake(n, v) above) — identical inputs, avoid a second procedural AO pass.
   let sss = ramp_linear(ao, 0.003, vec4f(0,0,0,1), 1.0, vec4f(0.0786, 0.0786, 0.0786, 1.0)).r;
 
-  let p_ndotl = max(dot(bumped_n, l), 0.0);
-  let p_ndotv = max(dot(bumped_n, v), 0.001);
-  let h = normalize(l + v);
-  let p_ndoth = max(dot(bumped_n, h), 0.0);
-  let p_vdoth = max(dot(v, h), 0.0);
-  let a2 = BODY_ROUGHNESS * BODY_ROUGHNESS;
-  let D = ggx_d_body(p_ndoth, a2);
-  let G = smith_g1_body(p_ndotl, a2) * smith_g1_body(p_ndotv, a2);
-  let F = fresnel_schlick_body(p_vdoth, F0_BODY);
-  let brdf_lut = brdf_lut_sample(p_ndotv, BODY_ROUGHNESS);
-  let spec = (D * G * F) / max(4.0 * p_ndotl * p_ndotv, 0.001) * ltc_brdf_scale_from_lut(brdf_lut);
-  let kd = (1.0 - F) * principled_base / PI_B;
-  // Split so we can clamp only the spec firefly contribution (EEVEE Light Clamp).
-  let spec_radiance = vec3f(spec) * sun * p_ndotl * shadow;
-  let spec_clamped = min(spec_radiance, vec3f(BODY_SPEC_CLAMP));
-  let direct = kd * sun * p_ndotl * shadow + spec_clamped;
+  // 原理化BSDF (EEVEE port): metallic=0, specular=0.5, roughness=0.3, specular_tint=0.
+  let NL = max(dot(bumped_n, l), 0.0);
+  let NV = max(dot(bumped_n, v), 1e-4);
+
+  // f0/f90 per gpu_shader_material_principled.glsl — specular_tint=0 → dielectric_f0_color=white.
+  let f0 = vec3f(0.08 * BODY_SPECULAR);
+  let f90 = mix(f0, vec3f(1.0), sqrt(BODY_SPECULAR));
+  let brdf_lut = brdf_lut_sample(NV, BODY_ROUGHNESS);
+  let reflection_color = F_brdf_multi_scatter(f0, f90, brdf_lut.xy);
+
+  // Direct glossy — bsdf_ggx already includes NL; no F applied here (tinted after accum).
+  // ltc_brdf_scale: EEVEE direct path uses LTC; split-sum LUT path is rescaled to match.
+  let spec_direct_raw = bsdf_ggx(bumped_n, l, v, NL, NV, BODY_ROUGHNESS) * sun * shadow * ltc_brdf_scale_from_lut(brdf_lut);
+  let spec_direct = min(spec_direct_raw, vec3f(BODY_SPEC_CLAMP));
+  // Indirect glossy — flat world probe (solid color). Phase 2 adds cubemap.
+  let spec_indirect = light.ambientColor.xyz;
+  let spec_radiance = (spec_direct + spec_indirect) * reflection_color;
+
   // Indirect diffuse = base_color × L_w per Blender closure_eval_surface_lib.glsl line 302;
   // probe_evaluate_world_diff returns radiance (SH-projected, not cosine-convolved).
-  let ambient = principled_base * light.ambientColor.xyz;
-  let principled = ambient + direct + p_emission + vec3f(sss);
+  // No (1-F) factor per EEVEE — it doesn't energy-conserve spec<->diffuse.
+  let diffuse_radiance = principled_base * (sun * NL * shadow / PI_B + light.ambientColor.xyz);
+  let principled = diffuse_radiance + spec_radiance + p_emission + vec3f(sss);
 
   // 混合着色器.001: Shader=相加着色器.001, Shader_001=原理化BSDF
   let final_color = mix(npr_stack, principled, BODY_MIX_NPR);

@@ -84,15 +84,17 @@ export const DEFAULT_BLOOM_OPTIONS: BloomOptions = {
 
 /** Blender Color Management / View (rendering.txt: Filmic, exposure, gamma). `look` is reserved for future curve tweaks. */
 export type ViewTransformOptions = {
-  /** Stops applied before Filmic: `linear *= 2^exposure` (Blender default often ~−0.3). */
+  /** Stops applied before Filmic: `linear *= 2^exposure`. */
   exposure: number
   /** After Filmic, display gamma (`pow(rgb, 1/gamma)`). */
   gamma: number
   look: "default" | "medium_high_contrast"
 }
 
+// Matches the reference Blender project: Filmic view, Medium High Contrast look,
+// exposure -0.3, gamma 1.0, sRGB display, no curves.
 export const DEFAULT_VIEW_TRANSFORM: ViewTransformOptions = {
-  exposure: -0.30000001192092896,
+  exposure: 0.3,
   gamma: 1.0,
   look: "medium_high_contrast",
 }
@@ -435,9 +437,12 @@ export class Engine {
   private writeBloomUniforms(): void {
     const b = this.bloomSettings
     const bu = this.bloomBlitUniformData
-    // EEVEE prefilter: threshold, knee, clamp (0 → disabled), _unused
+    // EEVEE prefilter: threshold, knee_half, clamp (0 → disabled), _unused
+    // Blender halves the knee before passing to the shader (eevee_bloom.c: knee * 0.5f).
+    // The blit shader's quadratic soft-knee curve uses knee_half as the offset from threshold,
+    // so the soft ramp spans [threshold - knee/2 .. threshold + knee/2] — NOT [threshold - knee .. threshold + knee].
     bu[0] = b.threshold
-    bu[1] = b.knee
+    bu[1] = b.knee * 0.5
     bu[2] = b.clamp
     bu[3] = 0.0
     this.device.queue.writeBuffer(this.bloomBlitUniformBuffer, 0, bu)
@@ -520,7 +525,7 @@ export class Engine {
       { texture: ltcTemp },
       half,
       { bytesPerRow: LTC_MAG_LUT_SIZE * 4, rowsPerImage: LTC_MAG_LUT_SIZE },
-      { width: LTC_MAG_LUT_SIZE, height: LTC_MAG_LUT_SIZE, depthOrArrayLayers: 1 }
+      { width: LTC_MAG_LUT_SIZE, height: LTC_MAG_LUT_SIZE, depthOrArrayLayers: 1 },
     )
 
     this.brdfLutTexture = this.device.createTexture({
@@ -1373,7 +1378,9 @@ export class Engine {
     })
 
     const bloomBlitLayout = this.device.createPipelineLayout({ bindGroupLayouts: [this.bloomBlitBindGroupLayout] })
-    const bloomDownLayout = this.device.createPipelineLayout({ bindGroupLayouts: [this.bloomDownsampleBindGroupLayout] })
+    const bloomDownLayout = this.device.createPipelineLayout({
+      bindGroupLayouts: [this.bloomDownsampleBindGroupLayout],
+    })
     const bloomUpLayout = this.device.createPipelineLayout({ bindGroupLayouts: [this.bloomUpsampleBindGroupLayout] })
 
     this.bloomBlitPipeline = this.device.createRenderPipeline({
@@ -1426,9 +1433,14 @@ export class Engine {
         // viewU[0] = (exposure, gamma, _, _);  viewU[1] = (tint.rgb, intensity)
 
         fn filmic(x: f32) -> f32 {
+          // Re-fit against Blender 3.6 Filmic MHC anchors (sobotka/filmic-blender
+          // look_medium-high-contrast.spi1d). Previous curve was compressed:
+          // midtones too bright, highlights too dim — flattened contrast, read
+          // as "washed-out" on saturated surfaces (hair especially).
+          // Reference checkpoints: linear 0.18 → ~0.395, linear 1.0 → ~0.83.
           var lut = array<f32, 14>(
-            0.0067, 0.0141, 0.0272, 0.0499, 0.0885, 0.1512, 0.2462,
-            0.3753, 0.5273, 0.6776, 0.8031, 0.8929, 0.9495, 0.9814
+            0.0028, 0.0068, 0.0151, 0.0313, 0.0610, 0.1120, 0.1920,
+            0.3060, 0.4590, 0.6310, 0.8200, 0.9070, 0.9620, 0.9890
           );
           let t = clamp(log2(max(x, 1e-10)) + 10.0, 0.0, 13.0);
           let i = u32(t);
@@ -1449,7 +1461,8 @@ export class Engine {
           let fullSz = vec2f(textureDimensions(hdrTex));
           let bloomSz = vec2f(textureDimensions(bloomTex));
           // Bloom is at half-res (pyramid mip 0). Sampler interpolates back to full-res UVs.
-          let bloomUv = (fragCoord.xy + vec2f(0.5)) / max(fullSz, vec2f(1.0));
+          // fragCoord.xy is already at pixel center (e.g. 0.5, 0.5 for first pixel).
+          let bloomUv = fragCoord.xy / max(fullSz, vec2f(1.0));
           let tint = viewU[1].xyz;
           let intensity = viewU[1].w;
           let bloom = textureSampleLevel(bloomTex, bloomSamp, bloomUv, 0.0).rgb * tint * intensity;
@@ -1643,10 +1656,7 @@ export class Engine {
       const bw = Math.max(1, Math.floor(width / 2))
       const bh = Math.max(1, Math.floor(height / 2))
       const shortSide = Math.max(1, Math.min(bw, bh))
-      this.bloomMipCount = Math.max(
-        1,
-        Math.min(Engine.BLOOM_MAX_LEVELS, Math.floor(Math.log2(shortSide)) - 1),
-      )
+      this.bloomMipCount = Math.max(1, Math.min(Engine.BLOOM_MAX_LEVELS, Math.floor(Math.log2(shortSide)) - 1))
       this.bloomDownTexture = this.device.createTexture({
         label: "bloom down pyramid",
         size: [bw, bh],
@@ -1663,16 +1673,12 @@ export class Engine {
       })
       this.bloomDownMipViews = []
       for (let i = 0; i < this.bloomMipCount; i++) {
-        this.bloomDownMipViews.push(
-          this.bloomDownTexture.createView({ baseMipLevel: i, mipLevelCount: 1 }),
-        )
+        this.bloomDownMipViews.push(this.bloomDownTexture.createView({ baseMipLevel: i, mipLevelCount: 1 }))
       }
       this.bloomUpMipViews = []
       const upLevels = Math.max(1, this.bloomMipCount - 1)
       for (let i = 0; i < upLevels; i++) {
-        this.bloomUpMipViews.push(
-          this.bloomUpTexture.createView({ baseMipLevel: i, mipLevelCount: 1 }),
-        )
+        this.bloomUpMipViews.push(this.bloomUpTexture.createView({ baseMipLevel: i, mipLevelCount: 1 }))
       }
 
       this.depthTexture = this.device.createTexture({
@@ -2665,7 +2671,9 @@ export class Engine {
         ],
       })
       const pass = encoder.beginRenderPass({
-        colorAttachments: [{ view: dstView, clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: "clear", storeOp: "store" }],
+        colorAttachments: [
+          { view: dstView, clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: "clear", storeOp: "store" },
+        ],
       })
       pass.setPipeline(this.mipBlitPipeline)
       pass.setBindGroup(0, bindGroup)

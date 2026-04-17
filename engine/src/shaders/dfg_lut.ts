@@ -85,7 +85,7 @@ fn F_color_blend_zero(eta: f32, fresnel: f32) -> f32 {
   let x_uv = floor(frag.x) / (LUT_SIZE - 1.0);
 
   let NV = clamp(1.0 - y_uv * y_uv, 1e-4, 0.9999);
-  let a = x_uv * x_uv;
+  let a = max(x_uv, 1e-4);
   let a2 = clamp(a * a, 1e-4, 0.9999);
 
   let V = vec3f(sqrt(1.0 - NV * NV), 0.0, NV);

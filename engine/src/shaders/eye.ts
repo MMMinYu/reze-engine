@@ -1,12 +1,16 @@
-// Eye preset — default Principled BSDF (F0=0.04, Roughness=0.5) + Emission socket set to albedo × 1.5.
+// Eye preset — default Principled BSDF (Specular=0.5, Roughness=0.5) + Emission socket set to albedo × 1.5.
 // Matches the published preset's instruction: "keep eyes in the default nodegraph, add emission 1.5".
 // Blender's Principled BSDF Emission socket is added on top of the shaded output (pre-tonemap, feeds bloom).
 
+import { NODES_WGSL } from "./nodes"
+
 export const EYE_SHADER_WGSL = /* wgsl */ `
 
-const PI: f32 = 3.141592653589793;
-const F0_DIELECTRIC: f32 = 0.04;
-const ROUGHNESS: f32 = 0.5;
+${NODES_WGSL}
+
+const PI_E: f32 = 3.141592653589793;
+const EYE_SPECULAR: f32 = 0.5;
+const EYE_ROUGHNESS: f32 = 0.5;
 const EYE_EMISSION_STRENGTH: f32 = 1.5;
 
 struct CameraUniforms {
@@ -49,21 +53,6 @@ struct LightVP { viewProj: mat4x4f, };
 @group(1) @binding(0) var<storage, read> skinMats: array<mat4x4f>;
 @group(2) @binding(0) var diffuseTexture: texture_2d<f32>;
 @group(2) @binding(1) var<uniform> material: MaterialUniforms;
-
-fn ggx_d(ndoth: f32, a2: f32) -> f32 {
-  let denom = ndoth * ndoth * (a2 - 1.0) + 1.0;
-  return a2 / (PI * denom * denom);
-}
-
-fn smith_g1(ndotx: f32, a2: f32) -> f32 {
-  return 2.0 * ndotx / (ndotx + sqrt(a2 + (1.0 - a2) * ndotx * ndotx));
-}
-
-fn fresnel_schlick(cosTheta: f32, f0: f32) -> f32 {
-  let m = 1.0 - cosTheta;
-  let m2 = m * m;
-  return f0 + (1.0 - f0) * (m2 * m2 * m);
-}
 
 fn sampleShadow(worldPos: vec3f, n: vec3f) -> f32 {
   // Back-facing to key light: direct contribution is zero anyway, skip 9 texture samples.
@@ -129,30 +118,29 @@ struct FSOut {
   let albedo = textureSample(diffuseTexture, diffuseSampler, input.uv).rgb;
 
   let l = -light.lights[0].direction.xyz;
-  let sunColor = light.lights[0].color.xyz * light.lights[0].color.w;
-  let h = normalize(l + v);
-
-  let ndotl = max(dot(n, l), 0.0);
-  let ndotv = max(dot(n, v), 0.001);
-  let ndoth = max(dot(n, h), 0.0);
-  let vdoth = max(dot(v, h), 0.0);
-
-  let a2 = ROUGHNESS * ROUGHNESS;
-  let D = ggx_d(ndoth, a2);
-  let G = smith_g1(ndotl, a2) * smith_g1(ndotv, a2);
-  let F = fresnel_schlick(vdoth, F0_DIELECTRIC);
-  let spec = (D * G * F) / max(4.0 * ndotl * ndotv, 0.001);
-
+  let sun = light.lights[0].color.xyz * light.lights[0].color.w;
+  let amb = light.ambientColor.xyz;
   let shadow = sampleShadow(input.worldPos, n);
-  let kd = (1.0 - F) * albedo / PI;
-  let direct = (kd + spec) * sunColor * ndotl * shadow;
-  let ambient = albedo * light.ambientColor.xyz;
 
+  // 原理化BSDF (EEVEE port): metallic=0, specular=0.5, roughness=0.5, specular_tint=0.
+  let NL = max(dot(n, l), 0.0);
+  let NV = max(dot(n, v), 1e-4);
+
+  let f0 = vec3f(0.08 * EYE_SPECULAR);
+  let f90 = mix(f0, vec3f(1.0), sqrt(EYE_SPECULAR));
+  let brdf_lut = brdf_lut_sample(NV, EYE_ROUGHNESS);
+  let reflection_color = F_brdf_multi_scatter(f0, f90, brdf_lut.xy);
+
+  let spec_direct = bsdf_ggx(n, l, v, NL, NV, EYE_ROUGHNESS) * sun * shadow * ltc_brdf_scale_from_lut(brdf_lut);
+  let spec_indirect = amb;
+  let spec_radiance = (spec_direct + spec_indirect) * reflection_color;
+
+  let diffuse_radiance = albedo * (sun * NL * shadow / PI_E + amb);
   // Principled Emission socket: emissive = emission_color × strength, added on top of shading.
   let emission = albedo * EYE_EMISSION_STRENGTH;
 
   var out: FSOut;
-  out.color = vec4f(ambient + direct + emission, alpha);
+  out.color = vec4f(diffuse_radiance + spec_radiance + emission, alpha);
   out.mask = 1.0;
   return out;
 }

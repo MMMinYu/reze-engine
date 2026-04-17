@@ -216,14 +216,29 @@ export default function Home() {
       modelRef.current = m1
 
       engine.setMaterialPresets("reze", {
-        eye: ["眼睛","眼白","目白","右瞳"],
-        face: ["脸","face01"],
-        body: ["皮肤","skin"],
+        eye: ["眼睛", "眼白", "目白", "右瞳"],
+        face: ["脸", "face01"],
+        body: ["皮肤", "skin"],
         hair: ["头发", "hair_f"],
-        cloth_smooth: ["衣服", "裙子", "裙带", "裙布", "外套", "外套饰", "裤子", "裤子0", "腿环", "发饰","shirt","shoes","shorts","trigger"],
-        stockings: ["袜子","stockings"],
+        cloth_smooth: [
+          "衣服",
+          "裙子",
+          "裙带",
+          "裙布",
+          "外套",
+          "外套饰",
+          "裤子",
+          "裤子0",
+          "腿环",
+          "发饰",
+          "鞋子",
+          "shirt",
+          "shoes",
+          "shorts",
+          "trigger",
+        ],
+        stockings: ["袜子", "stockings"],
       })
-
 
       engine.addGround({
         diffuseColor: new Vec3(244 / 255, 70 / 255, 149 / 255),
@@ -231,8 +246,8 @@ export default function Home() {
 
       engine.runRenderLoop(() => setStats(engine.getStats()))
 
-      await new Promise(resolve=>requestAnimationFrame(resolve))
-      
+      await new Promise((resolve) => requestAnimationFrame(resolve))
+
       await m1.loadVmd(IRIS_ANIM, "/animations/One More Last Time.vmd")
       m1.show(IRIS_ANIM)
       console.log(m1.getMaterials())
