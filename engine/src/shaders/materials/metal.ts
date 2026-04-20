@@ -72,7 +72,7 @@ const METAL_VORONOI_SCALE: f32 = 4.3;
 
   var out: FSOut;
   out.color = vec4f(final_color, out_alpha);
-  out.mask = 1.0;
+  out.mask = vec4f(1.0, 1.0, 0.0, out.color.a);
   return out;
 }
 

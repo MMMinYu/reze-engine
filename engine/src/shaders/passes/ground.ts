@@ -48,7 +48,7 @@ struct VO { @builtin(position) position: vec4f, @location(0) worldPos: vec3f, @l
   var o: VO; o.worldPos = position; o.normal = normal;
   o.position = camera.projection * camera.view * vec4f(position, 1.0); return o;
 }
-struct FSOut { @location(0) color: vec4f, @location(1) mask: f32 };
+struct FSOut { @location(0) color: vec4f, @location(1) mask: vec4f };
 @fragment fn fs(i: VO) -> FSOut {
   let n = normalize(i.normal);
   let centerDist = length(i.worldPos.xz);
@@ -88,7 +88,11 @@ struct FSOut { @location(0) color: vec4f, @location(1) mask: f32 };
   let finalColor = mix(baseColor, material.gridLineColor, gridLine * material.gridLineOpacity * edgeFade);
   var out: FSOut;
   out.color = vec4f(finalColor * edgeFade, edgeFade);
-  out.mask = 0.0;
+  // mask.r = 0: ground never contributes to bloom. mask.g = 1.0 with src.a =
+  // edgeFade turns the aux blend into alpha-over, so the drawable alpha fades
+  // from edgeFade at the center to 0 at the radial edge — letting the page
+  // background show through under the premultiplied canvas alphaMode.
+  out.mask = vec4f(0.0, 1.0, 0.0, edgeFade);
   return out;
 }
 `

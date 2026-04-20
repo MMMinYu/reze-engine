@@ -74,11 +74,11 @@ struct VertexOutput {
   return output;
 }
 
-struct FSOut { @location(0) color: vec4f, @location(1) mask: f32 };
+struct FSOut { @location(0) color: vec4f, @location(1) mask: vec4f };
 @fragment fn fs() -> FSOut {
   var out: FSOut;
   out.color = material.edgeColor;
-  out.mask = 1.0;
+  out.mask = vec4f(1.0, 1.0, 0.0, out.color.a);
   return out;
 }
 `

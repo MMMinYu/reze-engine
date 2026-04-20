@@ -36,7 +36,7 @@ const EYE_EMISSION_STRENGTH: f32 = 1.5;
 
   var out: FSOut;
   out.color = vec4f(shaded + emission, alpha);
-  out.mask = 1.0;
+  out.mask = vec4f(1.0, 1.0, 0.0, out.color.a);
   return out;
 }
 

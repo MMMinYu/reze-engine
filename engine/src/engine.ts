@@ -247,14 +247,35 @@ export class Engine {
   private multisampleTexture!: GPUTexture
   private hdrResolveTexture!: GPUTexture
   private static readonly MULTISAMPLE_COUNT = 4
-  private static readonly HDR_FORMAT: GPUTextureFormat = "rgba16float"
+  // HDR intermediate format. rg11b10ufloat when the adapter exposes the
+  // `rg11b10ufloat-renderable` feature (Chrome + Safari on Apple Silicon both
+  // do), else fall back to rgba16float.
+  //
+  // Why it matters — Apple TBDR tile memory: rgba16float is 8 bytes/texel, so
+  // 4× MSAA is 32 bytes/texel and does not fit Apple Silicon's tile memory at
+  // useful tile sizes. The driver then stores the full MSAA buffer to system
+  // memory every frame and resolves from there — ~300 MB/frame of extra
+  // bandwidth at 1920×1200 DPR=2, which is the dominant frame-pacing hit on
+  // Safari (visibly: shrinking the window made Safari smooth; Chrome was
+  // always smooth because Dawn apparently amortizes it). rg11b10ufloat at
+  // 4 bytes/texel → 16 bytes/texel at 4× MSAA → fits tile memory like
+  // rgba8unorm does, resolves in-tile, no system-memory round-trip. No alpha
+  // channel (the HDR path never needed one — alpha blending reads src.a from
+  // the fragment shader and treats missing dst.a as 1, so the blend math is
+  // unchanged).
+  private hdrFormat: GPUTextureFormat = "rgba16float"
   /** Stencil value stamped by eye draws so hair can stencil-test against it and
    *  alpha-blend a second pass over eye silhouette pixels (see-through-hair effect). */
   private static readonly STENCIL_EYE_VALUE = 1
-  /** Single-channel mask written alongside HDR color — 1 = model geometry (contributes
-   *  to bloom), 0 = ground (never blooms). Sampled by the bloom blit pass to gate the
-   *  prefilter so ground brightness can't halo the scene. */
-  private static readonly BLOOM_MASK_FORMAT: GPUTextureFormat = "r8unorm"
+  /** Aux MRT alongside HDR color. Two channels:
+   *   .r — bloom mask (1 = model geometry, 0 = ground; sampled by bloom blit to gate prefilter).
+   *   .g — accumulated alpha (the channel that used to live in hdr.a before the HDR format
+   *        switched to rg11b10ufloat, which has no alpha). Sampled by composite/bloom to
+   *        un-premultiply color for tonemap and to produce the canvas-drawable alpha used by
+   *        the premultiplied alphaMode compositor (so the page background still shows through
+   *        cleared / edge-faded regions like before).
+   *  rg8unorm at 4× MSAA is 8 bytes/texel — still fits Apple TBDR tile memory comfortably. */
+  private static readonly BLOOM_MASK_FORMAT: GPUTextureFormat = "rg8unorm"
   private multisampleMaskTexture!: GPUTexture
   private maskResolveTexture!: GPUTexture
   private maskResolveView!: GPUTextureView
@@ -502,11 +523,17 @@ export class Engine {
   // Step 1: Get WebGPU device and context
   async init() {
     const adapter = await navigator.gpu?.requestAdapter()
-    const device = await adapter?.requestDevice()
+    if (!adapter) throw new Error("WebGPU is not supported in this browser.")
+    const wantFeature: GPUFeatureName = "rg11b10ufloat-renderable"
+    const hasRg11b10 = adapter.features.has(wantFeature)
+    const device = await adapter.requestDevice({
+      requiredFeatures: hasRg11b10 ? [wantFeature] : [],
+    })
     if (!device) {
       throw new Error("WebGPU is not supported in this browser.")
     }
     this.device = device
+    if (hasRg11b10) this.hdrFormat = "rg11b10ufloat"
 
     const context = this.canvas.getContext("webgpu")
     if (!context) {
@@ -694,7 +721,7 @@ export class Engine {
     // composite pass writes the swapchain. Tonemap moved to composite so bloom
     // (added next) can run on linear HDR.
     const standardBlend: GPUColorTargetState = {
-      format: Engine.HDR_FORMAT,
+      format: this.hdrFormat,
       blend: {
         color: {
           srcFactor: "src-alpha",
@@ -709,10 +736,21 @@ export class Engine {
       },
     }
 
-    // Bloom mask target — r8unorm has no alpha channel, so src-alpha blending is invalid.
-    // Use replace mode: depth test already rejects occluded fragments, so last-writer-wins
-    // on surviving pixels gives the right result (ground writes 0; models/outlines write 1).
-    const maskBlend: GPUColorTargetState = { format: Engine.BLOOM_MASK_FORMAT }
+    // Aux target carrying (bloom mask, alpha). Src-alpha blend so the .g channel
+    // accumulates proper alpha-over (same semantic the old rgba16f hdr.a had).
+    // Materials write vec2f(mask, 1.0); ground writes vec2f(0.0, 1.0). With src.a
+    // coming from the fragment color.a, the blend equation produces
+    //   out.g = 1·src.a + dst.g·(1-src.a)  →  premultiplied over operator on alpha.
+    // .r gets weighted by src.a too, which is fine: opaque pixels (α=1) give full
+    // mask, partially translucent fragments dilute mask proportionally — acceptable
+    // for the bloom-gate use.
+    const maskBlend: GPUColorTargetState = {
+      format: Engine.BLOOM_MASK_FORMAT,
+      blend: {
+        color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha", operation: "add" },
+        alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" },
+      },
+    }
     const sceneTargets: GPUColorTargetState[] = [standardBlend, maskBlend]
 
     const shaderModule = this.device.createShaderModule({
@@ -1184,21 +1222,21 @@ export class Engine {
       label: "bloom blit pipeline",
       layout: bloomBlitLayout,
       vertex: { module: bloomBlitShader, entryPoint: "vs" },
-      fragment: { module: bloomBlitShader, entryPoint: "fs", targets: [{ format: Engine.HDR_FORMAT }] },
+      fragment: { module: bloomBlitShader, entryPoint: "fs", targets: [{ format: this.hdrFormat }] },
       primitive: { topology: "triangle-list" },
     })
     this.bloomDownsamplePipeline = this.device.createRenderPipeline({
       label: "bloom downsample pipeline",
       layout: bloomDownLayout,
       vertex: { module: bloomDownsampleShader, entryPoint: "vs" },
-      fragment: { module: bloomDownsampleShader, entryPoint: "fs", targets: [{ format: Engine.HDR_FORMAT }] },
+      fragment: { module: bloomDownsampleShader, entryPoint: "fs", targets: [{ format: this.hdrFormat }] },
       primitive: { topology: "triangle-list" },
     })
     this.bloomUpsamplePipeline = this.device.createRenderPipeline({
       label: "bloom upsample pipeline",
       layout: bloomUpLayout,
       vertex: { module: bloomUpsampleShader, entryPoint: "vs" },
-      fragment: { module: bloomUpsampleShader, entryPoint: "fs", targets: [{ format: Engine.HDR_FORMAT }] },
+      fragment: { module: bloomUpsampleShader, entryPoint: "fs", targets: [{ format: this.hdrFormat }] },
       primitive: { topology: "triangle-list" },
     })
 
@@ -1217,6 +1255,9 @@ export class Engine {
         { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: {} },
         { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
         { binding: 3, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+        // Aux mask/alpha texture — composite reads .g to reconstruct the alpha that
+        // used to live in the HDR target before the rg11b10ufloat switch.
+        { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: {} },
       ],
     })
 
@@ -1341,14 +1382,14 @@ export class Engine {
         label: "multisample HDR render target",
         size: [width, height],
         sampleCount: Engine.MULTISAMPLE_COUNT,
-        format: Engine.HDR_FORMAT,
+        format: this.hdrFormat,
         usage: GPUTextureUsage.RENDER_ATTACHMENT,
       })
 
       this.hdrResolveTexture = this.device.createTexture({
         label: "HDR resolve target",
         size: [width, height],
-        format: Engine.HDR_FORMAT,
+        format: this.hdrFormat,
         usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
       })
 
@@ -1379,14 +1420,14 @@ export class Engine {
         label: "bloom down pyramid",
         size: [bw, bh],
         mipLevelCount: this.bloomMipCount,
-        format: Engine.HDR_FORMAT,
+        format: this.hdrFormat,
         usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
       })
       this.bloomUpTexture = this.device.createTexture({
         label: "bloom up pyramid",
         size: [bw, bh],
         mipLevelCount: Math.max(1, this.bloomMipCount - 1),
-        format: Engine.HDR_FORMAT,
+        format: this.hdrFormat,
         usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
       })
       this.bloomDownMipViews = []
@@ -1513,6 +1554,7 @@ export class Engine {
             { binding: 1, resource: compositeBloomView },
             { binding: 2, resource: this.bloomSampler },
             { binding: 3, resource: { buffer: this.compositeUniformBuffer } },
+            { binding: 4, resource: this.maskResolveView },
           ],
         })
       }

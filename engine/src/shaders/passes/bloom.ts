@@ -24,10 +24,13 @@ fn fetch(c: vec2<i32>, clampV: f32) -> vec3f {
   let d = vec2<i32>(textureDimensions(hdrTex));
   let cc = clamp(c, vec2<i32>(0), d - vec2<i32>(1));
   let s = textureLoad(hdrTex, cc, 0);
-  // Scene pass uses src-alpha blend with clear alpha 0 → premultiplied. Unpremultiply.
-  let rgb = max(s.rgb / max(s.a, 1e-6), vec3f(0.0));
-  // Bloom mask: MRT r8unorm written by material shaders (1.0 = bloom, 0.0 = skip).
-  let mask = textureLoad(maskTex, cc, 0).r;
+  // hdrTex is rg11b10ufloat (no alpha channel). Alpha lives in maskTex.g, written
+  // alongside the bloom mask in .r by the scene pass. Scene uses src-alpha blend
+  // with clear alpha 0 → hdr rgb is premultiplied; divide by the aux alpha to
+  // recover straight color before the Karis luminance weighting.
+  let aux = textureLoad(maskTex, cc, 0);
+  let mask = aux.r;
+  let rgb = max(s.rgb / max(aux.g, 1e-6), vec3f(0.0));
   let masked = rgb * mask;
   // Blender clamps each tap BEFORE Karis average (eevee_bloom: color = min(clampIntensity, color)).
   return select(masked, min(masked, vec3f(clampV)), clampV > 0.0);

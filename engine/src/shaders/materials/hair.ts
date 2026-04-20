@@ -75,7 +75,7 @@ const HAIR_MIX_NPR: f32 = 0.2;
 
   var out: FSOut;
   out.color = vec4f(final_color, outAlpha);
-  out.mask = 1.0;
+  out.mask = vec4f(1.0, 1.0, 0.0, out.color.a);
   return out;
 }
 

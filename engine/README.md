@@ -14,7 +14,7 @@ npm install reze-engine
 
 - **Anime/MMD-style hybrid renderer** — toon-ramp NPR diffuse mixed with PBR GGX specular (multi-scatter + LTC energy compensation)
 - **Per-material presets** — `face` / `hair` / `body` / `eye` / `stockings` / `metal` / `cloth_smooth` / `cloth_rough` / `default`, assigned by material name
-- **HDR pipeline** with bloom mip pyramid, Filmic tone mapping, 4× MSAA
+- **HDR pipeline** with bloom mip pyramid, Filmic tone mapping, 4× MSAA, tile-memory-friendly on Apple Silicon
 - **Alpha-hashed transparency** (Wyman & McGuire 2017) for self-overlapping transparent meshes like stockings
 - **Screen-space outlines** on opaque + transparent materials
 - **See-through hair over eyes** — stencil-gated MMD post-alpha-eye so eyes read at 50% through hair silhouettes
@@ -249,23 +249,23 @@ let color = eval_principled(
 );
 ```
 
-NPR presets add stage C (and sometimes D) on top, and stage F chooses how NPR-leaning the surface is. The Blender preset this engine targets is authored with `MixShader(NPR, Principled, fac)` throughout — the 7-stage layout is a direct port of that topology.
+NPR presets add stage C (and sometimes D) on top, and stage F chooses how NPR-leaning the surface is.
 
 ### Shared WGSL foundations
 
-- **`nodes.ts`** — WGSL mirrors of the Blender shader nodes the presets use: `hue_sat`, `bright_contrast`, `ramp_constant/linear/cardinal`, `mix_overlay/lighten/linear_light`, `fresnel`, `layer_weight_fresnel/facing`, `tex_noise`, `tex_voronoi`, `mapping_point`, `bump_lh`, `normal_map`. Plus one combined DFG + LTC 64×64 RGBA8 LUT baked at `engine.init()`, one `eval_principled(PrincipledIn, N, L, V, sun, amb, shadow)` EEVEE Principled port, and `principled_sheen`.
-- **`common.ts`** — Uniform structs, bind-group layout (same for every material pipeline), 3×3 PCF shadow sampler, skinning vertex shader, shared `FSOut`.
-- **Per-material files** — constants + NPR stack + optional bump + `eval_principled` call + final mix. That's it.
+- **`nodes.ts`** — WGSL mirrors of the Blender shader nodes the presets use: `hue_sat`, `bright_contrast`, `ramp_constant/linear/cardinal`, `mix_overlay/lighten/linear_light`, `fresnel`, `layer_weight_fresnel/facing`, `tex_noise`, `tex_voronoi`, `mapping_point`, `bump_lh`, `normal_map`. Plus a combined DFG + LTC LUT, `eval_principled(PrincipledIn, N, L, V, sun, amb, shadow)`, and `principled_sheen`.
+- **`common.ts`** — Uniform structs, bind-group layout (same for every material pipeline), PCF shadow sampler, skinning vertex shader, shared `FSOut`.
+- **Per-material files** — constants + NPR stack + optional bump + `eval_principled` call + final mix.
 
 ### PBR specular core
 
 Inside `eval_principled`:
 
-- GGX microfacet specular with Schlick Fresnel, Walter–Smith G1 (reciprocal form collapses the `4·NL·NV` denominator)
-- **Multi-scatter compensation** (Fdez-Agüera 2019, `F_brdf_multi_scatter`) — restores energy at high roughness so metals don't darken
-- **Split-sum DFG LUT** (Karis 2013) — drives indirect specular, packed into the `.rg` channels of the baked LUT
-- **LTC direct-spec scale** (Heitz 2016 magnitude LUT) — keeps analytic-light specular in the same energy budget as image-based lighting; packed into `.ba` so a single LUT tap serves both paths
-- **Sheen coarse curve** (`f³·0.077 + f·0.01 + 0.00026`) gated by the `sheen` field on `PrincipledIn` — used by `stockings`
+- GGX microfacet specular with Schlick Fresnel and Walter–Smith G1
+- **Multi-scatter compensation** (Fdez-Agüera 2019) — restores energy at high roughness so metals don't darken
+- **Split-sum DFG LUT** (Karis 2013) — drives indirect specular
+- **LTC direct-spec scale** (Heitz 2016) — keeps analytic-light specular in the same energy budget as image-based lighting
+- **Sheen coarse curve** gated by the `sheen` field on `PrincipledIn`
 
 ### NPR toolbox
 
@@ -297,26 +297,26 @@ Assign presets per-model with `engine.setMaterialPresets(name, map)` (see the [U
 
 ### Shadows, post, output
 
-- Directional shadow map (2048², depth32float, 3×3 PCF unrolled, normal + depth bias)
-- HDR (rgba16f) main pass with 4× MSAA, resolved before tonemap
-- Bloom via threshold + downsample/upsample mip pyramid, gated by an MRT mask channel from emissive presets
-- Filmic tone mapping (LUT extracted from Blender 3.6 OCIO "Filmic / Medium High Contrast", exposure baked in)
+- Directional shadow map (2048², depth32float, PCF, normal + depth bias)
+- HDR main pass with 4× MSAA. Color is `rg11b10ufloat` paired with an `rg8unorm` aux MRT carrying bloom mask (`.r`) and accumulated alpha (`.g`). The combined footprint fits Apple Silicon TBDR tile memory, so the 4× MSAA buffer resolves in-tile rather than spilling to system memory every frame. Falls back to `rgba16float` when the device does not expose `rg11b10ufloat-renderable`.
+- Bloom via threshold + downsample/upsample mip pyramid, gated by the aux bloom-mask channel
+- Filmic tone mapping (LUT extracted from Blender 3.6 OCIO "Filmic / Medium High Contrast")
 - Screen-space outline pass (inverted-hull) on opaque and transparent materials
 
 ### Alpha-hashed transparency
 
-`stockings` uses the Wyman & McGuire 2017 derivative-aware stochastic discard instead of alpha blend. Self-overlapping transparent meshes (stockings wrap the leg — front and back surfaces share screen pixels) can't be sorted per-fragment in one draw call, so blend produces "cracks". Hashed alpha keeps opaque-style depth writes and resolves cleanly under MSAA. The hash is derived from world-space position, not screen-space, so the dither pattern doesn't swim when the camera moves.
+`stockings` uses the Wyman & McGuire 2017 derivative-aware stochastic discard so self-overlapping transparent meshes (e.g. the front and back of a stocking wrapped around a leg) resolve cleanly under MSAA with opaque-style depth writes. The hash is derived from world-space position, so the dither pattern does not swim when the camera moves.
 
 ### See-through hair over eyes (MMD post-alpha-eye)
 
 The classic MMD effect where hair strands covering the eye are rendered at 50% so the iris stays readable — implemented as a single extra pass driven by the stencil buffer, not a two-texture composite.
 
-- **Eye pipeline** stamps `stencil = EYE_VALUE` on every fragment it writes, and uses `cullMode: "front"` + a small negative `depthBias` so only the back half of the eye mesh renders (the MMD trick that prevents eyes from leaking through the back of the head without a per-model skull occluder).
-- **Main hair pipeline** stencil-tests `not-equal EYE_VALUE` and skips those fragments entirely — depth and color stay as the eye wrote them.
-- **Hair-over-eyes pipeline** re-issues the hair draws through the same shader compiled with `override IS_OVER_EYES = true` (pipeline-override constant, so the dead branch is dropped at compile time). Stencil-tests `equal EYE_VALUE`, `depthWriteEnabled: false`, and alpha blends at 50% — so eye-stamped pixels end up `0.5·hair + 0.5·eye` in linear HDR before tonemap.
-- **Outline pipeline** also stencil-tests `not-equal EYE_VALUE` so the edge color doesn't overwrite the freshly blended eye pixels (otherwise the near-black outline paints a dark almond shape over the see-through area).
+- **Eye pipeline** stamps `stencil = EYE_VALUE` on every fragment it writes, with `cullMode: "front"` and a small negative `depthBias` so only the back half of the eye mesh renders (the MMD trick that keeps eyes from leaking through the back of the head).
+- **Main hair pipeline** stencil-tests `not-equal EYE_VALUE` and skips those fragments.
+- **Hair-over-eyes pipeline** re-issues the hair draws with `IS_OVER_EYES = true`, stencil-tests `equal EYE_VALUE`, disables depth writes, and alpha blends at 50% — eye-stamped pixels end up `0.5·hair + 0.5·eye` in linear HDR before tonemap.
+- **Outline pipeline** stencil-tests `not-equal EYE_VALUE` so edge color does not overwrite the see-through region.
 
-Draw order within a model: non-eye/non-hair opaque → eye (stamp) → hair (skip stamp) → outlines (skip stamp) → hair-over-eyes (match stamp). One `setStencilReference(EYE_VALUE)` per model covers all four stencil-aware pipelines.
+Draw order within a model: non-eye/non-hair opaque → eye (stamp) → hair (skip stamp) → outlines (skip stamp) → hair-over-eyes (match stamp).
 
 ## Projects Using This Engine
 

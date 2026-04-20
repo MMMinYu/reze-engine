@@ -82,7 +82,7 @@ const FACE_BRIGHT_TEX_THRESH: f32 = 0.9300000071525574;
 
   var out: FSOut;
   out.color = vec4f(final_color, alpha);
-  out.mask = 1.0;
+  out.mask = vec4f(1.0, 1.0, 0.0, out.color.a);
   return out;
 }
 

@@ -135,14 +135,30 @@ export const COMMON_VS_WGSL = /* wgsl */ `
 `;
 
 // ─── FS output struct ───────────────────────────────────────────────
-// Location 0: final radiance+alpha. Location 1: bloom/highlight mask (single f32,
-// currently 1.0 everywhere — slot is reserved for future per-material bloom control).
+// Location 0: final radiance+alpha (blended into rg11b10ufloat; the HDR target
+// has no alpha channel, but the blend equation still uses the .a you write here
+// as the src-alpha factor that premultiplies rgb into the HDR target).
+// Location 1: auxiliary rg8unorm carrying
+//   .r = bloom mask (1 = contributes to bloom, 0 = skip — e.g. ground).
+//   .g = accumulated canvas alpha — the channel that used to live in hdr.a
+//        before the switch to rg11b10ufloat. Sampled by composite to
+//        un-premultiply color for tonemap and to set the final drawable alpha
+//        (needed for the `premultiplied` canvas alphaMode that blends the
+//        WebGPU surface over the page background).
+// FS output at location 1 must be vec4f — the blend state references src.a, and
+// WebGPU requires the fragment output to provide an alpha component even though
+// the rg8unorm target only stores .r and .g (extra components are discarded).
+// Materials write mask = vec4f(1.0, 1.0, 0.0, color.a); ground writes
+// vec4f(0.0, 1.0, 0.0, edgeFade). With src.a coming from the 4th component and
+// src-alpha blending enabled:
+//   out.r = mask_r · src.a + dst.r · (1-src.a)   (bloom mask, weighted by alpha)
+//   out.g = 1.0    · src.a + dst.g · (1-src.a)   (canonical premultiplied alpha-over)
 
 export const COMMON_FS_OUT_WGSL = /* wgsl */ `
 
 struct FSOut {
   @location(0) color: vec4f,
-  @location(1) mask: f32,
+  @location(1) mask: vec4f,
 };
 
 `;

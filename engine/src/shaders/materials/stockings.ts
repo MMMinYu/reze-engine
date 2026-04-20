@@ -113,7 +113,7 @@ fn ramp_ease_s(f: f32, p0: f32, p1: f32) -> f32 {
 
   var out: FSOut;
   out.color = vec4f(final_color, 1.0);
-  out.mask = 1.0;
+  out.mask = vec4f(1.0, 1.0, 0.0, out.color.a);
   return out;
 }
 

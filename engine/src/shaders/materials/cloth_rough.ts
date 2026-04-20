@@ -62,7 +62,7 @@ const CLOTH_R_SPEC_CLAMP: f32 = 10.0;
 
   var out: FSOut;
   out.color = vec4f(final_color, out_alpha);
-  out.mask = 1.0;
+  out.mask = vec4f(1.0, 1.0, 0.0, out.color.a);
   return out;
 }
 

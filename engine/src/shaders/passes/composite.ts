@@ -13,6 +13,12 @@ override APPLY_GAMMA: bool = true;
 @group(0) @binding(1) var bloomTex: texture_2d<f32>;   // bloomUpTexture mip 0 (full pyramid top)
 @group(0) @binding(2) var bloomSamp: sampler;
 @group(0) @binding(3) var<uniform> viewU: array<vec4<f32>, 2>;
+// Aux mask/alpha texture. .r = bloom mask (unused here; bloom blit uses it).
+// .g = accumulated canvas alpha (what hdr.a carried before the HDR format
+// became rg11b10ufloat). We unpremultiply HDR by this alpha for tonemap, then
+// re-premultiply the tonemapped color for output so the premultiplied canvas
+// alphaMode composites the WebGPU surface over the page background correctly.
+@group(0) @binding(4) var maskTex: texture_2d<f32>;
 // viewU[0] = (exposure, invGamma, _, _);  viewU[1] = (tint.rgb, intensity)
 // invGamma = 1/gamma precomputed on CPU — avoids a per-pixel divide.
 
@@ -39,11 +45,12 @@ fn filmic(x: f32) -> f32 {
 }
 
 @fragment fn fs(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
-  let hdr = textureLoad(hdrTex, vec2<i32>(fragCoord.xy), 0);
-  let a = max(hdr.a, 1e-6);
+  let coord = vec2<i32>(fragCoord.xy);
+  let hdr = textureLoad(hdrTex, coord, 0);
+  let alpha = textureLoad(maskTex, coord, 0).g;
+  let a = max(alpha, 1e-6);
   let straight = hdr.rgb / a;
   let fullSz = vec2f(textureDimensions(hdrTex));
-  let bloomSz = vec2f(textureDimensions(bloomTex));
   // Bloom is at half-res (pyramid mip 0). Sampler interpolates back to full-res UVs.
   // fragCoord.xy is already at pixel center (e.g. 0.5, 0.5 for first pixel).
   let bloomUv = fragCoord.xy / max(fullSz, vec2f(1.0));
@@ -57,6 +64,6 @@ fn filmic(x: f32) -> f32 {
   if (APPLY_GAMMA) {
     disp = pow(disp, vec3f(viewU[0].y));
   }
-  return vec4f(disp * hdr.a, hdr.a);
+  return vec4f(disp * alpha, alpha);
 }
 `
