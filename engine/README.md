@@ -17,6 +17,7 @@ npm install reze-engine
 - **HDR pipeline** with bloom mip pyramid, Filmic tone mapping, 4× MSAA
 - **Alpha-hashed transparency** (Wyman & McGuire 2017) for self-overlapping transparent meshes like stockings
 - **Screen-space outlines** on opaque + transparent materials
+- **See-through hair over eyes** — stencil-gated MMD post-alpha-eye so eyes read at 50% through hair silhouettes
 - **VMD animation** with IK solver and Bullet physics
 - **Orbit camera** with bone-follow mode
 - **GPU picking** (double-click/tap)
@@ -26,7 +27,7 @@ npm install reze-engine
 ## Usage
 
 ```javascript
-import { Engine, Vec3 } from "reze-engine";
+import { Engine, Vec3 } from "reze-engine"
 
 const engine = new Engine(canvas, {
   world: { color: new Vec3(0.4, 0.49, 0.65), strength: 1.0 },
@@ -36,16 +37,16 @@ const engine = new Engine(canvas, {
     direction: new Vec3(0, -0.5, 1),
   },
   camera: { distance: 31.5, target: new Vec3(0, 11.5, 0) }, // MMD units (1 unit = 8 cm)
-});
-await engine.init();
+})
+await engine.init()
 
 engine.setBloomOptions({
   color: new Vec3(0.9, 0.1, 0.8),
   intensity: 0.05,
   threshold: 0.5,
-});
+})
 
-const model = await engine.loadModel("hero", "/models/hero/hero.pmx");
+const model = await engine.loadModel("hero", "/models/hero/hero.pmx")
 
 // Map PMX material names to NPR presets (unlisted names fall back to `default`).
 engine.setMaterialPresets("hero", {
@@ -57,15 +58,15 @@ engine.setMaterialPresets("hero", {
   cloth_rough: ["jacket", "pants"],
   stockings: ["stockings"],
   metal: ["metal01", "earring"],
-});
+})
 
-await model.loadVmd("idle", "/animations/idle.vmd");
-model.show("idle");
-model.play();
+await model.loadVmd("idle", "/animations/idle.vmd")
+model.show("idle")
+model.play()
 
-engine.setCameraFollow(model, "センター", new Vec3(0, 3.5, 0));
-engine.addGround({ width: 160, height: 160 });
-engine.runRenderLoop();
+engine.setCameraFollow(model, "センター", new Vec3(0, 3.5, 0))
+engine.addGround({ width: 160, height: 160 })
+engine.runRenderLoop()
 ```
 
 ## API
@@ -114,30 +115,26 @@ Use a hidden `<input type="file" webkitdirectory multiple>` (or drag/drop) and p
 2. **`engine.loadModel(name, { files, pmxFile })`** — `pmxFile` selects which `.pmx` when the folder contains several.
 
 ```javascript
-import {
-  Engine,
-  parsePmxFolderInput,
-  pmxFileAtRelativePath,
-} from "reze-engine";
+import { Engine, parsePmxFolderInput, pmxFileAtRelativePath } from "reze-engine"
 
 // In <input onChange>:
-const picked = parsePmxFolderInput(e.target.files);
-e.target.value = "";
+const picked = parsePmxFolderInput(e.target.files)
+e.target.value = ""
 
 if (picked.status === "single") {
   const model = await engine.loadModel("myModel", {
     files: picked.files,
     pmxFile: picked.pmxFile,
-  });
+  })
 }
 
 if (picked.status === "multiple") {
   // Let the user choose `chosenPath` from picked.pmxRelativePaths, then:
-  const pmxFile = pmxFileAtRelativePath(picked.files, chosenPath);
+  const pmxFile = pmxFileAtRelativePath(picked.files, chosenPath)
   const model = await engine.loadModel("myModel", {
     files: picked.files,
     pmxFile,
-  });
+  })
 }
 ```
 
@@ -176,12 +173,12 @@ model.getBoneWorldPosition(name)
 `model.exportVmd(name)` serialises a loaded clip back to the VMD binary format and returns an `ArrayBuffer`. Bone and morph names are Shift-JIS encoded for compatibility with standard MMD tools.
 
 ```javascript
-const buffer = model.exportVmd("idle");
-const blob = new Blob([buffer], { type: "application/octet-stream" });
-const link = document.createElement("a");
-link.href = URL.createObjectURL(blob);
-link.download = "idle.vmd";
-link.click();
+const buffer = model.exportVmd("idle")
+const blob = new Blob([buffer], { type: "application/octet-stream" })
+const link = document.createElement("a")
+link.href = URL.createObjectURL(blob)
+link.download = "idle.vmd"
+link.click()
 ```
 
 #### Playback
@@ -227,55 +224,99 @@ The shadow map is cast from `sun.direction` — same vector the shader lights wi
 
 ## Rendering
 
-The renderer pairs stylised toon shading with a physically-based specular core, so anime characters keep their flat illustrated look while highlights and reflections still feel grounded. Each surface runs through a per-material preset that mixes an NPR closure with a Principled-style BSDF.
+Each surface combines an NPR stack with a Principled-style BSDF, mixed per material — so anime characters keep their flat illustrated look while highlights and reflections stay grounded. Every per-material shader is ~40–120 lines of distinctive code standing on a small set of shared WGSL primitives (`engine/src/shaders/materials/`).
+
+### Anatomy of a material shader
+
+Every material's fragment shader is the same 7-stage pipeline. The order is fixed; the content is per-material:
+
+```
+(A) Fragment setup      → n, v, l, sun, amb, shadow    ← shared
+(B) Texture + alpha     → tex_rgb, discard             ← shared shape
+(C) NPR stack           → toon + rim + warm + …        ← UNIQUE per material
+(D) Optional bump       → noise → bump_lh              ← 3 presets
+(E) Principled BSDF     → eval_principled(...)         ← shared helper
+(F) NPR ↔ PBR mix       → mix(npr, principled, fac)    ← per-material fac
+(G) FSOut               → color + bloom mask           ← shared
+```
+
+The simplest material (`default`) uses only A/B/E/G — no NPR stack at all:
+
+```wgsl
+let color = eval_principled(
+  PrincipledIn(albedo, 0.0, 0.5, 0.5, 1e30, 0.0, 0.0), // metallic, spec, rough, clamp, sheen, sheen_tint
+  n, l, v, sun, amb, shadow
+);
+```
+
+NPR presets add stage C (and sometimes D) on top, and stage F chooses how NPR-leaning the surface is. The Blender preset this engine targets is authored with `MixShader(NPR, Principled, fac)` throughout — the 7-stage layout is a direct port of that topology.
+
+### Shared WGSL foundations
+
+- **`nodes.ts`** — WGSL mirrors of the Blender shader nodes the presets use: `hue_sat`, `bright_contrast`, `ramp_constant/linear/cardinal`, `mix_overlay/lighten/linear_light`, `fresnel`, `layer_weight_fresnel/facing`, `tex_noise`, `tex_voronoi`, `mapping_point`, `bump_lh`, `normal_map`. Plus one combined DFG + LTC 64×64 RGBA8 LUT baked at `engine.init()`, one `eval_principled(PrincipledIn, N, L, V, sun, amb, shadow)` EEVEE Principled port, and `principled_sheen`.
+- **`common.ts`** — Uniform structs, bind-group layout (same for every material pipeline), 3×3 PCF shadow sampler, skinning vertex shader, shared `FSOut`.
+- **Per-material files** — constants + NPR stack + optional bump + `eval_principled` call + final mix. That's it.
 
 ### PBR specular core
 
-- GGX microfacet specular with Schlick Fresnel and Walter–Smith G1
+Inside `eval_principled`:
+
+- GGX microfacet specular with Schlick Fresnel, Walter–Smith G1 (reciprocal form collapses the `4·NL·NV` denominator)
 - **Multi-scatter compensation** (Fdez-Agüera 2019, `F_brdf_multi_scatter`) — restores energy at high roughness so metals don't darken
-- **Split-sum DFG LUT** (Karis 2013) baked at `engine.init()` — drives indirect specular and acts as the denominator of the direct-spec energy correction
-- **LTC direct-spec scale** (Heitz 2016 magnitude LUT) — keeps analytic-light specular in the same energy budget as image-based lighting
-- Sheen coarse approximation (`f³·0.077 + f·0.01 + 0.00026`) on cloth and stockings
+- **Split-sum DFG LUT** (Karis 2013) — drives indirect specular, packed into the `.rg` channels of the baked LUT
+- **LTC direct-spec scale** (Heitz 2016 magnitude LUT) — keeps analytic-light specular in the same energy budget as image-based lighting; packed into `.ba` so a single LUT tap serves both paths
+- **Sheen coarse curve** (`f³·0.077 + f·0.01 + 0.00026`) gated by the `sheen` field on `PrincipledIn` — used by `stockings`
 
-### Stylised diffuse (NPR toolbox)
+### NPR toolbox
 
-Every preset is built out of the same NPR primitives:
+Every preset's stage C is built from these primitives:
 
-- **Toon ramps** — quantised NdotL through constant or anti-aliased step ramps for hard cel-shaded transitions
-- **HSV remaps** — separate hue/sat/value tints for shadow vs lit zones, then layered with mix-overlay against AO masks for warm-shadow / cool-light shifts
-- **Fresnel rim & layer-weight wrap** — Fresnel × layer-weight feeds a MixShader against an emissive backdrop for anime-style back-light
-- **Procedural micro-detail** — fBM noise (PCG hash, three octaves) plus bump-from-height for fabric weave, skin micro-roughness, and metallic Voronoi sparkle in reflection-coord space
-- **Selective emission** — texture-gated emission boosts (eye iris, stockings pattern) that survive into bloom
+- **Toon ramps** — quantised NdotL through constant or `ramp_constant_edge_aa` (fwidth-based step anti-alias) for cel-shaded shadow terminators
+- **HSV remaps** — separate hue/sat/value tints for shadow vs lit zones, layered with mix-overlay against the lit texture for warm-shadow / cool-light shifts
+- **Fresnel rim & layer-weight wrap** — `fresnel × layer_weight_facing` (or two stacked fresnels) feeds a MixShader against an emissive backdrop for anime back-light
+- **Procedural micro-detail** — 3-octave value noise (PCG hash, fully unrolled) drives bump-from-height for skin and fabric; 3D Voronoi in reflection-coord space drives metallic sparkle
+- **Selective emission** — BT.601-luminance-gated boosts (eye iris, face highlights, stockings pattern) that survive into bloom
 
-### Material presets
+### Per-material NPR stacks
 
-Each PMX material is dispatched to one of these shaders:
+Each PMX material is assigned to one of these shaders. The NPR stack column is what's actually in stage C of that file; the Principled column is what gets passed to `eval_principled`.
 
-| Preset         | Look                                                                           |
-| -------------- | ------------------------------------------------------------------------------ |
-| `face`         | toon ramp + rim + warm subsurface bleed + Principled mix                       |
-| `hair`         | layered hair toon + Fresnel rim + Principled spec mix                          |
-| `body`         | toon ramp + AO modulation + rim + Principled mix                               |
-| `eye`          | iris with emission boost (drives bloom)                                        |
-| `stockings`    | NPR-tinted Principled with sheen, alpha-hashed                                 |
-| `metal`        | full-metallic Principled + reflection-coord Voronoi sparkle + NPR toon overlay |
-| `cloth_smooth` | Principled cloth with sheen, smoother variant                                  |
-| `cloth_rough`  | rougher cloth variant                                                          |
-| `default`      | plain Principled BSDF (unmapped fallback)                                      |
+| Preset         | NPR stack (stage C)                                         | Principled (stage E)                                          |
+| -------------- | ----------------------------------------------------------- | ------------------------------------------------------------- |
+| `default`      | —                                                           | metallic=0, spec=0.5, rough=0.5                               |
+| `eye`          | — (emission = albedo × 1.5 added post-eval)                 | same as default                                               |
+| `face`         | toon + warm rim + dual-fresnel rim + BT.601 bright-tex gate | spec=0.5, rough=0.3, noise bump, spec clamp=10                |
+| `body`         | toon + warm rim + fresnel rim + facing rim                  | spec=0.5, rough=0.3, noise bump, spec clamp=10                |
+| `hair`         | toon + fresnel rim + bevel (n.y) + bright-tex gate          | spec=1.0, rough=0.3, mixed at 20% PBR                         |
+| `cloth_smooth` | toon + bevel + mix-overlay emission (×18)                   | spec=0.8, rough=0.5                                           |
+| `cloth_rough`  | same NPR as `cloth_smooth`                                  | spec=0.8, rough=0.82, live noise bump, spec clamp=10          |
+| `metal`        | toon + mix-overlay emission (×8)                            | metallic=1, voronoi-driven base (reflection-coord), rough=0.3 |
+| `stockings`    | gradient × facing mask + HSV-boosted emission (×5)          | metallic=0.1, spec=1, rough=0.5, **sheen=0.7**, hashed alpha  |
+
+Assign presets per-model with `engine.setMaterialPresets(name, map)` (see the [Usage](#usage) example). Material names not listed fall through to `default`.
 
 ### Shadows, post, output
 
 - Directional shadow map (2048², depth32float, 3×3 PCF unrolled, normal + depth bias)
 - HDR (rgba16f) main pass with 4× MSAA, resolved before tonemap
-- Bloom via threshold + downsample/upsample mip pyramid, gated by an MRT mask channel emitted from emissive presets
-- Filmic tone mapping (LUT sampled from the same view-transform curve used by "Filmic / Medium High Contrast"), exposure baked in
+- Bloom via threshold + downsample/upsample mip pyramid, gated by an MRT mask channel from emissive presets
+- Filmic tone mapping (LUT extracted from Blender 3.6 OCIO "Filmic / Medium High Contrast", exposure baked in)
 - Screen-space outline pass (inverted-hull) on opaque and transparent materials
-
-Assign presets per-model with `engine.setMaterialPresets(name, map)` (see the [Usage](#usage) example). Material names not listed fall through to the `default` Principled BSDF.
 
 ### Alpha-hashed transparency
 
-`stockings` uses the Wyman & McGuire 2017 derivative-aware stochastic discard instead of alpha blend. Self-overlapping transparent meshes (stockings wrap the leg — front and back surfaces share screen pixels) can't be sorted per-fragment in one draw call, so blend produces "cracks". Hashed alpha keeps opaque-style depth writes and resolves cleanly under MSAA.
+`stockings` uses the Wyman & McGuire 2017 derivative-aware stochastic discard instead of alpha blend. Self-overlapping transparent meshes (stockings wrap the leg — front and back surfaces share screen pixels) can't be sorted per-fragment in one draw call, so blend produces "cracks". Hashed alpha keeps opaque-style depth writes and resolves cleanly under MSAA. The hash is derived from world-space position, not screen-space, so the dither pattern doesn't swim when the camera moves.
+
+### See-through hair over eyes (MMD post-alpha-eye)
+
+The classic MMD effect where hair strands covering the eye are rendered at 50% so the iris stays readable — implemented as a single extra pass driven by the stencil buffer, not a two-texture composite.
+
+- **Eye pipeline** stamps `stencil = EYE_VALUE` on every fragment it writes, and uses `cullMode: "front"` + a small negative `depthBias` so only the back half of the eye mesh renders (the MMD trick that prevents eyes from leaking through the back of the head without a per-model skull occluder).
+- **Main hair pipeline** stencil-tests `not-equal EYE_VALUE` and skips those fragments entirely — depth and color stay as the eye wrote them.
+- **Hair-over-eyes pipeline** re-issues the hair draws through the same shader compiled with `override IS_OVER_EYES = true` (pipeline-override constant, so the dead branch is dropped at compile time). Stencil-tests `equal EYE_VALUE`, `depthWriteEnabled: false`, and alpha blends at 50% — so eye-stamped pixels end up `0.5·hair + 0.5·eye` in linear HDR before tonemap.
+- **Outline pipeline** also stencil-tests `not-equal EYE_VALUE` so the edge color doesn't overwrite the freshly blended eye pixels (otherwise the near-black outline paints a dark almond shape over the see-through area).
+
+Draw order within a model: non-eye/non-hair opaque → eye (stamp) → hair (skip stamp) → outlines (skip stamp) → hair-over-eyes (match stamp). One `setStencilReference(EYE_VALUE)` per model covers all four stencil-aware pipelines.
 
 ## Projects Using This Engine
 

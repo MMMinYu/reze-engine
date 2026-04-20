@@ -1,84 +1,22 @@
-// M_Body — 仿深空之眼渲染预设v1.0_by_小绿毛猫_material_graph_dump.json "M_Body"; VALTORGB / math ops from m_graphs where dump omits them.
+// M_Body — 仿深空之眼渲染预设v1.0_by_小绿毛猫 "M_Body". Toon + warm rim + rim1/rim2
+// stack mixed 50/50 against a Principled BSDF with noise-bumped normal.
 
 import { NODES_WGSL } from "./nodes"
+import { COMMON_MATERIAL_PRELUDE_WGSL } from "./common"
 
 export const BODY_SHADER_WGSL = /* wgsl */ `
 
 ${NODES_WGSL}
+${COMMON_MATERIAL_PRELUDE_WGSL}
 
-struct CameraUniforms {
-  view: mat4x4f,
-  projection: mat4x4f,
-  viewPos: vec3f,
-  _padding: f32,
-};
-
-struct Light {
-  direction: vec4f,
-  color: vec4f,
-};
-
-struct LightUniforms {
-  ambientColor: vec4f,
-  lights: array<Light, 4>,
-};
-
-struct MaterialUniforms {
-  diffuseColor: vec3f,
-  alpha: f32,
-};
-
-struct VertexOutput {
-  @builtin(position) position: vec4f,
-  @location(0) normal: vec3f,
-  @location(1) uv: vec2f,
-  @location(2) worldPos: vec3f,
-};
-
-struct LightVP { viewProj: mat4x4f, };
-
-@group(0) @binding(0) var<uniform> camera: CameraUniforms;
-@group(0) @binding(1) var<uniform> light: LightUniforms;
-@group(0) @binding(2) var diffuseSampler: sampler;
-@group(0) @binding(3) var shadowMap: texture_depth_2d;
-@group(0) @binding(4) var shadowSampler: sampler_comparison;
-@group(0) @binding(5) var<uniform> lightVP: LightVP;
-@group(1) @binding(0) var<storage, read> skinMats: array<mat4x4f>;
-@group(2) @binding(0) var diffuseTexture: texture_2d<f32>;
-@group(2) @binding(1) var<uniform> material: MaterialUniforms;
-
-fn sampleShadow(worldPos: vec3f, n: vec3f) -> f32 {
-  // Back-facing to key light: direct contribution is zero anyway, skip 9 texture samples.
-  if (dot(n, -light.lights[0].direction.xyz) <= 0.0) { return 0.0; }
-  let biasedPos = worldPos + n * 0.08;
-  let lclip = lightVP.viewProj * vec4f(biasedPos, 1.0);
-  let ndc = lclip.xyz / max(lclip.w, 1e-6);
-  let suv = vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
-  let cmpZ = ndc.z - 0.001;
-  let ts = 1.0 / 2048.0;
-  // 3x3 PCF unrolled — Safari's Metal backend doesn't unroll nested shadow loops reliably.
-  let s00 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts, -ts), cmpZ);
-  let s10 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(0.0, -ts), cmpZ);
-  let s20 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts, -ts), cmpZ);
-  let s01 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts, 0.0), cmpZ);
-  let s11 = textureSampleCompareLevel(shadowMap, shadowSampler, suv, cmpZ);
-  let s21 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts, 0.0), cmpZ);
-  let s02 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts,  ts), cmpZ);
-  let s12 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(0.0,  ts), cmpZ);
-  let s22 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts,  ts), cmpZ);
-  return (s00 + s10 + s20 + s01 + s11 + s21 + s02 + s12 + s22) * (1.0 / 9.0);
-}
-
-const PI_B: f32 = 3.141592653589793;
 const BODY_ROUGHNESS: f32 = 0.3;
+const BODY_SPECULAR: f32 = 0.5;
+const BODY_MIX_NPR: f32 = 0.5;
+const BODY_SPEC_CLAMP: f32 = 10.0;
 const BODY_RIM2_LAYER_BLEND: f32 = 0.20000000298023224;
 const BODY_RIM2_POW: f32 = 1.4300000667572021;
 const BODY_RIM2_BG: vec3f = vec3f(1.0, 0.4303792119026184, 0.3315804898738861);
 const BODY_WARM_STR: f32 = 0.30000001192092896;
-const BODY_SPECULAR: f32 = 0.5;
-const BODY_MIX_NPR: f32 = 0.5;
-// EEVEE Light Clamp equivalent — caps firefly specular from noise-bumped NDF aliasing.
-const BODY_SPEC_CLAMP: f32 = 10.0;
 
 // smoothstep-based ramp: t*t*(3-2*t) between two color stops
 fn ramp_ease(f: f32, p0: f32, c0: vec4f, p1: f32, c1: vec4f) -> vec4f {
@@ -86,39 +24,6 @@ fn ramp_ease(f: f32, p0: f32, c0: vec4f, p1: f32, c1: vec4f) -> vec4f {
   let ss = t * t * (3.0 - 2.0 * t);
   return mix(c0, c1, ss);
 }
-
-@vertex fn vs(
-  @location(0) position: vec3f,
-  @location(1) normal: vec3f,
-  @location(2) uv: vec2f,
-  @location(3) joints0: vec4<u32>,
-  @location(4) weights0: vec4<f32>
-) -> VertexOutput {
-  var output: VertexOutput;
-  let pos4 = vec4f(position, 1.0);
-  let weightSum = weights0.x + weights0.y + weights0.z + weights0.w;
-  let invWeightSum = select(1.0, 1.0 / weightSum, weightSum > 0.0001);
-  let nw = select(vec4f(1.0, 0.0, 0.0, 0.0), weights0 * invWeightSum, weightSum > 0.0001);
-  var skinnedPos = vec4f(0.0);
-  var skinnedNrm = vec3f(0.0);
-  for (var i = 0u; i < 4u; i++) {
-    let m = skinMats[joints0[i]];
-    let w = nw[i];
-    skinnedPos += (m * pos4) * w;
-    skinnedNrm += (mat3x3f(m[0].xyz, m[1].xyz, m[2].xyz) * normal) * w;
-  }
-  output.position = camera.projection * camera.view * vec4f(skinnedPos.xyz, 1.0);
-  // Skip VS normalize — interpolation denormalizes anyway, and FS always does normalize(input.normal).
-  output.normal = skinnedNrm;
-  output.uv = uv;
-  output.worldPos = skinnedPos.xyz;
-  return output;
-}
-
-struct FSOut {
-  @location(0) color: vec4f,
-  @location(1) mask: f32,
-};
 
 @fragment fn fs(input: VertexOutput) -> FSOut {
   let alpha = material.alpha;
@@ -128,11 +33,13 @@ struct FSOut {
   let v = normalize(camera.viewPos - input.worldPos);
   let l = -light.lights[0].direction.xyz;
   let sun = light.lights[0].color.xyz * light.lights[0].color.w;
-
-  let tex_color = textureSample(diffuseTexture, diffuseSampler, input.uv).rgb;
+  let amb = light.ambientColor.xyz;
   let shadow = sampleShadow(input.worldPos, n);
 
-  let ndotl_raw = shader_to_rgb_diffuse(n, l, sun, light.ambientColor.xyz, shadow);
+  let tex_color = textureSample(diffuseTexture, diffuseSampler, input.uv).rgb;
+
+  // ═══ NPR STACK ═══
+  let ndotl_raw = shader_to_rgb_diffuse(n, l, sun, amb, shadow);
   let toon = ramp_constant(ndotl_raw, 0.0, vec4f(0,0,0,1), 0.2966, vec4f(1,1,1,1)).r;
 
   let shadow_tint = hue_sat_id(2.0, 0.3499999940395355, 1.0, tex_color);
@@ -158,7 +65,8 @@ struct FSOut {
 
   let npr_stack = rim1 + rim2_mixed + warm_emission;
 
-  // Noise bump — Mapping loc=rot=0 folds to a plain scale multiply.
+  // ═══ PRINCIPLED BSDF with noise bump ═══
+  // Mapping loc=rot=0 in the Blender graph folds to a plain scale multiply.
   let noise_val = tex_noise_d2(input.worldPos * vec3f(1.0, 1.0, 1.5), 1.0);
   let noise_ramp = ramp_linear(noise_val, 0.0, vec4f(0,0,0,1), 1.0, vec4f(1,1,1,1)).r;
   let bumped_n = bump_lh(0.324644535779953, noise_ramp, n, input.worldPos);
@@ -166,29 +74,10 @@ struct FSOut {
   let principled_base = mix_blend(noise_ramp, bc, vec3f(0.6831911206245422, 0.19474034011363983, 0.13732507824897766));
   let p_emission = bc * 0.2;
 
-  // Principled BSDF (EEVEE port): metallic=0, specular=0.5, roughness=0.3, specular_tint=0.
-  let NL = max(dot(bumped_n, l), 0.0);
-  let NV = max(dot(bumped_n, v), 1e-4);
-
-  // f0/f90 per gpu_shader_material_principled.glsl — specular_tint=0 → dielectric_f0_color=white.
-  let f0 = vec3f(0.08 * BODY_SPECULAR);
-  let f90 = mix(f0, vec3f(1.0), sqrt(BODY_SPECULAR));
-  let brdf_lut = brdf_lut_sample(NV, BODY_ROUGHNESS);
-  let reflection_color = F_brdf_multi_scatter(f0, f90, brdf_lut.xy);
-
-  // Direct glossy — bsdf_ggx already includes NL; no F applied here (tinted after accum).
-  // ltc_brdf_scale: EEVEE direct path uses LTC; split-sum LUT path is rescaled to match.
-  let spec_direct_raw = bsdf_ggx(bumped_n, l, v, NL, NV, BODY_ROUGHNESS) * sun * shadow * ltc_brdf_scale_from_lut(brdf_lut);
-  let spec_direct = min(spec_direct_raw, vec3f(BODY_SPEC_CLAMP));
-  // Indirect glossy — flat world probe (solid color). Phase 2 adds cubemap.
-  let spec_indirect = light.ambientColor.xyz;
-  let spec_radiance = (spec_direct + spec_indirect) * reflection_color;
-
-  // Indirect diffuse = base_color × L_w per Blender closure_eval_surface_lib.glsl line 302;
-  // probe_evaluate_world_diff returns radiance (SH-projected, not cosine-convolved).
-  // No (1-F) factor per EEVEE — it doesn't energy-conserve spec<->diffuse.
-  let diffuse_radiance = principled_base * (sun * NL * shadow / PI_B + light.ambientColor.xyz);
-  let principled = diffuse_radiance + spec_radiance + p_emission;
+  let principled = eval_principled(
+    PrincipledIn(principled_base, 0.0, BODY_SPECULAR, BODY_ROUGHNESS, BODY_SPEC_CLAMP, 0.0, 0.0),
+    bumped_n, l, v, sun, amb, shadow
+  ) + p_emission;
 
   let final_color = mix(npr_stack, principled, BODY_MIX_NPR);
 

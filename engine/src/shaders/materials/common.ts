@@ -1,0 +1,155 @@
+// Shared WGSL blocks concatenated by every material shader.
+// Splits the boilerplate (uniform structs, bind group layout, skinning VS, PCF shadow)
+// away from the per-material fragment code so each material file only contains what
+// makes it visually distinct.
+//
+// Concat order in every material:
+//   NODES_WGSL              (nodes.ts — math/noise/BSDF helpers)
+//   COMMON_BINDINGS_WGSL    (uniform structs + @group/@binding declarations)
+//   SAMPLE_SHADOW_WGSL      (3×3 PCF shadow sampler; reads bindings above)
+//   COMMON_VS_WGSL          (skinning vertex shader; reads bindings above)
+//   <material's own constants + @fragment fn fs>
+//
+// WGSL is a whole-module compile — declaration order at module scope doesn't matter,
+// but the readable order is: types → bindings → helpers → entry points.
+
+// ─── Uniform structs + bind group layout ────────────────────────────
+// Every material pipeline uses the same bind group layout, so the same bindings are
+// declared here once. Groups:
+//   group(0): per-frame scene (camera, lights, shadow map, BRDF LUT via nodes.ts)
+//   group(1): per-model skinning
+//   group(2): per-material (diffuse texture + material uniforms)
+
+export const COMMON_BINDINGS_WGSL = /* wgsl */ `
+
+struct CameraUniforms {
+  view: mat4x4f,
+  projection: mat4x4f,
+  viewPos: vec3f,
+  _padding: f32,
+};
+
+struct Light {
+  direction: vec4f,
+  color: vec4f,
+};
+
+struct LightUniforms {
+  ambientColor: vec4f,
+  lights: array<Light, 4>,
+};
+
+// Per-material uniforms. Every material binds this layout even if it ignores fields;
+// the engine keeps one bind group layout across all material pipelines.
+struct MaterialUniforms {
+  diffuseColor: vec3f,  // tint; reserved (currently unused by all material fs)
+  alpha: f32,            // 0 → discard; <1 → transparent draw call
+};
+
+struct VertexOutput {
+  @builtin(position) position: vec4f,
+  @location(0) normal: vec3f,
+  @location(1) uv: vec2f,
+  @location(2) worldPos: vec3f,
+};
+
+struct LightVP { viewProj: mat4x4f, };
+
+@group(0) @binding(0) var<uniform> camera: CameraUniforms;
+@group(0) @binding(1) var<uniform> light: LightUniforms;
+@group(0) @binding(2) var diffuseSampler: sampler;
+@group(0) @binding(3) var shadowMap: texture_depth_2d;
+@group(0) @binding(4) var shadowSampler: sampler_comparison;
+@group(0) @binding(5) var<uniform> lightVP: LightVP;
+// binding(9) brdfLut is declared inside NODES_WGSL (nodes.ts).
+@group(1) @binding(0) var<storage, read> skinMats: array<mat4x4f>;
+@group(2) @binding(0) var diffuseTexture: texture_2d<f32>;
+@group(2) @binding(1) var<uniform> material: MaterialUniforms;
+
+`;
+
+// ─── Shadow sampler (3×3 PCF) ───────────────────────────────────────
+// 2048-map, normal-bias 0.08, depth-bias 0.001. Unrolled — Safari's Metal backend
+// doesn't unroll nested shadow loops reliably, and the early out on back-facing
+// fragments saves 9 texture taps per skipped pixel.
+
+export const SAMPLE_SHADOW_WGSL = /* wgsl */ `
+
+fn sampleShadow(worldPos: vec3f, n: vec3f) -> f32 {
+  if (dot(n, -light.lights[0].direction.xyz) <= 0.0) { return 0.0; }
+  let biasedPos = worldPos + n * 0.08;
+  let lclip = lightVP.viewProj * vec4f(biasedPos, 1.0);
+  let ndc = lclip.xyz / max(lclip.w, 1e-6);
+  let suv = vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+  let cmpZ = ndc.z - 0.001;
+  let ts = 1.0 / 2048.0;
+  let s00 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts, -ts), cmpZ);
+  let s10 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(0.0, -ts), cmpZ);
+  let s20 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts, -ts), cmpZ);
+  let s01 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts, 0.0), cmpZ);
+  let s11 = textureSampleCompareLevel(shadowMap, shadowSampler, suv, cmpZ);
+  let s21 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts, 0.0), cmpZ);
+  let s02 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts,  ts), cmpZ);
+  let s12 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(0.0,  ts), cmpZ);
+  let s22 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts,  ts), cmpZ);
+  return (s00 + s10 + s20 + s01 + s11 + s21 + s02 + s12 + s22) * (1.0 / 9.0);
+}
+
+`;
+
+// ─── Skinning vertex shader ─────────────────────────────────────────
+// Four-bone linear blend skinning. Renormalizes weights when they don't sum to 1
+// (PMX models occasionally ship with unnormalized weights on extras like hair tips).
+// VS normalize on the outgoing normal is skipped — interpolation denormalizes it
+// anyway and every fragment shader does `normalize(input.normal)` as its first line.
+
+export const COMMON_VS_WGSL = /* wgsl */ `
+
+@vertex fn vs(
+  @location(0) position: vec3f,
+  @location(1) normal: vec3f,
+  @location(2) uv: vec2f,
+  @location(3) joints0: vec4<u32>,
+  @location(4) weights0: vec4<f32>
+) -> VertexOutput {
+  var output: VertexOutput;
+  let pos4 = vec4f(position, 1.0);
+  let weightSum = weights0.x + weights0.y + weights0.z + weights0.w;
+  let invWeightSum = select(1.0, 1.0 / weightSum, weightSum > 0.0001);
+  let nw = select(vec4f(1.0, 0.0, 0.0, 0.0), weights0 * invWeightSum, weightSum > 0.0001);
+  var skinnedPos = vec4f(0.0);
+  var skinnedNrm = vec3f(0.0);
+  for (var i = 0u; i < 4u; i++) {
+    let m = skinMats[joints0[i]];
+    let w = nw[i];
+    skinnedPos += (m * pos4) * w;
+    skinnedNrm += (mat3x3f(m[0].xyz, m[1].xyz, m[2].xyz) * normal) * w;
+  }
+  output.position = camera.projection * camera.view * vec4f(skinnedPos.xyz, 1.0);
+  output.normal = skinnedNrm;
+  output.uv = uv;
+  output.worldPos = skinnedPos.xyz;
+  return output;
+}
+
+`;
+
+// ─── FS output struct ───────────────────────────────────────────────
+// Location 0: final radiance+alpha. Location 1: bloom/highlight mask (single f32,
+// currently 1.0 everywhere — slot is reserved for future per-material bloom control).
+
+export const COMMON_FS_OUT_WGSL = /* wgsl */ `
+
+struct FSOut {
+  @location(0) color: vec4f,
+  @location(1) mask: f32,
+};
+
+`;
+
+// ─── Convenience: full shared prelude ───────────────────────────────
+// Material files compose this as `${NODES_WGSL}${COMMON_MATERIAL_PRELUDE_WGSL}` to
+// pull in everything structural. Each material then adds its own constants + fs().
+
+export const COMMON_MATERIAL_PRELUDE_WGSL =
+  COMMON_BINDINGS_WGSL + SAMPLE_SHADOW_WGSL + COMMON_VS_WGSL + COMMON_FS_OUT_WGSL

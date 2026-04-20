@@ -1,76 +1,14 @@
-// M_Rough_Cloth — NPR graph identical to M_Smooth_Cloth but bump chain IS live
-// (噪波→渐变→凹凸.Normal → 原理化BSDF.Normal in m_graphs) and Roughness=0.8187.
+// M_Rough_Cloth — NPR graph identical to M_Smooth_Cloth, but the noise bump subtree
+// IS live on Principled.Normal and Roughness is raised to 0.8187.
 
 import { NODES_WGSL } from "./nodes"
+import { COMMON_MATERIAL_PRELUDE_WGSL } from "./common"
 
 export const CLOTH_ROUGH_SHADER_WGSL = /* wgsl */ `
 
 ${NODES_WGSL}
+${COMMON_MATERIAL_PRELUDE_WGSL}
 
-struct CameraUniforms {
-  view: mat4x4f,
-  projection: mat4x4f,
-  viewPos: vec3f,
-  _padding: f32,
-};
-
-struct Light {
-  direction: vec4f,
-  color: vec4f,
-};
-
-struct LightUniforms {
-  ambientColor: vec4f,
-  lights: array<Light, 4>,
-};
-
-struct MaterialUniforms {
-  diffuseColor: vec3f,
-  alpha: f32,
-};
-
-struct VertexOutput {
-  @builtin(position) position: vec4f,
-  @location(0) normal: vec3f,
-  @location(1) uv: vec2f,
-  @location(2) worldPos: vec3f,
-};
-
-struct LightVP { viewProj: mat4x4f, };
-
-@group(0) @binding(0) var<uniform> camera: CameraUniforms;
-@group(0) @binding(1) var<uniform> light: LightUniforms;
-@group(0) @binding(2) var diffuseSampler: sampler;
-@group(0) @binding(3) var shadowMap: texture_depth_2d;
-@group(0) @binding(4) var shadowSampler: sampler_comparison;
-@group(0) @binding(5) var<uniform> lightVP: LightVP;
-@group(1) @binding(0) var<storage, read> skinMats: array<mat4x4f>;
-@group(2) @binding(0) var diffuseTexture: texture_2d<f32>;
-@group(2) @binding(1) var<uniform> material: MaterialUniforms;
-
-fn sampleShadow(worldPos: vec3f, n: vec3f) -> f32 {
-  // Back-facing to key light: direct contribution is zero anyway, skip 9 texture samples.
-  if (dot(n, -light.lights[0].direction.xyz) <= 0.0) { return 0.0; }
-  let biasedPos = worldPos + n * 0.08;
-  let lclip = lightVP.viewProj * vec4f(biasedPos, 1.0);
-  let ndc = lclip.xyz / max(lclip.w, 1e-6);
-  let suv = vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
-  let cmpZ = ndc.z - 0.001;
-  let ts = 1.0 / 2048.0;
-  // 3x3 PCF unrolled — Safari's Metal backend doesn't unroll nested shadow loops reliably.
-  let s00 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts, -ts), cmpZ);
-  let s10 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(0.0, -ts), cmpZ);
-  let s20 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts, -ts), cmpZ);
-  let s01 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts, 0.0), cmpZ);
-  let s11 = textureSampleCompareLevel(shadowMap, shadowSampler, suv, cmpZ);
-  let s21 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts, 0.0), cmpZ);
-  let s02 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts,  ts), cmpZ);
-  let s12 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(0.0,  ts), cmpZ);
-  let s22 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts,  ts), cmpZ);
-  return (s00 + s10 + s20 + s01 + s11 + s21 + s02 + s12 + s22) * (1.0 / 9.0);
-}
-
-const PI_CR: f32 = 3.141592653589793;
 const CLOTH_R_SPECULAR: f32 = 0.8;
 const CLOTH_R_ROUGHNESS: f32 = 0.8187;
 const CLOTH_R_TOON_EDGE: f32 = 0.2966;
@@ -79,41 +17,7 @@ const CLOTH_R_EMIT_STR: f32 = 18.200000762939453;
 const CLOTH_R_MIX_SHADER_FAC: f32 = 0.8999999761581421;
 const CLOTH_R_NOISE_SCALE: f32 = 17.7;
 const CLOTH_R_BUMP_STR: f32 = 1.0;
-// EEVEE Light Clamp equivalent — caps firefly specular from noise-bumped NDF aliasing.
 const CLOTH_R_SPEC_CLAMP: f32 = 10.0;
-
-@vertex fn vs(
-  @location(0) position: vec3f,
-  @location(1) normal: vec3f,
-  @location(2) uv: vec2f,
-  @location(3) joints0: vec4<u32>,
-  @location(4) weights0: vec4<f32>
-) -> VertexOutput {
-  var output: VertexOutput;
-  let pos4 = vec4f(position, 1.0);
-  let weightSum = weights0.x + weights0.y + weights0.z + weights0.w;
-  let invWeightSum = select(1.0, 1.0 / weightSum, weightSum > 0.0001);
-  let nw = select(vec4f(1.0, 0.0, 0.0, 0.0), weights0 * invWeightSum, weightSum > 0.0001);
-  var skinnedPos = vec4f(0.0);
-  var skinnedNrm = vec3f(0.0);
-  for (var i = 0u; i < 4u; i++) {
-    let m = skinMats[joints0[i]];
-    let w = nw[i];
-    skinnedPos += (m * pos4) * w;
-    skinnedNrm += (mat3x3f(m[0].xyz, m[1].xyz, m[2].xyz) * normal) * w;
-  }
-  output.position = camera.projection * camera.view * vec4f(skinnedPos.xyz, 1.0);
-  // Skip VS normalize — interpolation denormalizes anyway, and FS always does normalize(input.normal).
-  output.normal = skinnedNrm;
-  output.uv = uv;
-  output.worldPos = skinnedPos.xyz;
-  return output;
-}
-
-struct FSOut {
-  @location(0) color: vec4f,
-  @location(1) mask: f32,
-};
 
 @fragment fn fs(input: VertexOutput) -> FSOut {
   let n = normalize(input.normal);
@@ -128,8 +32,8 @@ struct FSOut {
   let out_alpha = material.alpha * tex_s.a;
   if (out_alpha < 0.001) { discard; }
 
+  // ═══ NPR STACK ═══
   let lum_shade = shader_to_rgb_diffuse(n, l, sun, amb, shadow);
-  // ramp_constant_edge_aa: avoids binary fac shimmer on terminator (fwidth + smoothstep).
   let ramp008 = ramp_constant_edge_aa(lum_shade, CLOTH_R_TOON_EDGE, vec4f(0,0,0,1), vec4f(1,1,1,1));
   let mix04_fac = math_multiply(ramp008.r, CLOTH_R_MIX04_MUL);
 
@@ -143,32 +47,17 @@ struct FSOut {
   let npr_rgb = mix_overlay(1.0, mix03, hue004);
   let npr_emission = npr_rgb * CLOTH_R_EMIT_STR;
 
-  // Noise bump is LIVE in M_Rough_Cloth — unlike Smooth Cloth where the subtree is dead.
+  // ═══ PRINCIPLED BSDF with noise bump (live in this preset) ═══
   let noise_val = tex_noise_d2(input.worldPos, CLOTH_R_NOISE_SCALE);
   let noise_ramp = ramp_linear(noise_val, 0.0, vec4f(0,0,0,1), 1.0, vec4f(1,1,1,1)).r;
   let bumped_n = bump_lh(CLOTH_R_BUMP_STR, noise_ramp, n, input.worldPos);
 
-  // 原理化BSDF (EEVEE port): metallic=0, specular=0.8, roughness=0.8187, specular_tint=0.
   let principled_base = hue_sat_id(1.0, 0.800000011920929, 1.0, tex_rgb);
-  let NL = max(dot(bumped_n, l), 0.0);
-  let NV = max(dot(bumped_n, v), 1e-4);
+  let principled = eval_principled(
+    PrincipledIn(principled_base, 0.0, CLOTH_R_SPECULAR, CLOTH_R_ROUGHNESS, CLOTH_R_SPEC_CLAMP, 0.0, 0.0),
+    bumped_n, l, v, sun, amb, shadow
+  );
 
-  let f0 = vec3f(0.08 * CLOTH_R_SPECULAR);
-  let f90 = mix(f0, vec3f(1.0), sqrt(CLOTH_R_SPECULAR));
-  let brdf_lut = brdf_lut_sample(NV, CLOTH_R_ROUGHNESS);
-  let reflection_color = F_brdf_multi_scatter(f0, f90, brdf_lut.xy);
-
-  let spec_direct_raw = bsdf_ggx(bumped_n, l, v, NL, NV, CLOTH_R_ROUGHNESS) * sun * shadow * ltc_brdf_scale_from_lut(brdf_lut);
-  let spec_direct = min(spec_direct_raw, vec3f(CLOTH_R_SPEC_CLAMP));
-  let spec_indirect = amb;
-  let spec_radiance = (spec_direct + spec_indirect) * reflection_color;
-
-  // Indirect diffuse = base_color × L_w per Blender closure_eval_surface_lib.glsl line 302;
-  // probe_evaluate_world_diff returns radiance (SH-projected, not cosine-convolved).
-  let diffuse_radiance = principled_base * (sun * NL * shadow / PI_CR + amb);
-  let principled = diffuse_radiance + spec_radiance;
-
-  // 混合着色器.001 Fac=0.9: Shader=自发光.005, Shader_001=原理化BSDF
   let final_color = mix(npr_emission, principled, CLOTH_R_MIX_SHADER_FAC);
 
   var out: FSOut;

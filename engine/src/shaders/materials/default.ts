@@ -1,140 +1,17 @@
-// Blender 3.6 Principled BSDF defaults + Filmic "Medium High Contrast" tone mapping.
-// Metallic=0, Specular=0.5 (F0=0.04), Roughness=0.5.
-// Tone mapping via LUT sampled from Blender's OCIO pipeline (exposure -0.3 baked in).
+// Default material — Blender 3.6 Principled BSDF defaults, no NPR stack.
+// Metallic=0, Specular=0.5 (F0=0.04), Roughness=0.5. Serves as the EEVEE reference
+// path that every NPR material mixes against in its final stage.
 
 import { NODES_WGSL } from "./nodes"
+import { COMMON_MATERIAL_PRELUDE_WGSL } from "./common"
 
 export const DEFAULT_SHADER_WGSL = /* wgsl */ `
 
 ${NODES_WGSL}
+${COMMON_MATERIAL_PRELUDE_WGSL}
 
-const PI: f32 = 3.141592653589793;
 const DEFAULT_SPECULAR: f32 = 0.5;
-const ROUGHNESS: f32 = 0.5;
-
-struct CameraUniforms {
-  view: mat4x4f,
-  projection: mat4x4f,
-  viewPos: vec3f,
-  _padding: f32,
-};
-
-struct Light {
-  direction: vec4f,
-  color: vec4f,
-};
-
-struct LightUniforms {
-  ambientColor: vec4f,
-  lights: array<Light, 4>,
-};
-
-// Per-material uniforms. Add fields here only when a shader actually reads them;
-// preset-specific shaders (face.ts, future hair.ts) share this struct so the
-// engine can use one material bind-group layout.
-struct MaterialUniforms {
-  diffuseColor: vec3f,  // tint; multiplies sampled albedo (unused by current fs, reserved)
-  alpha: f32,            // 0 → discard; <1 → transparent draw call
-};
-
-struct VertexOutput {
-  @builtin(position) position: vec4f,
-  @location(0) normal: vec3f,
-  @location(1) uv: vec2f,
-  @location(2) worldPos: vec3f,
-};
-
-struct LightVP { viewProj: mat4x4f, };
-
-@group(0) @binding(0) var<uniform> camera: CameraUniforms;
-@group(0) @binding(1) var<uniform> light: LightUniforms;
-@group(0) @binding(2) var diffuseSampler: sampler;
-@group(0) @binding(3) var shadowMap: texture_depth_2d;
-@group(0) @binding(4) var shadowSampler: sampler_comparison;
-@group(0) @binding(5) var<uniform> lightVP: LightVP;
-@group(1) @binding(0) var<storage, read> skinMats: array<mat4x4f>;
-@group(2) @binding(0) var diffuseTexture: texture_2d<f32>;
-@group(2) @binding(1) var<uniform> material: MaterialUniforms;
-
-// ─── Filmic tone mapping (LUT extracted from Blender 3.6 OCIO) ─────
-// View transform = Filmic, Look = Medium High Contrast, Exposure = -0.3.
-// 14 samples at integer log2 stops from -10 to +3 (inclusive).
-// Extracted via scripts/extract_filmic_lut.py → probe image through scene
-// color management. Input: linear scene-referred. Output: sRGB display.
-
-fn filmic(x: f32) -> f32 {
-  var lut = array<f32, 14>(
-    0.0067, 0.0141, 0.0272, 0.0499, 0.0885, 0.1512, 0.2462,
-    0.3753, 0.5273, 0.6776, 0.8031, 0.8929, 0.9495, 0.9814
-  );
-  let t = clamp(log2(max(x, 1e-10)) + 10.0, 0.0, 13.0);
-  let i = u32(t);
-  let j = min(i + 1u, 13u);
-  return mix(lut[i], lut[j], t - f32(i));
-}
-
-fn tonemap(hdr: vec3f) -> vec3f {
-  return vec3f(filmic(hdr.x), filmic(hdr.y), filmic(hdr.z));
-}
-
-// ─── Shadow sampling (3×3 PCF) ──────────────────────────────────────
-
-fn sampleShadow(worldPos: vec3f, n: vec3f) -> f32 {
-  // Back-facing to key light: direct contribution is zero anyway, skip 9 texture samples.
-  if (dot(n, -light.lights[0].direction.xyz) <= 0.0) { return 0.0; }
-  let biasedPos = worldPos + n * 0.08;
-  let lclip = lightVP.viewProj * vec4f(biasedPos, 1.0);
-  let ndc = lclip.xyz / max(lclip.w, 1e-6);
-  let suv = vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
-  let cmpZ = ndc.z - 0.001;
-  let ts = 1.0 / 2048.0;
-  // 3x3 PCF unrolled — Safari's Metal backend doesn't unroll nested shadow loops reliably.
-  let s00 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts, -ts), cmpZ);
-  let s10 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(0.0, -ts), cmpZ);
-  let s20 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts, -ts), cmpZ);
-  let s01 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts, 0.0), cmpZ);
-  let s11 = textureSampleCompareLevel(shadowMap, shadowSampler, suv, cmpZ);
-  let s21 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts, 0.0), cmpZ);
-  let s02 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts,  ts), cmpZ);
-  let s12 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(0.0,  ts), cmpZ);
-  let s22 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts,  ts), cmpZ);
-  return (s00 + s10 + s20 + s01 + s11 + s21 + s02 + s12 + s22) * (1.0 / 9.0);
-}
-
-// ─── Vertex / Fragment ──────────────────────────────────────────────
-
-@vertex fn vs(
-  @location(0) position: vec3f,
-  @location(1) normal: vec3f,
-  @location(2) uv: vec2f,
-  @location(3) joints0: vec4<u32>,
-  @location(4) weights0: vec4<f32>
-) -> VertexOutput {
-  var output: VertexOutput;
-  let pos4 = vec4f(position, 1.0);
-  let weightSum = weights0.x + weights0.y + weights0.z + weights0.w;
-  let invWeightSum = select(1.0, 1.0 / weightSum, weightSum > 0.0001);
-  let nw = select(vec4f(1.0, 0.0, 0.0, 0.0), weights0 * invWeightSum, weightSum > 0.0001);
-  var skinnedPos = vec4f(0.0);
-  var skinnedNrm = vec3f(0.0);
-  for (var i = 0u; i < 4u; i++) {
-    let m = skinMats[joints0[i]];
-    let w = nw[i];
-    skinnedPos += (m * pos4) * w;
-    skinnedNrm += (mat3x3f(m[0].xyz, m[1].xyz, m[2].xyz) * normal) * w;
-  }
-  output.position = camera.projection * camera.view * vec4f(skinnedPos.xyz, 1.0);
-  // Skip VS normalize — interpolation denormalizes anyway, and FS always does normalize(input.normal).
-  output.normal = skinnedNrm;
-  output.uv = uv;
-  output.worldPos = skinnedPos.xyz;
-  return output;
-}
-
-struct FSOut {
-  @location(0) color: vec4f,
-  @location(1) mask: f32,
-};
+const DEFAULT_ROUGHNESS: f32 = 0.5;
 
 @fragment fn fs(input: VertexOutput) -> FSOut {
   let alpha = material.alpha;
@@ -142,30 +19,20 @@ struct FSOut {
 
   let n = normalize(input.normal);
   let v = normalize(camera.viewPos - input.worldPos);
-  let albedo = textureSample(diffuseTexture, diffuseSampler, input.uv).rgb;
-
   let l = -light.lights[0].direction.xyz;
   let sun = light.lights[0].color.xyz * light.lights[0].color.w;
   let amb = light.ambientColor.xyz;
   let shadow = sampleShadow(input.worldPos, n);
 
-  // 原理化BSDF (EEVEE port): metallic=0, specular=0.5, roughness=0.5, specular_tint=0.
-  let NL = max(dot(n, l), 0.0);
-  let NV = max(dot(n, v), 1e-4);
+  let albedo = textureSample(diffuseTexture, diffuseSampler, input.uv).rgb;
 
-  let f0 = vec3f(0.08 * DEFAULT_SPECULAR);
-  let f90 = mix(f0, vec3f(1.0), sqrt(DEFAULT_SPECULAR));
-  let brdf_lut = brdf_lut_sample(NV, ROUGHNESS);
-  let reflection_color = F_brdf_multi_scatter(f0, f90, brdf_lut.xy);
-
-  let spec_direct = bsdf_ggx(n, l, v, NL, NV, ROUGHNESS) * sun * shadow * ltc_brdf_scale_from_lut(brdf_lut);
-  let spec_indirect = amb;
-  let spec_radiance = (spec_direct + spec_indirect) * reflection_color;
-
-  let diffuse_radiance = albedo * (sun * NL * shadow / PI + amb);
+  let color = eval_principled(
+    PrincipledIn(albedo, 0.0, DEFAULT_SPECULAR, DEFAULT_ROUGHNESS, 1e30, 0.0, 0.0),
+    n, l, v, sun, amb, shadow
+  );
 
   var out: FSOut;
-  out.color = vec4f(diffuse_radiance + spec_radiance, alpha);
+  out.color = vec4f(color, alpha);
   out.mask = 1.0;
   return out;
 }

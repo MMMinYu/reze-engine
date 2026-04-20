@@ -480,4 +480,81 @@ fn tint_from_color(color: vec3f) -> vec3f {
   return select(vec3f(1.0), color / lum, lum > 0.0);
 }
 
+// ─── Principled sheen (gpu_shader_material_principled.glsl:8-14) ────
+// Empirical NV-only curve that approximates grazing retroreflection on cloth/velvet.
+// Scales the sheen layer's diffuse contribution; no sheen call site has sheen=0
+// shortcut because the multiplier is tiny at normal view angles anyway.
+fn principled_sheen(NV: f32) -> f32 {
+  let f = 1.0 - NV;
+  return f * f * f * 0.077 + f * 0.01 + 0.00026;
+}
+
+// ─── Principled BSDF eval ───────────────────────────────────────────
+// Shared EEVEE Principled path used by every material in the engine — metallic,
+// dielectric, and sheen variants all fold into these ~15 lines via the struct
+// fields. NPR materials still compute a separate toon/rim/warm stack on top and
+// mix(npr_stack, eval_principled(...), fac); see body.ts / face.ts / etc.
+//
+// Field conventions:
+//   base           — diffuse albedo. Mixed into f0 only when metallic > 0.
+//   metallic       — 0 = dielectric (f0 from specular), 1 = pure metal (f0 = base).
+//   specular       — Principled Specular input (0.5 default → f0 = 0.04). sqrt for f90.
+//   roughness      — GGX roughness; drives BRDF LUT coord + bsdf_ggx.
+//   spec_clamp     — EEVEE Light Clamp equivalent. Caps firefly spec from noise-bumped
+//                    NDF aliasing (Blender hides this via TAA which we don't have).
+//                    Pass 1e30 (effectively disabled) for materials that don't bump.
+//   sheen          — 0 disables. Scales the sheen diffuse add; cloth/stockings use ~0.7.
+//   sheen_tint     — 0 = white sheen, 1 = fully tinted by base. Multiplied by sheen,
+//                    so value is don't-care when sheen=0.
+struct PrincipledIn {
+  base: vec3f,
+  metallic: f32,
+  specular: f32,
+  roughness: f32,
+  spec_clamp: f32,
+  sheen: f32,
+  sheen_tint: f32,
+};
+
+fn eval_principled(
+  p: PrincipledIn,
+  N: vec3f, L: vec3f, V: vec3f,
+  sun_rgb: vec3f, amb_rgb: vec3f, shadow: f32
+) -> vec3f {
+  let NL = max(dot(N, L), 0.0);
+  let NV = max(dot(N, V), 1e-4);
+
+  // f0/f90 per gpu_shader_material_principled.glsl. specular_tint=0 is assumed
+  // (all presets in this engine use the default white dielectric tint).
+  let dielectric_f0 = vec3f(0.08 * p.specular);
+  let f0 = mix(dielectric_f0, p.base, p.metallic);
+  let f90 = mix(f0, vec3f(1.0), sqrt(p.specular));
+
+  // Single LUT tap feeds both F_brdf_multi_scatter (split-sum DFG) and
+  // ltc_brdf_scale_from_lut (LTC mag in .ba). See nodes.ts brdf_lut_sample.
+  let lut = brdf_lut_sample(NV, p.roughness);
+  let reflection_color = F_brdf_multi_scatter(f0, f90, lut.xy);
+
+  // Direct glossy — bsdf_ggx already includes NL; no F applied here (tinted after
+  // accum with reflection_color). ltc_brdf_scale rescales direct to match the
+  // split-sum indirect path, matching EEVEE closure_eval_glossy_lib behavior.
+  let spec_direct_raw = bsdf_ggx(N, L, V, NL, NV, p.roughness)
+                       * sun_rgb * shadow * ltc_brdf_scale_from_lut(lut);
+  let spec_direct = min(spec_direct_raw, vec3f(p.spec_clamp));
+  let spec_indirect = amb_rgb;
+  let spec_radiance = (spec_direct + spec_indirect) * reflection_color;
+
+  // Sheen add — when p.sheen=0 the whole term collapses, leaving diffuse_color=base.
+  let base_tint = tint_from_color(p.base);
+  let sheen_color = mix(vec3f(1.0), base_tint, p.sheen_tint);
+  let diffuse_color = p.base + p.sheen * sheen_color * principled_sheen(NV);
+
+  // diffuse_weight = (1-metallic). Indirect diffuse uses amb (L_w) with no π factor
+  // (probe_evaluate_world_diff returns SH-projected radiance, not cosine-convolved).
+  let diffuse_weight = 1.0 - p.metallic;
+  let diffuse_radiance = diffuse_color * (sun_rgb * NL * shadow / EEVEE_PI + amb_rgb) * diffuse_weight;
+
+  return diffuse_radiance + spec_radiance;
+}
+
 `;
