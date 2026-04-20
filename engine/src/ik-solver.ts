@@ -72,6 +72,20 @@ class IKChain {
   }
 }
 
+// IK-local scratch pool. Safe because solve() runs synchronously and all scratch
+// use completes before the updateWorldMatrix callback is invoked.
+const _ikVec: Vec3[] = [
+  new Vec3(0, 0, 0), new Vec3(0, 0, 0), new Vec3(0, 0, 0), new Vec3(0, 0, 0), new Vec3(0, 0, 0),
+  new Vec3(0, 0, 0), new Vec3(0, 0, 0), new Vec3(0, 0, 0), new Vec3(0, 0, 0),
+]
+const _ikQuat: Quat[] = [
+  new Quat(0, 0, 0, 1), new Quat(0, 0, 0, 1), new Quat(0, 0, 0, 1),
+  new Quat(0, 0, 0, 1), new Quat(0, 0, 0, 1), new Quat(0, 0, 0, 1),
+]
+const _ikMat: Float32Array[] = [
+  new Float32Array(16), new Float32Array(16), new Float32Array(16), new Float32Array(16),
+]
+
 export class IKSolverSystem {
   private static readonly EPSILON = 1.0e-8
   private static readonly THRESHOLD = (88 * Math.PI) / 180
@@ -163,13 +177,13 @@ export class IKSolverSystem {
       if (this.getDistance(ikBoneIndex, targetBoneIndex, worldMatrices) < this.EPSILON) break
     }
 
-    // Apply IK rotations to local rotations
+    // Apply IK rotations to local rotations (mutate localRot in place)
     for (const link of solver.links) {
       const chainInfo = ikChainInfo[link.boneIndex]
       if (chainInfo?.ikRotation) {
         const localRot = localRotations[link.boneIndex]
-        const finalRot = chainInfo.ikRotation.multiply(localRot).normalize()
-        localRot.set(finalRot)
+        Quat.multiplyInto(chainInfo.ikRotation, localRot, localRot)
+        localRot.normalize()
       }
     }
   }
@@ -189,72 +203,95 @@ export class IKSolverSystem {
     updateWorldMatrix?: UpdateWorldMatrixFn
   ): void {
     const chainBoneIndex = chain.boneIndex
-    const chainPosition = this.getWorldTranslation(chainBoneIndex, worldMatrices)
-    const ikPosition = this.getWorldTranslation(ikBoneIndex, worldMatrices)
-    const targetPosition = this.getWorldTranslation(targetBoneIndex, worldMatrices)
 
-    const chainTargetVector = chainPosition.subtract(targetPosition).normalize()
-    const chainIkVector = chainPosition.subtract(ikPosition).normalize()
+    // scratch layout:
+    //   _ikVec[0]=chainPos, [1]=ikPos, [2]=targetPos, [3]=chainTargetVec, [4]=chainIkVec,
+    //           [5]=rotAxis, [6]=finalAxis, [7]=eulerTmp, [8]=limitedEuler
+    //   _ikMat[0]=parentRot, [1]=invParentRot, [2]=quatToMatTmp
+    //   _ikQuat[0]=ikRotation, [1]=combinedRot, [2]=localRotConj, [3..5]=axisAngleTmp
 
-    const chainRotationAxis = chainTargetVector.cross(chainIkVector)
-    if (chainRotationAxis.length() < this.EPSILON) return
+    const chainPos = Vec3.setFromMat4Translation(worldMatrices[chainBoneIndex].values, _ikVec[0])
+    const ikPos = Vec3.setFromMat4Translation(worldMatrices[ikBoneIndex].values, _ikVec[1])
+    const targetPos = Vec3.setFromMat4Translation(worldMatrices[targetBoneIndex].values, _ikVec[2])
 
-    // Get parent's world rotation matrix (translation removed)
-    const parentWorldRotMatrix = this.getParentWorldRotationMatrix(chainBoneIndex, bones, worldMatrices)
+    const chainTargetVec = Vec3.subtractInto(chainPos, targetPos, _ikVec[3])
+    chainTargetVec.normalize()
+    const chainIkVec = Vec3.subtractInto(chainPos, ikPos, _ikVec[4])
+    chainIkVec.normalize()
 
-    let finalRotationAxis: Vec3
+    const rotAxis = Vec3.crossInto(chainTargetVec, chainIkVec, _ikVec[5])
+    if (rotAxis.length() < this.EPSILON) return
+
+    // Parent world rotation matrix (translation removed) into _ikMat[0]
+    this.getParentWorldRotationMatrixInto(chainBoneIndex, bones, worldMatrices, _ikMat[0])
+
+    let finalAxis: Vec3
     if (chain.minimumAngle !== null && useAxis) {
       switch (chain.solveAxis) {
         case InternalSolveAxis.None: {
-          const invParentRot = parentWorldRotMatrix.inverse()
-          finalRotationAxis = this.transformNormal(chainRotationAxis, invParentRot).normalize()
+          if (!Mat4.inverseInto(_ikMat[0], _ikMat[1])) {
+            finalAxis = rotAxis
+          } else {
+            finalAxis = Vec3.transformMat4RotationInto(rotAxis, _ikMat[1], _ikVec[6])
+            finalAxis.normalize()
+          }
           break
         }
         case InternalSolveAxis.X:
         case InternalSolveAxis.Y:
         case InternalSolveAxis.Z: {
-          const m = parentWorldRotMatrix.values
+          const m = _ikMat[0]
           const axisOffset = (chain.solveAxis - InternalSolveAxis.X) * 4
-          const axis = new Vec3(m[axisOffset], m[axisOffset + 1], m[axisOffset + 2])
-          const dot = chainRotationAxis.dot(axis)
-          const sign = dot >= 0 ? 1 : -1
-          finalRotationAxis =
+          const ax = m[axisOffset], ay = m[axisOffset + 1], az = m[axisOffset + 2]
+          const dotA = rotAxis.x * ax + rotAxis.y * ay + rotAxis.z * az
+          const sign = dotA >= 0 ? 1 : -1
+          finalAxis =
             chain.solveAxis === InternalSolveAxis.X
-              ? new Vec3(sign, 0, 0)
+              ? _ikVec[6].setXYZ(sign, 0, 0)
               : chain.solveAxis === InternalSolveAxis.Y
-              ? new Vec3(0, sign, 0)
-              : new Vec3(0, 0, sign)
+              ? _ikVec[6].setXYZ(0, sign, 0)
+              : _ikVec[6].setXYZ(0, 0, sign)
           break
         }
         default:
-          finalRotationAxis = chainRotationAxis
+          finalAxis = rotAxis
       }
     } else {
-      const invParentRot = parentWorldRotMatrix.inverse()
-      finalRotationAxis = this.transformNormal(chainRotationAxis, invParentRot).normalize()
+      if (!Mat4.inverseInto(_ikMat[0], _ikMat[1])) {
+        finalAxis = rotAxis
+      } else {
+        finalAxis = Vec3.transformMat4RotationInto(rotAxis, _ikMat[1], _ikVec[6])
+        finalAxis.normalize()
+      }
     }
 
-    let dot = chainTargetVector.dot(chainIkVector)
-    dot = Math.max(-1.0, Math.min(1.0, dot))
+    let dotTI = chainTargetVec.dot(chainIkVec)
+    dotTI = Math.max(-1.0, Math.min(1.0, dotTI))
 
-    const angle = Math.min(solver.limitAngle * (chainIndex + 1), Math.acos(dot))
-    const ikRotation = Quat.fromAxisAngle(finalRotationAxis, angle)
+    const angle = Math.min(solver.limitAngle * (chainIndex + 1), Math.acos(dotTI))
+    const ikRotation = Quat.fromAxisAngleInto(finalAxis.x, finalAxis.y, finalAxis.z, angle, _ikQuat[0])
 
     const chainInfo = ikChainInfo[chainBoneIndex]
     if (chainInfo) {
-      chainInfo.ikRotation = ikRotation.multiply(chainInfo.ikRotation)
+      // chainInfo.ikRotation = ikRotation * chainInfo.ikRotation (in place)
+      Quat.multiplyInto(ikRotation, chainInfo.ikRotation, chainInfo.ikRotation)
 
-      // Apply angle constraints if present
       if (chain.minimumAngle && chain.maximumAngle) {
         const localRot = localRotations[chainBoneIndex]
         chainInfo.localRotation = localRot.clone()
 
-        const combinedRot = chainInfo.ikRotation.multiply(localRot)
-        const euler = this.extractEulerAngles(combinedRot, chain.rotationOrder)
-        const limited = this.limitEulerAngles(euler, chain.minimumAngle, chain.maximumAngle, useAxis)
-        chainInfo.ikRotation = this.reconstructQuatFromEuler(limited, chain.rotationOrder)
-        // Clone localRot to avoid mutating, then conjugate and normalize
-        chainInfo.ikRotation = chainInfo.ikRotation.multiply(localRot.clone().conjugate().normalize())
+        // combinedRot = chainInfo.ikRotation * localRot
+        Quat.multiplyInto(chainInfo.ikRotation, localRot, _ikQuat[1])
+        // extract euler into _ikVec[7]
+        this.extractEulerAnglesInto(_ikQuat[1], chain.rotationOrder, _ikVec[7])
+        // limit into _ikVec[8]
+        this.limitEulerAnglesInto(_ikVec[7], chain.minimumAngle, chain.maximumAngle, useAxis, _ikVec[8])
+        // reconstruct quat into chainInfo.ikRotation (uses _ikQuat[3..5] as tmp)
+        this.reconstructQuatFromEulerInto(_ikVec[8], chain.rotationOrder, chainInfo.ikRotation)
+        // localRot conjugate into _ikQuat[2] (localRot is unit, so conjugate == inverse)
+        _ikQuat[2].setXYZW(-localRot.x, -localRot.y, -localRot.z, localRot.w)
+        // chainInfo.ikRotation *= localRotConj
+        Quat.multiplyInto(chainInfo.ikRotation, _ikQuat[2], chainInfo.ikRotation)
       }
     }
 
@@ -288,19 +325,28 @@ export class IKSolverSystem {
   }
 
   private static getDistance(boneIndex1: number, boneIndex2: number, worldMatrices: Mat4[]): number {
-    const pos1 = this.getWorldTranslation(boneIndex1, worldMatrices)
-    const pos2 = this.getWorldTranslation(boneIndex2, worldMatrices)
-    return pos1.subtract(pos2).length()
+    const m1 = worldMatrices[boneIndex1].values
+    const m2 = worldMatrices[boneIndex2].values
+    const dx = m1[12] - m2[12]
+    const dy = m1[13] - m2[13]
+    const dz = m1[14] - m2[14]
+    return Math.sqrt(dx * dx + dy * dy + dz * dz)
   }
 
-  private static getWorldTranslation(boneIndex: number, worldMatrices: Mat4[]): Vec3 {
-    const mat = worldMatrices[boneIndex]
-    return new Vec3(mat.values[12], mat.values[13], mat.values[14])
-  }
+  // Euler axis triples for each rotation order (indexed by order enum).
+  // Reused to avoid allocations in reconstructQuatFromEulerInto.
+  private static readonly EULER_AXES: readonly [number, number, number][][] = [
+    // YXZ: Y, X, Z
+    [[0, 1, 0], [1, 0, 0], [0, 0, 1]],
+    // ZYX: Z, Y, X
+    [[0, 0, 1], [0, 1, 0], [1, 0, 0]],
+    // XZY: X, Z, Y
+    [[1, 0, 0], [0, 0, 1], [0, 1, 0]],
+  ]
 
-  private static extractEulerAngles(quat: Quat, order: InternalEulerRotationOrder): Vec3 {
-    const rotMatrix = Mat4.fromQuat(quat.x, quat.y, quat.z, quat.w)
-    const m = rotMatrix.values
+  private static extractEulerAnglesInto(quat: Quat, order: InternalEulerRotationOrder, out: Vec3): void {
+    Mat4.fromQuatInto(quat.x, quat.y, quat.z, quat.w, _ikMat[2], 0)
+    const m = _ikMat[2]
 
     switch (order) {
       case InternalEulerRotationOrder.YXZ: {
@@ -308,81 +354,81 @@ export class IKSolverSystem {
         if (Math.abs(rX) > this.THRESHOLD) rX = rX < 0 ? -this.THRESHOLD : this.THRESHOLD
         let cosX = Math.cos(rX)
         if (cosX !== 0) cosX = 1 / cosX
-        const rY = Math.atan2(m[8] * cosX, m[10] * cosX)
-        const rZ = Math.atan2(m[1] * cosX, m[5] * cosX)
-        return new Vec3(rX, rY, rZ)
+        out.x = rX
+        out.y = Math.atan2(m[8] * cosX, m[10] * cosX)
+        out.z = Math.atan2(m[1] * cosX, m[5] * cosX)
+        return
       }
       case InternalEulerRotationOrder.ZYX: {
         let rY = Math.asin(-m[2])
         if (Math.abs(rY) > this.THRESHOLD) rY = rY < 0 ? -this.THRESHOLD : this.THRESHOLD
         let cosY = Math.cos(rY)
         if (cosY !== 0) cosY = 1 / cosY
-        const rX = Math.atan2(m[6] * cosY, m[10] * cosY)
-        const rZ = Math.atan2(m[1] * cosY, m[0] * cosY)
-        return new Vec3(rX, rY, rZ)
+        out.x = Math.atan2(m[6] * cosY, m[10] * cosY)
+        out.y = rY
+        out.z = Math.atan2(m[1] * cosY, m[0] * cosY)
+        return
       }
       case InternalEulerRotationOrder.XZY: {
         let rZ = Math.asin(-m[4])
         if (Math.abs(rZ) > this.THRESHOLD) rZ = rZ < 0 ? -this.THRESHOLD : this.THRESHOLD
         let cosZ = Math.cos(rZ)
         if (cosZ !== 0) cosZ = 1 / cosZ
-        const rX = Math.atan2(m[6] * cosZ, m[5] * cosZ)
-        const rY = Math.atan2(m[8] * cosZ, m[0] * cosZ)
-        return new Vec3(rX, rY, rZ)
+        out.x = Math.atan2(m[6] * cosZ, m[5] * cosZ)
+        out.y = Math.atan2(m[8] * cosZ, m[0] * cosZ)
+        out.z = rZ
+        return
       }
     }
   }
 
-  private static limitEulerAngles(euler: Vec3, min: Vec3, max: Vec3, useAxis: boolean): Vec3 {
-    return new Vec3(
-      this.limitAngle(euler.x, min.x, max.x, useAxis),
-      this.limitAngle(euler.y, min.y, max.y, useAxis),
-      this.limitAngle(euler.z, min.z, max.z, useAxis)
-    )
+  private static limitEulerAnglesInto(euler: Vec3, min: Vec3, max: Vec3, useAxis: boolean, out: Vec3): void {
+    out.x = this.limitAngle(euler.x, min.x, max.x, useAxis)
+    out.y = this.limitAngle(euler.y, min.y, max.y, useAxis)
+    out.z = this.limitAngle(euler.z, min.z, max.z, useAxis)
   }
 
-  private static reconstructQuatFromEuler(euler: Vec3, order: InternalEulerRotationOrder): Quat {
-    const axes = [
-      [new Vec3(1, 0, 0), new Vec3(0, 1, 0), new Vec3(0, 0, 1)],
-      [new Vec3(0, 0, 1), new Vec3(0, 1, 0), new Vec3(1, 0, 0)],
-      [new Vec3(0, 1, 0), new Vec3(1, 0, 0), new Vec3(0, 0, 1)],
-    ]
+  private static reconstructQuatFromEulerInto(euler: Vec3, order: InternalEulerRotationOrder, out: Quat): void {
+    const axes = this.EULER_AXES[order]
+    const a1 = axes[0], a2 = axes[1], a3 = axes[2]
+    const ang1 =
+      order === InternalEulerRotationOrder.YXZ ? euler.y
+      : order === InternalEulerRotationOrder.ZYX ? euler.z
+      : euler.x
+    const ang2 =
+      order === InternalEulerRotationOrder.YXZ ? euler.x
+      : order === InternalEulerRotationOrder.ZYX ? euler.y
+      : euler.z
+    const ang3 =
+      order === InternalEulerRotationOrder.YXZ ? euler.z
+      : order === InternalEulerRotationOrder.ZYX ? euler.x
+      : euler.y
 
-    const [axis1, axis2, axis3] = axes[order]
-    const [angle1, angle2, angle3] =
-      order === InternalEulerRotationOrder.YXZ
-        ? [euler.y, euler.x, euler.z]
-        : order === InternalEulerRotationOrder.ZYX
-        ? [euler.z, euler.y, euler.x]
-        : [euler.x, euler.z, euler.y]
-
-    let result = Quat.fromAxisAngle(axis1, angle1)
-    result = result.multiply(Quat.fromAxisAngle(axis2, angle2))
-    result = result.multiply(Quat.fromAxisAngle(axis3, angle3))
-    return result
+    // result = axisAngle(a1, ang1); then *= axisAngle(a2, ang2); then *= axisAngle(a3, ang3)
+    Quat.fromAxisAngleInto(a1[0], a1[1], a1[2], ang1, out)
+    Quat.fromAxisAngleInto(a2[0], a2[1], a2[2], ang2, _ikQuat[3])
+    Quat.multiplyInto(out, _ikQuat[3], out)
+    Quat.fromAxisAngleInto(a3[0], a3[1], a3[2], ang3, _ikQuat[3])
+    Quat.multiplyInto(out, _ikQuat[3], out)
   }
 
-  private static getParentWorldRotationMatrix(boneIndex: number, bones: Bone[], worldMatrices: Mat4[]): Mat4 {
+  // Write parent's world rotation (translation stripped) into out Float32Array.
+  private static getParentWorldRotationMatrixInto(
+    boneIndex: number,
+    bones: Bone[],
+    worldMatrices: Mat4[],
+    out: Float32Array
+  ): void {
     const bone = bones[boneIndex]
     if (bone.parentIndex >= 0) {
-      const parentMat = worldMatrices[bone.parentIndex]
-      // Remove translation
-      const rotMat = Mat4.identity()
-      const m = parentMat.values
-      rotMat.values.set([m[0], m[1], m[2], 0, m[4], m[5], m[6], 0, m[8], m[9], m[10], 0, 0, 0, 0, 1])
-      return rotMat
+      Mat4.copyRotationInto(worldMatrices[bone.parentIndex].values, out)
     } else {
-      return Mat4.identity()
+      // Identity
+      out[0] = 1; out[1] = 0; out[2] = 0; out[3] = 0
+      out[4] = 0; out[5] = 1; out[6] = 0; out[7] = 0
+      out[8] = 0; out[9] = 0; out[10] = 1; out[11] = 0
+      out[12] = 0; out[13] = 0; out[14] = 0; out[15] = 1
     }
-  }
-
-  private static transformNormal(normal: Vec3, matrix: Mat4): Vec3 {
-    const m = matrix.values
-    return new Vec3(
-      m[0] * normal.x + m[4] * normal.y + m[8] * normal.z,
-      m[1] * normal.x + m[5] * normal.y + m[9] * normal.z,
-      m[2] * normal.x + m[6] * normal.y + m[10] * normal.z
-    )
   }
 
   private static updateWorldMatrix(
@@ -397,28 +443,35 @@ export class IKSolverSystem {
     const localRot = localRotations[boneIndex]
     const localTrans = localTranslations[boneIndex]
 
-    // Apply IK rotation if available
-    let finalRot = localRot
+    let fx = localRot.x, fy = localRot.y, fz = localRot.z, fw = localRot.w
     if (ikChainInfo) {
       const chainInfo = ikChainInfo[boneIndex]
       if (chainInfo && chainInfo.ikRotation) {
-        finalRot = chainInfo.ikRotation.multiply(localRot).normalize()
+        const ik = chainInfo.ikRotation
+        const nx = ik.w * fx + ik.x * fw + ik.y * fz - ik.z * fy
+        const ny = ik.w * fy - ik.x * fz + ik.y * fw + ik.z * fx
+        const nz = ik.w * fz + ik.x * fy - ik.y * fx + ik.z * fw
+        const nw = ik.w * fw - ik.x * fx - ik.y * fy - ik.z * fz
+        const len = Math.sqrt(nx * nx + ny * ny + nz * nz + nw * nw)
+        const inv = len > 0 ? 1 / len : 0
+        fx = nx * inv; fy = ny * inv; fz = nz * inv; fw = nw * inv
       }
     }
-    const rotateM = Mat4.fromQuat(finalRot.x, finalRot.y, finalRot.z, finalRot.w)
 
-    const localM = Mat4.identity()
-      .translateInPlace(bone.bindTranslation[0], bone.bindTranslation[1], bone.bindTranslation[2])
-      .multiply(rotateM)
-      .translateInPlace(localTrans.x, localTrans.y, localTrans.z)
+    const localMVals = _ikMat[3]
+    Mat4.localTransformInto(
+      bone.bindTranslation[0], bone.bindTranslation[1], bone.bindTranslation[2],
+      fx, fy, fz, fw,
+      localTrans.x, localTrans.y, localTrans.z,
+      localMVals
+    )
 
     const worldMat = worldMatrices[boneIndex]
     if (bone.parentIndex >= 0) {
       const parentMat = worldMatrices[bone.parentIndex]
-      const result = parentMat.multiply(localM)
-      worldMat.values.set(result.values)
+      Mat4.multiplyArrays(parentMat.values, 0, localMVals, 0, worldMat.values, 0)
     } else {
-      worldMat.values.set(localM.values)
+      worldMat.values.set(localMVals)
     }
   }
 }

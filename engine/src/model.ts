@@ -1,4 +1,4 @@
-import { Mat4, Quat, Vec3 } from "./math"
+import { Mat4, Quat, Vec3, scratchMat4Values, scratchQuat } from "./math"
 import { Engine } from "./engine"
 import { joinAssetPath, type AssetReader } from "./asset-reader"
 import { Rigidbody, Joint } from "./physics"
@@ -190,10 +190,6 @@ export class Model {
   // Runtime morph state
   private runtimeMorph!: MorphRuntime
   private morphsDirty: boolean = false // Flag indicating if morphs need to be applied
-
-  // Cached identity matrices to avoid allocations in computeWorldMatrices
-  private cachedIdentityMat1 = Mat4.identity()
-  private cachedIdentityMat2 = Mat4.identity()
 
   // Cached skin matrices array to avoid allocations in getSkinMatrices
   private skinMatricesArray?: Float32Array
@@ -1205,17 +1201,24 @@ export class Model {
     }
 
     // Get base rotation
-    let boneRot = localRot[boneIndex]
+    const baseRot = localRot[boneIndex]
+    let fx = baseRot.x, fy = baseRot.y, fz = baseRot.z, fw = baseRot.w
 
-    // Apply IK rotation if requested
+    // Apply IK rotation if requested: finalRot = ik * base, then normalize
     if (applyIK && ikChainInfo) {
       const chainInfo = ikChainInfo[boneIndex]
       if (chainInfo?.ikRotation) {
-        boneRot = chainInfo.ikRotation.multiply(boneRot).normalize()
+        const ik = chainInfo.ikRotation
+        const nx = ik.w * fx + ik.x * fw + ik.y * fz - ik.z * fy
+        const ny = ik.w * fy - ik.x * fz + ik.y * fw + ik.z * fx
+        const nz = ik.w * fz + ik.x * fy - ik.y * fx + ik.z * fw
+        const nw = ik.w * fw - ik.x * fx - ik.y * fy - ik.z * fz
+        const len = Math.sqrt(nx * nx + ny * ny + nz * nz + nw * nw)
+        const inv = len > 0 ? 1 / len : 0
+        fx = nx * inv; fy = ny * inv; fz = nz * inv; fw = nw * inv
       }
     }
 
-    let rotateM = Mat4.fromQuat(boneRot.x, boneRot.y, boneRot.z, boneRot.w)
     let addLocalTx = 0, addLocalTy = 0, addLocalTz = 0
 
     // Handle append transformations (same logic as computeWorldMatrices)
@@ -1231,26 +1234,29 @@ export class Model {
 
       if (hasRatio) {
         if (b.appendRotate) {
-          // Get append parent's rotation
-          // During IK solving, use only base local rotation (not IK rotations) to avoid
-          // conflicts with IK rotations that are still being computed incrementally
-          // IK rotations will be applied to localRotations after IK solving completes
+          // Recurse first (may touch scratch); all scratch use below happens after it unwinds
           if (appendParentIdx >= 0) {
-            // Compute append parent's world matrix for dependency order, but use base rotation for append
             this.computeSingleBoneWorldMatrix(appendParentIdx, applyIK)
           }
 
-          // Use append parent's base local rotation only (IK rotations are applied after solving)
-          let appendRot = localRot[appendParentIdx]
-
+          const appendRot = localRot[appendParentIdx]
           let ax = appendRot.x, ay = appendRot.y, az = appendRot.z
           const aw = appendRot.w
           const absRatio = ratio < 0 ? -ratio : ratio
           if (ratio < 0) { ax = -ax; ay = -ay; az = -az }
 
-          const appendQuat = new Quat(ax, ay, az, aw)
-          const result = Quat.slerp(Quat.identity(), appendQuat, absRatio)
-          rotateM = Mat4.fromQuat(result.x, result.y, result.z, result.w).multiply(rotateM)
+          // slerp(identity, appendQuat, absRatio) into scratchQuat[1]
+          scratchQuat[0].setXYZW(ax, ay, az, aw)
+          scratchQuat[2].setIdentity()
+          Quat.slerpInto(scratchQuat[2], scratchQuat[0], absRatio, scratchQuat[1])
+
+          // finalRot = slerpResult * finalRot (rotation composition as quat mul)
+          const sx = scratchQuat[1].x, sy = scratchQuat[1].y, sz = scratchQuat[1].z, sw = scratchQuat[1].w
+          const nx = sw * fx + sx * fw + sy * fz - sz * fy
+          const ny = sw * fy - sx * fz + sy * fw + sz * fx
+          const nz = sw * fz + sx * fy - sy * fx + sz * fw
+          const nw = sw * fw - sx * fx - sy * fy - sz * fz
+          fx = nx; fy = ny; fz = nz; fw = nw
         }
 
         if (b.appendMove) {
@@ -1267,18 +1273,21 @@ export class Model {
     const localTy = boneTrans.y + addLocalTy
     const localTz = boneTrans.z + addLocalTz
 
-    this.cachedIdentityMat1
-      .setIdentity()
-      .translateInPlace(b.bindTranslation[0], b.bindTranslation[1], b.bindTranslation[2])
-    this.cachedIdentityMat2.setIdentity().translateInPlace(localTx, localTy, localTz)
-    const localM = this.cachedIdentityMat1.multiply(rotateM).multiply(this.cachedIdentityMat2)
+    // Fused local transform: T_bind · R(finalRot) · T_local → scratchMat4Values[0]
+    const localMVals = scratchMat4Values[0]
+    Mat4.localTransformInto(
+      b.bindTranslation[0], b.bindTranslation[1], b.bindTranslation[2],
+      fx, fy, fz, fw,
+      localTx, localTy, localTz,
+      localMVals
+    )
 
     const worldMat = worldMats[boneIndex]
     if (b.parentIndex >= 0) {
       const parentMat = worldMats[b.parentIndex]
-      Mat4.multiplyArrays(parentMat.values, 0, localM.values, 0, worldMat.values, 0)
+      Mat4.multiplyArrays(parentMat.values, 0, localMVals, 0, worldMat.values, 0)
     } else {
-      worldMat.values.set(localM.values)
+      worldMat.values.set(localMVals)
     }
   }
 
@@ -1302,13 +1311,15 @@ export class Model {
         console.warn(`[RZM] bone ${i} parent out of range: ${b.parentIndex}`)
       }
 
-      const boneRot = localRot[i]
-      let rotateM = Mat4.fromQuat(boneRot.x, boneRot.y, boneRot.z, boneRot.w)
-      let addLocalTx = 0,
-        addLocalTy = 0,
-        addLocalTz = 0
+      // Ensure parent is computed FIRST, before we touch any scratch buffers.
+      // Recursion may itself use scratchMat4Values[0] / scratchQuat; doing it up
+      // front keeps the current frame's scratch slots untouched when we use them below.
+      if (b.parentIndex >= 0 && !computed[b.parentIndex]) computeWorld(b.parentIndex)
 
-      // Optimized append rotation check - only check necessary conditions
+      const boneRot = localRot[i]
+      let fx = boneRot.x, fy = boneRot.y, fz = boneRot.z, fw = boneRot.w
+      let addLocalTx = 0, addLocalTy = 0, addLocalTz = 0
+
       const appendParentIdx = b.appendParentIndex
       const hasAppend =
         b.appendRotate && appendParentIdx !== undefined && appendParentIdx >= 0 && appendParentIdx < boneCount
@@ -1320,19 +1331,22 @@ export class Model {
         if (hasRatio) {
           if (b.appendRotate) {
             const appendRot = localRot[appendParentIdx]
-            let ax = appendRot.x
-            let ay = appendRot.y
-            let az = appendRot.z
+            let ax = appendRot.x, ay = appendRot.y, az = appendRot.z
             const aw = appendRot.w
             const absRatio = ratio < 0 ? -ratio : ratio
-            if (ratio < 0) {
-              ax = -ax
-              ay = -ay
-              az = -az
-            }
-            const appendQuat = new Quat(ax, ay, az, aw)
-            const result = Quat.slerp(Quat.identity(), appendQuat, absRatio)
-            rotateM = Mat4.fromQuat(result.x, result.y, result.z, result.w).multiply(rotateM)
+            if (ratio < 0) { ax = -ax; ay = -ay; az = -az }
+
+            scratchQuat[0].setXYZW(ax, ay, az, aw)
+            scratchQuat[2].setIdentity()
+            Quat.slerpInto(scratchQuat[2], scratchQuat[0], absRatio, scratchQuat[1])
+
+            // finalRot = slerpResult * finalRot (quat mul)
+            const sx = scratchQuat[1].x, sy = scratchQuat[1].y, sz = scratchQuat[1].z, sw = scratchQuat[1].w
+            const nx = sw * fx + sx * fw + sy * fz - sz * fy
+            const ny = sw * fy - sx * fz + sy * fw + sz * fx
+            const nz = sw * fz + sx * fy - sy * fx + sz * fw
+            const nw = sw * fw - sx * fx - sy * fy - sz * fz
+            fx = nx; fy = ny; fz = nz; fw = nw
           }
 
           if (b.appendMove) {
@@ -1345,26 +1359,25 @@ export class Model {
         }
       }
 
-      // Build local matrix: identity + bind translation, then rotation, then local translation, then append translation
       const boneTrans = localTrans[i]
       const localTx = boneTrans.x + addLocalTx
       const localTy = boneTrans.y + addLocalTy
       const localTz = boneTrans.z + addLocalTz
-      this.cachedIdentityMat1
-        .setIdentity()
-        .translateInPlace(b.bindTranslation[0], b.bindTranslation[1], b.bindTranslation[2])
-      this.cachedIdentityMat2.setIdentity().translateInPlace(localTx, localTy, localTz)
-      const localM = this.cachedIdentityMat1.multiply(rotateM).multiply(this.cachedIdentityMat2)
+
+      const localMVals = scratchMat4Values[0]
+      Mat4.localTransformInto(
+        b.bindTranslation[0], b.bindTranslation[1], b.bindTranslation[2],
+        fx, fy, fz, fw,
+        localTx, localTy, localTz,
+        localMVals
+      )
 
       const worldMat = worldMats[i]
       if (b.parentIndex >= 0) {
-        const p = b.parentIndex
-        if (!computed[p]) computeWorld(p)
-        const parentMat = worldMats[p]
-        // Multiply parent world matrix by local matrix
-        Mat4.multiplyArrays(parentMat.values, 0, localM.values, 0, worldMat.values, 0)
+        const parentMat = worldMats[b.parentIndex]
+        Mat4.multiplyArrays(parentMat.values, 0, localMVals, 0, worldMat.values, 0)
       } else {
-        worldMat.values.set(localM.values)
+        worldMat.values.set(localMVals)
       }
       computed[i] = true
     }

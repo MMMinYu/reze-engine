@@ -1,4 +1,11 @@
 import { Quat, Vec3, Mat4 } from "./math"
+
+// Physics-local scratch pool for per-frame sync (syncFromBones, applyAmmoRigidbodiesToBones).
+// Each method uses only these slots and completes synchronously before the next is called.
+const _physMat: Float32Array[] = [
+  new Float32Array(16), new Float32Array(16), new Float32Array(16),
+]
+const _physQuat = new Quat(0, 0, 0, 1)
 import { loadAmmo } from "./ammo-loader"
 import type { AmmoInstance } from "@fred3d/ammo"
 
@@ -500,11 +507,11 @@ export class Physics {
     }
 
     // Step order: 1) Sync Static/Kinematic from bones, 2) Step physics, 3) Apply dynamic to bones
-    this.syncFromBones(boneWorldMatrices, boneInverseBindMatrices, boneCount)
+    this.syncFromBones(boneWorldMatrices, boneCount)
 
     this.stepAmmoPhysics(dt)
 
-    this.applyAmmoRigidbodiesToBones(boneWorldMatrices, boneInverseBindMatrices, boneCount)
+    this.applyAmmoRigidbodiesToBones(boneWorldMatrices, boneCount)
   }
 
   // Compute bodyOffsetMatrixInverse for all rigidbodies (called once during initialization)
@@ -583,7 +590,7 @@ export class Physics {
   }
 
   // Sync Static (FollowBone) and Kinematic rigidbodies to follow bone transforms
-  private syncFromBones(boneWorldMatrices: Mat4[], boneInverseBindMatrices: Float32Array, boneCount: number): void {
+  private syncFromBones(boneWorldMatrices: Mat4[], boneCount: number): void {
     if (!this.ammo || !this.dynamicsWorld) return
 
     const Ammo = this.ammo
@@ -602,16 +609,18 @@ export class Physics {
         const boneIdx = rb.boneIndex
         const boneWorldMat = boneWorldMatrices[boneIdx]
 
-        // nodeWorld = boneWorld × shapeLocal (not shapeLocal × boneWorld)
-        const bodyOffsetMatrix = rb.bodyOffsetMatrix || rb.bodyOffsetMatrixInverse.inverse()
-        const nodeWorldMatrix = boneWorldMat.multiply(bodyOffsetMatrix)
+        // Lazy-cache bodyOffsetMatrix on first hit (cold path).
+        if (!rb.bodyOffsetMatrix) rb.bodyOffsetMatrix = rb.bodyOffsetMatrixInverse.inverse()
 
-        const worldPos = nodeWorldMatrix.getPosition()
-        const worldRot = nodeWorldMatrix.toQuat()
+        // nodeWorld = boneWorld × bodyOffsetMatrix → _physMat[0]
+        Mat4.multiplyArrays(boneWorldMat.values, 0, rb.bodyOffsetMatrix.values, 0, _physMat[0], 0)
+        const nodeVals = _physMat[0]
+        const wx = nodeVals[12], wy = nodeVals[13], wz = nodeVals[14]
+        Mat4.toQuatFromArrayInto(nodeVals, 0, _physQuat)
 
         const transform = new Ammo.btTransform()
-        const pos = new Ammo.btVector3(worldPos.x, worldPos.y, worldPos.z)
-        const quat = new Ammo.btQuaternion(worldRot.x, worldRot.y, worldRot.z, worldRot.w)
+        const pos = new Ammo.btVector3(wx, wy, wz)
+        const quat = new Ammo.btQuaternion(_physQuat.x, _physQuat.y, _physQuat.z, _physQuat.w)
 
         transform.setOrigin(pos)
         transform.setRotation(quat)
@@ -643,11 +652,7 @@ export class Physics {
   }
 
   // Apply dynamic rigidbody world transforms to bone world matrices in-place
-  private applyAmmoRigidbodiesToBones(
-    boneWorldMatrices: Mat4[],
-    boneInverseBindMatrices: Float32Array,
-    boneCount: number
-  ): void {
+  private applyAmmoRigidbodiesToBones(boneWorldMatrices: Mat4[], boneCount: number): void {
     if (!this.ammo || !this.dynamicsWorld) return
 
     for (let i = 0; i < this.rigidbodies.length; i++) {
@@ -663,16 +668,19 @@ export class Physics {
         const origin = transform.getOrigin()
         const rotation = transform.getRotation()
 
-        const nodePos = new Vec3(origin.x(), origin.y(), origin.z())
-        const nodeRot = new Quat(rotation.x(), rotation.y(), rotation.z(), rotation.w())
-        const nodeWorldMatrix = Mat4.fromPositionRotation(nodePos, nodeRot)
+        // nodeWorldMatrix → _physMat[0] (from ammo position/rotation directly)
+        Mat4.fromPositionRotationInto(
+          origin.x(), origin.y(), origin.z(),
+          rotation.x(), rotation.y(), rotation.z(), rotation.w(),
+          _physMat[0]
+        )
 
-        // boneWorld = nodeWorld × bodyOffsetMatrixInverse (not bodyOffsetMatrixInverse × nodeWorld)
-        const boneWorldMat = nodeWorldMatrix.multiply(rb.bodyOffsetMatrixInverse)
+        // boneWorld = nodeWorld × bodyOffsetMatrixInverse → _physMat[1]
+        const boneVals = _physMat[1]
+        Mat4.multiplyArrays(_physMat[0], 0, rb.bodyOffsetMatrixInverse.values, 0, boneVals, 0)
 
-        const values = boneWorldMat.values
-        if (!isNaN(values[0]) && !isNaN(values[15]) && Math.abs(values[0]) < 1e6 && Math.abs(values[15]) < 1e6) {
-          boneWorldMatrices[boneIdx].values.set(values)
+        if (!isNaN(boneVals[0]) && !isNaN(boneVals[15]) && Math.abs(boneVals[0]) < 1e6 && Math.abs(boneVals[15]) < 1e6) {
+          boneWorldMatrices[boneIdx].values.set(boneVals)
         } else {
           console.warn(`[Physics] Invalid bone world matrix for rigidbody ${i} (${rb.name}), skipping update`)
         }
