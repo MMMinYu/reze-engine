@@ -167,6 +167,27 @@ export class Model {
     this._name = value
   }
 
+  // Root transform public API. Instant setters — no tween baked in; wrap in
+  // your own lerp if you need smoothing. Changes are applied on the next
+  // getSkinMatrices() call (once per frame during rendering).
+  get position(): Vec3 {
+    return this._position
+  }
+
+  get rotation(): Quat {
+    return this._rotation
+  }
+
+  setPosition(position: Vec3): void {
+    this._position.set(position)
+    this.rootMatrixDirty = true
+  }
+
+  setRotation(rotation: Quat): void {
+    this._rotation.set(rotation)
+    this.rootMatrixDirty = true
+  }
+
   private vertexData: Float32Array<ArrayBuffer>
   private baseVertexData: Float32Array<ArrayBuffer> // Original vertex data before morphing
   private vertexCount: number
@@ -190,6 +211,16 @@ export class Model {
   // Runtime morph state
   private runtimeMorph!: MorphRuntime
   private morphsDirty: boolean = false // Flag indicating if morphs need to be applied
+
+  // Root transform — model's placement in world space, independent of bones.
+  // Folded into skin matrices (see getSkinMatrices) so every pass (main VS,
+  // shadow VS, any future skinned pass) sees it without per-shader plumbing.
+  // Skip-when-identity flag avoids the extra mat mul per bone when unused.
+  private _position: Vec3 = Vec3.zeros()
+  private _rotation: Quat = Quat.identity()
+  private rootMatrixValues: Float32Array = new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1])
+  private rootMatrixDirty: boolean = false
+  private rootIsIdentity: boolean = true
 
   // Cached skin matrices array to avoid allocations in getSkinMatrices
   private skinMatricesArray?: Float32Array
@@ -683,12 +714,32 @@ export class Model {
 
     const skinMatrices = this.skinMatricesArray
 
-    // Compute skin matrices: skinMatrix = worldMatrix × inverseBindMatrix
-    for (let i = 0; i < boneCount; i++) {
-      const worldMat = worldMats[i]
-      const invBindOffset = i * 16
-      const skinOffset = i * 16
-      Mat4.multiplyArrays(worldMat.values, 0, invBindMats, invBindOffset, skinMatrices, skinOffset)
+    // Rebuild root matrix + cache identity-shortcut flag only when pos/rot changed.
+    if (this.rootMatrixDirty) {
+      const p = this._position, r = this._rotation
+      Mat4.fromPositionRotationInto(p.x, p.y, p.z, r.x, r.y, r.z, r.w, this.rootMatrixValues)
+      this.rootIsIdentity =
+        p.x === 0 && p.y === 0 && p.z === 0 &&
+        r.x === 0 && r.y === 0 && r.z === 0 && r.w === 1
+      this.rootMatrixDirty = false
+    }
+
+    if (this.rootIsIdentity) {
+      // skinMatrix = worldMatrix × inverseBindMatrix
+      for (let i = 0; i < boneCount; i++) {
+        const off = i * 16
+        Mat4.multiplyArrays(worldMats[i].values, 0, invBindMats, off, skinMatrices, off)
+      }
+    } else {
+      // skinMatrix = rootMatrix × worldMatrix × inverseBindMatrix
+      // Two-mul path. scratchMat4Values[1] — [0] is owned by computeWorldMatrices.
+      const rootVals = this.rootMatrixValues
+      const tmp = scratchMat4Values[1]
+      for (let i = 0; i < boneCount; i++) {
+        const off = i * 16
+        Mat4.multiplyArrays(rootVals, 0, worldMats[i].values, 0, tmp, 0)
+        Mat4.multiplyArrays(tmp, 0, invBindMats, off, skinMatrices, off)
+      }
     }
 
     return skinMatrices
