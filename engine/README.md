@@ -27,7 +27,7 @@ npm install reze-engine
 ## Usage
 
 ```javascript
-import { Engine, Vec3 } from "reze-engine"
+import { Engine, Vec3 } from "reze-engine";
 
 const engine = new Engine(canvas, {
   world: { color: new Vec3(0.4, 0.49, 0.65), strength: 1.0 },
@@ -36,17 +36,16 @@ const engine = new Engine(canvas, {
     strength: 2.0,
     direction: new Vec3(0, -0.5, 1),
   },
+  bloom: {
+    color: new Vec3(0.9, 0.1, 0.8),
+    intensity: 0.05,
+    threshold: 0.5,
+  }
   camera: { distance: 31.5, target: new Vec3(0, 11.5, 0) }, // MMD units (1 unit = 8 cm)
-})
-await engine.init()
+});
+await engine.init();
 
-engine.setBloomOptions({
-  color: new Vec3(0.9, 0.1, 0.8),
-  intensity: 0.05,
-  threshold: 0.5,
-})
-
-const model = await engine.loadModel("hero", "/models/hero/hero.pmx")
+const model = await engine.loadModel("hero", "/models/hero/hero.pmx");
 
 // Map PMX material names to NPR presets (unlisted names fall back to `default`).
 engine.setMaterialPresets("hero", {
@@ -58,15 +57,15 @@ engine.setMaterialPresets("hero", {
   cloth_rough: ["jacket", "pants"],
   stockings: ["stockings"],
   metal: ["metal01", "earring"],
-})
+});
 
-await model.loadVmd("idle", "/animations/idle.vmd")
-model.show("idle")
-model.play()
+await model.loadVmd("idle", "/animations/idle.vmd");
+model.show("idle");
+model.play();
 
-engine.setCameraFollow(model, "センター", new Vec3(0, 3.5, 0))
-engine.addGround({ width: 160, height: 160 })
-engine.runRenderLoop()
+engine.setCameraFollow(model, "センター", new Vec3(0, 3.5, 0));
+engine.addGround({ width: 160, height: 160 });
+engine.runRenderLoop();
 ```
 
 ## API
@@ -115,26 +114,30 @@ Use a hidden `<input type="file" webkitdirectory multiple>` (or drag/drop) and p
 2. **`engine.loadModel(name, { files, pmxFile })`** — `pmxFile` selects which `.pmx` when the folder contains several.
 
 ```javascript
-import { Engine, parsePmxFolderInput, pmxFileAtRelativePath } from "reze-engine"
+import {
+  Engine,
+  parsePmxFolderInput,
+  pmxFileAtRelativePath,
+} from "reze-engine";
 
 // In <input onChange>:
-const picked = parsePmxFolderInput(e.target.files)
-e.target.value = ""
+const picked = parsePmxFolderInput(e.target.files);
+e.target.value = "";
 
 if (picked.status === "single") {
   const model = await engine.loadModel("myModel", {
     files: picked.files,
     pmxFile: picked.pmxFile,
-  })
+  });
 }
 
 if (picked.status === "multiple") {
   // Let the user choose `chosenPath` from picked.pmxRelativePaths, then:
-  const pmxFile = pmxFileAtRelativePath(picked.files, chosenPath)
+  const pmxFile = pmxFileAtRelativePath(picked.files, chosenPath);
   const model = await engine.loadModel("myModel", {
     files: picked.files,
     pmxFile,
-  })
+  });
 }
 ```
 
@@ -173,12 +176,12 @@ model.getBoneWorldPosition(name)
 `model.exportVmd(name)` serialises a loaded clip back to the VMD binary format and returns an `ArrayBuffer`. Bone and morph names are Shift-JIS encoded for compatibility with standard MMD tools.
 
 ```javascript
-const buffer = model.exportVmd("idle")
-const blob = new Blob([buffer], { type: "application/octet-stream" })
-const link = document.createElement("a")
-link.href = URL.createObjectURL(blob)
-link.download = "idle.vmd"
-link.click()
+const buffer = model.exportVmd("idle");
+const blob = new Blob([buffer], { type: "application/octet-stream" });
+const link = document.createElement("a");
+link.href = URL.createObjectURL(blob);
+link.download = "idle.vmd";
+link.click();
 ```
 
 #### Playback

@@ -36,15 +36,14 @@ const engine = new Engine(canvas, {
     strength: 2.0,
     direction: new Vec3(0, -0.5, 1),
   },
+  bloom: {
+    color: new Vec3(0.9, 0.1, 0.8),
+    intensity: 0.05,
+    threshold: 0.5,
+  }
   camera: { distance: 31.5, target: new Vec3(0, 11.5, 0) }, // MMD units (1 unit = 8 cm)
 });
 await engine.init();
-
-engine.setBloomOptions({
-  color: new Vec3(0.9, 0.1, 0.8),
-  intensity: 0.05,
-  threshold: 0.5,
-});
 
 const model = await engine.loadModel("hero", "/models/hero/hero.pmx");
 
