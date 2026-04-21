@@ -89,6 +89,7 @@ engine.isMaterialVisible(name, material)
 
 engine.setIKEnabled(enabled)
 engine.setPhysicsEnabled(enabled)
+engine.resetPhysics()                        // re-pose bodies from animation and zero velocities — call when physics explodes
 
 engine.setCameraFollow(model, bone?, offset?)
 engine.setCameraFollow(null)

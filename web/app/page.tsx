@@ -8,8 +8,6 @@ import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
 import { Pause, Play } from "lucide-react"
 
-const IRIS_ANIM = "IRIS OUT"
-
 // Format time as M:SS or MM:SS (with leading zero)
 function formatTime(seconds: number): string {
   const mins = Math.floor(seconds / 60)
@@ -26,10 +24,16 @@ function formatRemainingTime(current: number, duration: number): string {
   return `-${mins}:${secs.toString().padStart(2, "0")}`
 }
 
+/** Scene models: same order as load — transport + seek drive all entries together. */
+const SCENE_MODELS = [
+  { id: "serqet", clip: "m1" },
+  { id: "selene", clip: "m2" },
+] as const
+
 export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const engineRef = useRef<Engine | null>(null)
-  const modelRef = useRef<Model | null>(null)
+  const modelsRef = useRef<Model[]>([])
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const [engineError, setEngineError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -54,8 +58,9 @@ export default function Home() {
     let rafId: number | null = null
 
     const updateProgress = () => {
-      if (modelRef.current && isPlaying && !isPaused) {
-        const prog: AnimationProgress = modelRef.current.getAnimationProgress()
+      const primary = modelsRef.current[0]
+      if (primary && isPlaying && !isPaused) {
+        const prog: AnimationProgress = primary.getAnimationProgress()
         setProgress({
           current: prog.current,
           duration: prog.duration,
@@ -84,7 +89,7 @@ export default function Home() {
 
   // Create and preload audio element on mount
   useEffect(() => {
-    const audio = new Audio("/One More Last Time.wav")
+    const audio = new Audio("/audios/LAYSHA - CHOCOLATE CREAM.wav")
     audio.preload = "auto"
     audio.setAttribute("playsinline", "true")
     audio.setAttribute("webkit-playsinline", "true")
@@ -117,16 +122,16 @@ export default function Home() {
   }, [])
 
   const handlePlay = useCallback(() => {
-    if (!engineRef.current || !modelRef.current) return
-    const prog = modelRef.current.getAnimationProgress()
+    const models = modelsRef.current
+    if (!engineRef.current || models.length === 0) return
+    const prog = models[0].getAnimationProgress()
     if (prog.paused) {
       if (audioRef.current) {
         audioRef.current.muted = false
         audioRef.current.volume = 1.0
         audioRef.current.play().catch(() => {})
       }
-      modelRef.current.play()
-      modelRef.current.setMorphWeight("抗穿模", 0.5)
+      for (const m of models) m.play()
 
       setIsPlaying(true)
       setIsPaused(false)
@@ -140,8 +145,9 @@ export default function Home() {
       audioRef.current.currentTime = atEnd ? 0 : prog.current
       audioRef.current.play().catch(() => {})
     }
-    modelRef.current.play(IRIS_ANIM)
-    modelRef.current.setMorphWeight("抗穿模", 0.5)
+    const atEnd = prog.duration > 0 && prog.current >= prog.duration - 1e-3
+    if (atEnd) for (const m of models) m.seek(0)
+    for (const m of models) m.play()
 
     setIsPlaying(true)
     setIsPaused(false)
@@ -149,7 +155,7 @@ export default function Home() {
 
   const handlePause = useCallback(() => {
     if (engineRef.current) {
-      modelRef.current?.pause()
+      for (const m of modelsRef.current) m.pause()
       if (audioRef.current) {
         audioRef.current.pause()
       }
@@ -162,8 +168,8 @@ export default function Home() {
       if (audioRef.current) {
         audioRef.current.play().catch(() => {})
       }
-      modelRef.current?.play()
-      modelRef.current?.setMorphWeight("抗穿模", 0.5)
+      for (const m of modelsRef.current) m.play()
+      modelsRef.current[0]?.setMorphWeight("抗穿模", 0.5)
       setIsPaused(false)
     }
   }, [])
@@ -172,7 +178,7 @@ export default function Home() {
     (value: number[]) => {
       if (engineRef.current && progress.duration > 0) {
         const seekTime = (value[0] / 100) * progress.duration
-        modelRef.current?.seek(seekTime)
+        for (const m of modelsRef.current) m.seek(seekTime)
         if (audioRef.current) {
           audioRef.current.currentTime = seekTime
         }
@@ -194,6 +200,7 @@ export default function Home() {
     try {
       const engine = new Engine(canvasRef.current, {
         camera: { distance: 31.5, target: new Vec3(0, 11.5, 0) },
+        bloom: { color: new Vec3(0.9, 0.3, 0.6) },
         onRaycast: (modelName: string, material: string | null, screenX: number, screenY: number) => {
           if (material) {
             setMousePosition({ x: screenX, y: screenY })
@@ -206,13 +213,13 @@ export default function Home() {
       engineRef.current = engine
       await engine.init()
 
+      const m1 = await engine.loadModel(SCENE_MODELS[0].id, "/models/塞尔凯特/塞尔凯特.pmx")
+      const m2 = await engine.loadModel(SCENE_MODELS[1].id, "/models/塞勒涅/塞勒涅.pmx")
 
-      const m1 = await engine.loadModel("reze", "/models/塞尔凯特/塞尔凯特.pmx")
+      modelsRef.current = [m1, m2]
 
-      modelRef.current = m1
-
-      engine.setMaterialPresets("reze", {
-        eye: ["眼睛", "眼白", "目白", "右瞳","左瞳","眉毛"],
+      engine.setMaterialPresets(SCENE_MODELS[0].id, {
+        eye: ["眼睛", "眼白", "目白", "右瞳", "左瞳", "眉毛"],
         face: ["脸", "face01"],
         body: ["皮肤", "skin"],
         hair: ["头发", "hair_f"],
@@ -235,25 +242,41 @@ export default function Home() {
           "trigger",
           "dress",
           "hair_accessory",
-          "cloth01_shoes"
+          "cloth01_shoes",
         ],
         stockings: ["袜子", "stockings"],
-        metal: ["metal01","earring"],
+        metal: ["metal01", "earring"],
+      })
+
+      engine.setMaterialPresets(SCENE_MODELS[1].id, {
+        eye: ["目白", "瞳1", "瞳2", "eyebrow", "eyelash"],
+        face: ["face01"],
+        body: ["skin"],
+        hair: ["hair_F"],
+        cloth_smooth: ["cloth_naive", "cloth01_alpha", "cloth01", "skin_cloth"],
+        stockings: ["stocking"],
+        metal: ["metal", "gem", "skin_metal"],
       })
 
       engine.addGround({
         diffuseColor: new Vec3(1, 0.3, 0.6),
       })
 
+      await m1.loadVmd(SCENE_MODELS[0].clip, "/animations/m1.vmd")
+      await m2.loadVmd(SCENE_MODELS[1].clip, "/animations/m2.vmd")
+
       engine.runRenderLoop(() => setStats(engine.getStats()))
 
       await new Promise((resolve) => requestAnimationFrame(resolve))
 
-      await m1.loadVmd(IRIS_ANIM, "/animations/One More Last Time.vmd")
-      m1.show(IRIS_ANIM)
-      console.log(m1.getMaterials())
+      m1.show(SCENE_MODELS[0].clip)
+      m2.show(SCENE_MODELS[1].clip)
 
-      m1.setMorphWeight("抗穿模", 0.5)
+      await new Promise((resolve) => requestAnimationFrame(resolve))
+
+      engine.resetPhysics()
+
+      console.log(m1.getMaterials())
 
       const prog: AnimationProgress = m1.getAnimationProgress()
       setProgress({
@@ -341,7 +364,7 @@ export default function Home() {
 
       {!loading && !engineError && (
         <div className="absolute bottom-4 left-4 right-4 z-[60] pointer-events-auto">
-          <div className="max-w-4xl mx-auto  px-2 pr-4 bg-black/30 backdrop-blur-xs rounded-full outline-none pointer-events-auto">
+          <div className="max-w-4xl mx-auto px-2 pr-4 bg-black/30 backdrop-blur-xs rounded-full outline-none pointer-events-auto">
             <div className="flex items-center gap-3">
               {!isPlaying ? (
                 <Button onClick={handlePlay} size="icon" variant="ghost" aria-label="Play">

@@ -475,6 +475,22 @@ export class Physics {
     return angle
   }
 
+  // Re-snap all rigidbodies to current bone poses and zero velocities / forces.
+  // Use when simulation has diverged (explosion, NaN, extreme external teleport).
+  reset(boneWorldMatrices: Mat4[]): void {
+    if (!this.ammoInitialized || !this.ammo || !this.dynamicsWorld) return
+    if (!this.rigidbodiesInitialized) return
+
+    this.positionBodiesFromBones(boneWorldMatrices, boneWorldMatrices.length)
+
+    if (this.dynamicsWorld.clearForces) {
+      this.dynamicsWorld.clearForces()
+    }
+    if (this.dynamicsWorld.stepSimulation) {
+      this.dynamicsWorld.stepSimulation(0, 0, 0)
+    }
+  }
+
   // Syncs bones to rigidbodies, simulates dynamics, solves constraints
   // Modifies boneWorldMatrices in-place for dynamic rigidbodies that drive bones
   step(dt: number, boneWorldMatrices: Mat4[], boneInverseBindMatrices: Float32Array): void {

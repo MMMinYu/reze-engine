@@ -89,6 +89,7 @@ engine.isMaterialVisible(name, material)
 
 engine.setIKEnabled(enabled)
 engine.setPhysicsEnabled(enabled)
+engine.resetPhysics()                        // re-pose bodies from animation and zero velocities — call when physics explodes
 
 engine.setCameraFollow(model, bone?, offset?)
 engine.setCameraFollow(null)
@@ -114,30 +115,26 @@ Use a hidden `<input type="file" webkitdirectory multiple>` (or drag/drop) and p
 2. **`engine.loadModel(name, { files, pmxFile })`** — `pmxFile` selects which `.pmx` when the folder contains several.
 
 ```javascript
-import {
-  Engine,
-  parsePmxFolderInput,
-  pmxFileAtRelativePath,
-} from "reze-engine";
+import { Engine, parsePmxFolderInput, pmxFileAtRelativePath } from "reze-engine"
 
 // In <input onChange>:
-const picked = parsePmxFolderInput(e.target.files);
-e.target.value = "";
+const picked = parsePmxFolderInput(e.target.files)
+e.target.value = ""
 
 if (picked.status === "single") {
   const model = await engine.loadModel("myModel", {
     files: picked.files,
     pmxFile: picked.pmxFile,
-  });
+  })
 }
 
 if (picked.status === "multiple") {
   // Let the user choose `chosenPath` from picked.pmxRelativePaths, then:
-  const pmxFile = pmxFileAtRelativePath(picked.files, chosenPath);
+  const pmxFile = pmxFileAtRelativePath(picked.files, chosenPath)
   const model = await engine.loadModel("myModel", {
     files: picked.files,
     pmxFile,
-  });
+  })
 }
 ```
 
@@ -176,12 +173,12 @@ model.getBoneWorldPosition(name)
 `model.exportVmd(name)` serialises a loaded clip back to the VMD binary format and returns an `ArrayBuffer`. Bone and morph names are Shift-JIS encoded for compatibility with standard MMD tools.
 
 ```javascript
-const buffer = model.exportVmd("idle");
-const blob = new Blob([buffer], { type: "application/octet-stream" });
-const link = document.createElement("a");
-link.href = URL.createObjectURL(blob);
-link.download = "idle.vmd";
-link.click();
+const buffer = model.exportVmd("idle")
+const blob = new Blob([buffer], { type: "application/octet-stream" })
+const link = document.createElement("a")
+link.href = URL.createObjectURL(blob)
+link.download = "idle.vmd"
+link.click()
 ```
 
 #### Playback

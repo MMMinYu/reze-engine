@@ -1939,6 +1939,17 @@ export class Engine {
     return this.physicsEnabled
   }
 
+  resetPhysics(): void {
+    this.forEachInstance((inst) => {
+      if (!inst.physics) return
+      // Re-pose bones from animation at dt=0 so we don't snap bodies to
+      // whatever exploded state the last physics step wrote into dynamic bones.
+      inst.model.update(0, this.ikEnabled)
+      inst.physics.reset(inst.model.getWorldMatrices())
+      inst.vertexBufferNeedsUpdate = true
+    })
+  }
+
   private forEachInstance(fn: (inst: ModelInstance) => void): void {
     for (const inst of this.modelInstances.values()) fn(inst)
   }
