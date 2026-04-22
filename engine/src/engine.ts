@@ -355,6 +355,7 @@ export class Engine {
 
   private modelInstances = new Map<string, ModelInstance>()
   private materialSampler!: GPUSampler
+  private fallbackMaterialTexture!: GPUTexture
   private textureCache = new Map<string, GPUTexture>()
   private mipBlitPipeline: GPURenderPipeline | null = null
   private mipBlitSampler: GPUSampler | null = null
@@ -678,6 +679,19 @@ export class Engine {
       addressModeU: "repeat",
       addressModeV: "repeat",
     })
+
+    this.fallbackMaterialTexture = this.device.createTexture({
+      label: "fallback material texture (1x1 white)",
+      size: [1, 1],
+      format: "rgba8unorm-srgb",
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    })
+    this.device.queue.writeTexture(
+      { texture: this.fallbackMaterialTexture },
+      new Uint8Array([255, 255, 255, 255]),
+      { bytesPerRow: 4 },
+      [1, 1]
+    )
 
     // Shared vertex buffer layouts
     const fullVertexBuffers: GPUVertexBufferLayout[] = [
@@ -2255,8 +2269,11 @@ export class Engine {
       if (indexCount === 0) continue
       materialId++
 
-      const diffuseTexture = await loadTextureByIndex(mat.diffuseTextureIndex)
-      if (!diffuseTexture) throw new Error(`Material "${mat.name}" has no diffuse texture`)
+      let diffuseTexture = await loadTextureByIndex(mat.diffuseTextureIndex)
+      if (!diffuseTexture) {
+        console.warn(`${prefix}material "${mat.name}" has no loadable diffuse texture — using fallback`)
+        diffuseTexture = this.fallbackMaterialTexture
+      }
 
       const materialAlpha = mat.diffuse[3]
       const isTransparent = materialAlpha < 1.0 - 0.001
