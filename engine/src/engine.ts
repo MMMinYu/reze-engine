@@ -329,7 +329,7 @@ export class Engine {
   private shadowMapDepthView!: GPUTextureView
   private brdfLutTexture!: GPUTexture
   private brdfLutView!: GPUTextureView
-  private static readonly SHADOW_MAP_SIZE = 2048
+  private static readonly SHADOW_MAP_SIZE = 4096
   private shadowDepthPipeline!: GPURenderPipeline
   private shadowLightVPBuffer!: GPUBuffer
   private shadowLightVPMatrix = new Float32Array(16)
