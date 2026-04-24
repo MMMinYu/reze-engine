@@ -115,26 +115,30 @@ Use a hidden `<input type="file" webkitdirectory multiple>` (or drag/drop) and p
 2. **`engine.loadModel(name, { files, pmxFile })`** — `pmxFile` selects which `.pmx` when the folder contains several.
 
 ```javascript
-import { Engine, parsePmxFolderInput, pmxFileAtRelativePath } from "reze-engine"
+import {
+  Engine,
+  parsePmxFolderInput,
+  pmxFileAtRelativePath,
+} from "reze-engine";
 
 // In <input onChange>:
-const picked = parsePmxFolderInput(e.target.files)
-e.target.value = ""
+const picked = parsePmxFolderInput(e.target.files);
+e.target.value = "";
 
 if (picked.status === "single") {
   const model = await engine.loadModel("myModel", {
     files: picked.files,
     pmxFile: picked.pmxFile,
-  })
+  });
 }
 
 if (picked.status === "multiple") {
   // Let the user choose `chosenPath` from picked.pmxRelativePaths, then:
-  const pmxFile = pmxFileAtRelativePath(picked.files, chosenPath)
+  const pmxFile = pmxFileAtRelativePath(picked.files, chosenPath);
   const model = await engine.loadModel("myModel", {
     files: picked.files,
     pmxFile,
-  })
+  });
 }
 ```
 
@@ -162,6 +166,22 @@ model.setMorphWeight(name, weight, ms?)
 model.resetAllBones()
 model.resetAllMorphs()
 model.getBoneWorldPosition(name)
+
+// Direct bone local-transform accessors (used by interactive gizmo drag).
+// Readers return the live runtime state; snapshot with .clone() if needed.
+model.getBoneLocalRotation(boneIndex)
+model.getBoneLocalTranslation(boneIndex)
+
+// Raw absolute-local translation write. NOT the same as moveBones({ n: v }, 0)
+// — moveBones treats input as VMD-relative and converts. Use this when you
+// already have the final local translation. For rotation, rotateBones(..., 0)
+// is already an instant-write equivalent.
+model.setBoneLocalTranslation(boneIndex, vec3)
+
+// Freeze clip re-sampling so direct writes persist across frames. Auto-cleared
+// on play() / seek(). See "Interactive pose editing" below.
+model.setClipApplySuspended(suspended: boolean)
+model.isClipApplySuspended()
 ```
 
 #### Animation data
@@ -173,12 +193,12 @@ model.getBoneWorldPosition(name)
 `model.exportVmd(name)` serialises a loaded clip back to the VMD binary format and returns an `ArrayBuffer`. Bone and morph names are Shift-JIS encoded for compatibility with standard MMD tools.
 
 ```javascript
-const buffer = model.exportVmd("idle")
-const blob = new Blob([buffer], { type: "application/octet-stream" })
-const link = document.createElement("a")
-link.href = URL.createObjectURL(blob)
-link.download = "idle.vmd"
-link.click()
+const buffer = model.exportVmd("idle");
+const blob = new Blob([buffer], { type: "application/octet-stream" });
+const link = document.createElement("a");
+link.href = URL.createObjectURL(blob);
+link.download = "idle.vmd";
+link.click();
 ```
 
 #### Playback
@@ -209,7 +229,8 @@ Blender-style scene config — `world` = environment lighting, `sun` = the direc
     target: Vec3,
     fov: number,       // radians
   },
-  onRaycast: (modelName, material, screenX, screenY) => void,
+  onRaycast: (modelName, material, bone, screenX, screenY) => void,
+  onGizmoDrag: (event: GizmoDragEvent) => void,
   physicsOptions: {
     constraintSolverKeywords: string[],
   },
@@ -219,6 +240,76 @@ Blender-style scene config — `world` = environment lighting, `sun` = the direc
 The shadow map is cast from `sun.direction` — same vector the shader lights with — so visible shading and cast shadows stay coupled.
 
 `engine.setWorld({ color?, strength? })` and `engine.setSun({ color?, strength?, direction? })` update lighting at runtime; changing `sun.direction` refreshes the shadow VP on the next frame.
+
+### Interactive pose editing
+
+Dblclick picks a bone or material; a transform gizmo (rings + axes, local-axis aligned) drags the selection. The engine does NOT write to the skeleton on its own — it fires a callback with the computed target local transform and the host picks a write policy (runtime override, tween, clip keyframe edit).
+
+**Pick callback.** Fires on dblclick. `modelName` is `""` when the click missed the mesh. `material` and `bone` are both resolved for every hit (per-triangle dominant-joint from the GPU pick), so a single handler can serve both material-mode and bone-mode toggles:
+
+```javascript
+onRaycast: (modelName, material, bone, screenX, screenY) => { ... }
+
+engine.setSelectedMaterial(modelName | null, materialName | null) // orange screen-space selection outline
+engine.setSelectedBone(modelName | null, boneName | null)          // shows the rings+axes gizmo at this bone
+```
+
+**Gizmo drag callback.** The engine only reports; you apply:
+
+```typescript
+type GizmoDragEvent = {
+  modelName: string;
+  boneName: string;
+  boneIndex: number;
+  kind: "rotate" | "translate";
+  localRotation: Quat; // target absolute local rotation
+  localTranslation: Vec3; // target absolute local translation
+  phase?: "start" | "end"; // undefined during drag moves
+};
+```
+
+Fires once with `phase: "start"` on mousedown, on every mousemove (no phase), once with `phase: "end"` on mouseup. While drag is active the engine consumes any mouse input inside the gizmo's bounding sphere so camera orbit never conflicts with a drag — mousedown outside the sphere routes to camera as normal.
+
+**Two write strategies**, depending on whether you keep a clip on disk:
+
+```javascript
+// Runtime override (no clip editor — this is what web/page.tsx does).
+onGizmoDrag: (e) => {
+  const model = engine.getModel(e.modelName);
+  if (!model) return;
+  if (e.phase === "start") {
+    model.pause();
+    model.setClipApplySuspended(true); // stop clip re-sampling from wiping the edit
+    return;
+  }
+  if (e.phase === "end") return;
+  if (e.kind === "rotate")
+    model.rotateBones({ [e.boneName]: e.localRotation }, 0); // 0 = instant write
+  else model.setBoneLocalTranslation(e.boneIndex, e.localTranslation);
+};
+// Pressing play/seek auto-clears the suspend flag → animation resumes, edit is lost
+// (expected runtime-override semantic).
+
+// Keyframe edit (animation editor — studio-style).
+onGizmoDrag: (e) => {
+  if (e.phase === "start") {
+    beginUndoGroup();
+    return;
+  }
+  if (e.phase === "end") {
+    commitUndoGroup();
+    return;
+  }
+  const kf = findOrCreateKeyframe(clip, e.boneName, currentFrame);
+  kf.rotation = e.localRotation;
+  kf.translation = e.localTranslation;
+  model.loadClip(clipName, clip);
+  model.seek(currentTime);
+  // The re-sampled clip now produces the edited pose — no suspend flag needed.
+};
+```
+
+Note the asymmetry: rotation uses `rotateBones({ name, q }, 0)` (the tween-based API reduces to an instant write when duration is 0) while translation uses `setBoneLocalTranslation(idx, v)` — `moveBones` can't be used because it converts VMD-relative input to local, and the gizmo's output is already local.
 
 `constraintSolverKeywords` — joints whose name contains any keyword use the Bullet 2.75 constraint solver; all others keep the stable Ammo 2.82+ default. See [babylon-mmd: Fix Constraint Behavior](https://noname0310.github.io/babylon-mmd/docs/reference/runtime/apply-physics-to-mmd-models/#fix-constraint-behavior) for details.
 

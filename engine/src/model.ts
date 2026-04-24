@@ -491,6 +491,41 @@ export class Model {
     return this.skeleton
   }
 
+  // Direct bone local-transform accessors (used by interactive gizmo drag).
+  // Readers return the live runtime state — callers that want a snapshot for
+  // later comparison should `.clone()` the returned Quat / copy the Vec3.
+  getBoneLocalRotation(boneIndex: number): Quat {
+    return this.runtimeSkeleton.localRotations[boneIndex]
+  }
+
+  getBoneLocalTranslation(boneIndex: number): Vec3 {
+    return this.runtimeSkeleton.localTranslations[boneIndex]
+  }
+
+  // Raw absolute-local translation write. NOT equivalent to
+  // `moveBones({ name: v }, 0)` — moveBones treats the input as VMD-relative
+  // (offset from bind pose) and runs convertVMDTranslationToLocal() over it.
+  // Use this when you already have the final local translation (e.g. the
+  // gizmo's computed target). For rotation, just use rotateBones(..., 0).
+  setBoneLocalTranslation(boneIndex: number, v: Vec3): void {
+    const t = this.runtimeSkeleton.localTranslations[boneIndex]
+    t.x = v.x; t.y = v.y; t.z = v.z
+    this.tweenState.transActive[boneIndex] = 0
+  }
+
+  // When true, update() skips applyPoseFromClip, so whatever was last written to
+  // localRotations / localTranslations persists across frames. Used by gizmo drag
+  // and other direct-manipulation flows to prevent the currently-shown clip from
+  // overwriting manual edits each frame. Auto-cleared on play()/seek() so the user
+  // gets back to normal playback without having to manage this flag explicitly.
+  private clipApplySuspended = false
+  setClipApplySuspended(suspended: boolean): void {
+    this.clipApplySuspended = suspended
+  }
+  isClipApplySuspended(): boolean {
+    return this.clipApplySuspended
+  }
+
   // World bone origin (world matrix col3); unknown name → null
   getBoneWorldPosition(boneName: string): Vec3 | null {
     const idx = this.runtimeSkeleton.nameIndex[boneName]
@@ -981,6 +1016,7 @@ export class Model {
   play(name: string): boolean
   play(name: string, options?: AnimationPlayOptions): boolean
   play(name?: string, options?: AnimationPlayOptions): void | boolean {
+    this.clipApplySuspended = false
     if (name === undefined) {
       this.animationState.play()
       return
@@ -1021,6 +1057,7 @@ export class Model {
 
   // Seek by absolute timeline seconds, not frame index.
   seek(seconds: number): void {
+    this.clipApplySuspended = false
     this.animationState.seek(seconds)
   }
 
@@ -1166,7 +1203,7 @@ export class Model {
     this.animationState.update(deltaTime)
     const clip = this.animationState.getCurrentClip()
     const frame = this.animationState.getCurrentFrame()
-    if (clip !== null) {
+    if (clip !== null && !this.clipApplySuspended) {
       this.applyPoseFromClip(clip, frame)
     }
 

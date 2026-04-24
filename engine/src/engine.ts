@@ -1,5 +1,5 @@
 import { Camera } from "./camera"
-import { Mat4, Vec3 } from "./math"
+import { Mat4, Quat, Vec3 } from "./math"
 import { Model } from "./model"
 import { PmxLoader } from "./pmx-loader"
 import { Physics, type PhysicsOptions } from "./physics"
@@ -140,6 +140,33 @@ export const DEFAULT_VIEW_TRANSFORM: ViewTransformOptions = {
   look: "medium_high_contrast",
 }
 
+export type GizmoDragKind = "rotate" | "translate"
+
+export interface GizmoDragEvent {
+  modelName: string
+  boneName: string
+  boneIndex: number
+  kind: GizmoDragKind
+  /** Computed target local rotation (for "rotate") / target local translation (for "translate"). */
+  localRotation: Quat
+  localTranslation: Vec3
+  /** Drag start (mousedown) or end (mouseup). Undefined during drag moves. */
+  phase?: "start" | "end"
+}
+
+/**
+ * Gizmo drag callback. The engine does NOT write to the skeleton on its own —
+ * it only computes the target local rotation / translation for the dragged bone
+ * and fires this callback. The host decides how to apply it (e.g. call
+ * `model.setBoneLocalRotation(boneIndex, localRotation)` for a runtime-only
+ * edit, call `rotateBones({ [boneName]: localRotation }, 0)` for a tweened
+ * write, or mutate an animation clip keyframe and re-seek).
+ *
+ * Fires once with phase="start" on mousedown, on every mousemove (no phase),
+ * and once with phase="end" on mouseup.
+ */
+export type GizmoDragCallback = (event: GizmoDragEvent) => void
+
 export type EngineOptions = {
   world?: WorldOptions
   sun?: SunOptions
@@ -149,6 +176,8 @@ export type EngineOptions = {
   /** View transform (exposure/gamma) applied in composite before/after Filmic. */
   view?: Partial<ViewTransformOptions>
   onRaycast?: RaycastCallback
+  /** See {@link GizmoDragCallback}. */
+  onGizmoDrag?: GizmoDragCallback
   physicsOptions?: PhysicsOptions
 }
 
@@ -265,23 +294,39 @@ export class Engine {
   private gizmoBindGroup0!: GPUBindGroup
   private gizmoColorBindGroups: GPUBindGroup[] = []
   private gizmoPassDescriptor!: GPURenderPassDescriptor
-  private static readonly GIZMO_RING_SEGMENTS = 64
-  // Vertex layout in gizmoVertexBuffer (all line-list):
-  //   [0..6): 3 axis lines   — X, Y, Z (2 verts each)
-  //   [6..134): X ring       — 128 verts (64 segments × 2 endpoints)
-  //   [134..262): Y ring
-  //   [262..390): Z ring
-  private static readonly GIZMO_DRAWS: { first: number; count: number; color: number }[] = [
-    { first: 0, count: 2, color: 0 }, // X axis
-    { first: 2, count: 2, color: 1 }, // Y axis
-    { first: 4, count: 2, color: 2 }, // Z axis
-    { first: 6, count: 128, color: 0 }, // X ring
-    { first: 134, count: 128, color: 1 }, // Y ring
-    { first: 262, count: 128, color: 2 }, // Z ring
-  ]
-  // Gizmo radius as a fraction of viewport half-height at the gizmo's depth.
-  // ~0.18 means the gizmo occupies ~36% of viewport height — matches Blender / Maya feel.
-  private static readonly GIZMO_SCREEN_RADIUS = 0.18
+  private static readonly GIZMO_RING_SEGMENTS = 96
+  private static readonly GIZMO_RING_RADIUS = 0.8
+  // Axis visible length (relative to gizmo size). Extends past ring radius so
+  // the "arrow stub" sticking out of the ring is a comfortable click target.
+  private static readonly GIZMO_AXIS_LENGTH = 1.25
+  // Draw ranges derived from GIZMO_RING_SEGMENTS at init (setupGizmo) so the
+  // segment-count constant is the single source of truth. Axes: 3 × 6 = 18
+  // verts; each ring: SEG × 6 verts.
+  private gizmoDraws!: { first: number; count: number; color: number }[]
+  private static readonly GIZMO_WORLD_SIZE = 1.5
+  private static readonly GIZMO_THICKNESS_PX = 15.0
+  private static readonly GIZMO_PICK_THRESHOLD_PX = 17.0
+
+  // Drag state — set on mousedown if the pointer is over a gizmo handle; cleared
+  // on mouseup. While non-null, the camera is locked and mousemove/up are routed
+  // to the drag handler. All vectors/quats stored are in world / local frames as
+  // indicated; we snapshot "initial" values on drag start so the drag is driven
+  // by mouse-delta relative to the click point (not cumulative frame-to-frame).
+  private gizmoDrag: {
+    kind: "axis" | "ring"
+    axis: 0 | 1 | 2 // local-axis index: 0 = X, 1 = Y, 2 = Z (bone-local)
+    bonePos: Vec3 // gizmo world origin at drag start
+    worldAxis: Vec3 // snapshot of the local axis rotated into world at drag start
+    // Ring drag: in-plane basis vectors (world) perpendicular to worldAxis.
+    basisU: Vec3
+    basisV: Vec3
+    initialLocalRot: Quat
+    initialLocalTrans: Vec3
+    parentWorldRot: Quat // parent bone's world rotation (identity if no parent)
+    parentWorldRotInv: Quat
+    initialAngle: number
+    initialAxisParam: number
+  } | null = null
   private mainPerFrameBindGroupLayout!: GPUBindGroupLayout
   private mainPerInstanceBindGroupLayout!: GPUBindGroupLayout
   private mainPerMaterialBindGroupLayout!: GPUBindGroupLayout
@@ -384,6 +429,7 @@ export class Engine {
   private groundDrawCall: DrawCall | null = null
 
   private onRaycast?: RaycastCallback
+  private onGizmoDrag?: GizmoDragCallback
   private physicsOptions: PhysicsOptions = DEFAULT_ENGINE_OPTIONS.physicsOptions
   private lastTouchTime = 0
   private readonly DOUBLE_TAP_DELAY = 300
@@ -447,6 +493,7 @@ export class Engine {
       fov: options?.camera?.fov ?? d.camera.fov,
     }
     this.onRaycast = options?.onRaycast
+    this.onGizmoDrag = options?.onGizmoDrag
     this.physicsOptions = options?.physicsOptions ?? d.physicsOptions
     this.bloomSettings = Engine.mergeBloomDefaults(options?.bloom)
     this.viewTransform = Engine.mergeViewTransformDefaults(options?.view)
@@ -1499,6 +1546,14 @@ export class Engine {
       this.canvas.addEventListener("dblclick", this.handleCanvasDoubleClick)
       this.canvas.addEventListener("touchend", this.handleCanvasTouch)
     }
+
+    // Gizmo drag. mousedown registered in capture phase so we can consume the
+    // event via stopImmediatePropagation before the camera's mousedown handler
+    // runs (both listen on the canvas). move/up on window so drag tracks even
+    // if the cursor leaves the canvas.
+    this.canvas.addEventListener("mousedown", this.handleGizmoMouseDown, { capture: true })
+    window.addEventListener("mousemove", this.handleGizmoMouseMove)
+    window.addEventListener("mouseup", this.handleGizmoMouseUp)
   }
 
   private handleResize() {
@@ -1756,27 +1811,56 @@ export class Engine {
   }
 
   // Builds the gizmo pipeline, its shared transform bind group, 3 per-color bind
-  // groups (R/G/B), and the packed line-list vertex buffer containing 3 axes +
-  // 3 rings (390 verts total, see GIZMO_DRAWS for vertex ranges).
+  // groups (R/G/B), and the packed triangle-list vertex buffer. Each original
+  // line segment is expanded to 6 verts (2 triangles) carrying (pos, dir, side)
+  // so the VS can extrude to a uniform pixel-width ribbon.
   private setupGizmo() {
-    // Geometry: axes + 3 rings as line-list.
-    const verts: number[] = []
-    // Axes: 3 pairs (line-list endpoints).
-    verts.push(0, 0, 0, 1, 0, 0)
-    verts.push(0, 0, 0, 0, 1, 0)
-    verts.push(0, 0, 0, 0, 0, 1)
-    // Rings at radius 0.8 so axes (radius 1.0) protrude visibly beyond them.
     const SEG = Engine.GIZMO_RING_SEGMENTS
-    const R = 0.8
+    const R = Engine.GIZMO_RING_RADIUS
+    const ringVerts = SEG * 6
+    this.gizmoDraws = [
+      { first: 0, count: 6, color: 0 }, // X axis
+      { first: 6, count: 6, color: 1 }, // Y axis
+      { first: 12, count: 6, color: 2 }, // Z axis
+      { first: 18, count: ringVerts, color: 0 }, // X ring (YZ plane)
+      { first: 18 + ringVerts, count: ringVerts, color: 1 }, // Y ring (XZ plane)
+      { first: 18 + 2 * ringVerts, count: ringVerts, color: 2 }, // Z ring (XY plane)
+    ]
+    const verts: number[] = []
+    // Per-vertex layout: pos(3), segDir(3), side(1), axisT(1) = 8 floats.
+    // axisT encodes "parameter along the axis" for axis verts (0 at center, 1
+    // at tip). Ring verts use -1 as a "not an axis" flag the FS uses to skip
+    // the dash + fade treatment.
+    const pushSeg = (
+      p0: [number, number, number],
+      p1: [number, number, number],
+      t0: number,
+      t1: number,
+    ) => {
+      const d = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]]
+      const dn = [-d[0], -d[1], -d[2]]
+      verts.push(p0[0], p0[1], p0[2], d[0], d[1], d[2], -1, t0)
+      verts.push(p0[0], p0[1], p0[2], d[0], d[1], d[2], 1, t0)
+      verts.push(p1[0], p1[1], p1[2], dn[0], dn[1], dn[2], -1, t1)
+      verts.push(p0[0], p0[1], p0[2], d[0], d[1], d[2], 1, t0)
+      verts.push(p1[0], p1[1], p1[2], dn[0], dn[1], dn[2], 1, t1)
+      verts.push(p1[0], p1[1], p1[2], dn[0], dn[1], dn[2], -1, t1)
+    }
+    // Axes (open). t = 0 at center → 1 at tip. FS dashes + dims the inside-ring part.
+    const L = Engine.GIZMO_AXIS_LENGTH
+    pushSeg([0, 0, 0], [L, 0, 0], 0, 1)
+    pushSeg([0, 0, 0], [0, L, 0], 0, 1)
+    pushSeg([0, 0, 0], [0, 0, L], 0, 1)
+    // Rings (closed). t = -1 signals "not an axis".
     for (let plane = 0; plane < 3; plane++) {
       for (let i = 0; i < SEG; i++) {
         const t0 = (i / SEG) * Math.PI * 2
         const t1 = ((i + 1) / SEG) * Math.PI * 2
         const c0 = Math.cos(t0) * R, s0 = Math.sin(t0) * R
         const c1 = Math.cos(t1) * R, s1 = Math.sin(t1) * R
-        if (plane === 0) verts.push(0, c0, s0, 0, c1, s1) // X ring (YZ plane)
-        else if (plane === 1) verts.push(s0, 0, c0, s1, 0, c1) // Y ring (XZ plane)
-        else verts.push(c0, s0, 0, c1, s1, 0) // Z ring (XY plane)
+        if (plane === 0) pushSeg([0, c0, s0], [0, c1, s1], -1, -1)
+        else if (plane === 1) pushSeg([s0, 0, c0], [s1, 0, c1], -1, -1)
+        else pushSeg([c0, s0, 0], [c1, s1, 0], -1, -1)
       }
     }
     const geom = new Float32Array(verts)
@@ -1787,10 +1871,10 @@ export class Engine {
     })
     this.device.queue.writeBuffer(this.gizmoVertexBuffer, 0, geom)
 
-    // Shared transform buffer — rewritten each frame from the selected bone's world matrix.
+    // Shared transform+viewport+thickness uniform. Rewritten per frame.
     this.gizmoTransformBuffer = this.device.createBuffer({
       label: "gizmo transform",
-      size: 64, // mat4x4f
+      size: 80, // mat4 (64) + vec2 viewport (8) + thickness f32 (4) + pad (4)
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     })
 
@@ -1818,8 +1902,13 @@ export class Engine {
         entryPoint: "vs",
         buffers: [
           {
-            arrayStride: 12,
-            attributes: [{ shaderLocation: 0, offset: 0, format: "float32x3" as GPUVertexFormat }],
+            arrayStride: 8 * 4, // pos(3) + segDir(3) + side(1) + axisT(1) = 8 floats
+            attributes: [
+              { shaderLocation: 0, offset: 0, format: "float32x3" as GPUVertexFormat }, // position
+              { shaderLocation: 1, offset: 3 * 4, format: "float32x3" as GPUVertexFormat }, // segDir
+              { shaderLocation: 2, offset: 6 * 4, format: "float32" as GPUVertexFormat }, // side
+              { shaderLocation: 3, offset: 7 * 4, format: "float32" as GPUVertexFormat }, // axisT
+            ],
           },
         ],
       },
@@ -1836,7 +1925,7 @@ export class Engine {
           },
         ],
       },
-      primitive: { topology: "line-list" },
+      primitive: { topology: "triangle-list", cullMode: "none" },
       multisample: { count: 1 },
     })
 
@@ -1849,11 +1938,13 @@ export class Engine {
       ],
     })
 
-    // R/G/B colors for X/Y/Z. Emissive-range RGB to stay vivid over any composite background.
+    // Vivid game-UI palette. FS applies an edge-to-center alpha falloff so these
+    // full-saturation colors stay readable without feeling flat. Pipeline writes
+    // straight to the LDR swapchain (no tonemap), so values > 1 clamp.
     const colors = [
-      new Float32Array([1.6, 0.15, 0.15, 1.0]), // X (red)
-      new Float32Array([0.15, 1.2, 0.25, 1.0]), // Y (green)
-      new Float32Array([0.3, 0.45, 1.6, 1.0]), // Z (blue)
+      new Float32Array([1.0, 0.24, 0.38, 1.0]), // X: warm red, slight pink
+      new Float32Array([0.35, 0.95, 0.52, 1.0]), // Y: emerald
+      new Float32Array([0.33, 0.62, 1.0, 1.0]), // Z: azure
     ]
     this.gizmoColorBindGroups = []
     for (let i = 0; i < 3; i++) {
@@ -2112,6 +2203,11 @@ export class Engine {
       this.canvas.removeEventListener("dblclick", this.handleCanvasDoubleClick)
       this.canvas.removeEventListener("touchend", this.handleCanvasTouch)
     }
+
+    // Remove gizmo drag listeners
+    this.canvas.removeEventListener("mousedown", this.handleGizmoMouseDown, { capture: true })
+    window.removeEventListener("mousemove", this.handleGizmoMouseMove)
+    window.removeEventListener("mouseup", this.handleGizmoMouseUp)
 
     if (this.resizeObserver) {
       this.resizeObserver.disconnect()
@@ -2878,9 +2974,10 @@ export class Engine {
     epass.end()
   }
 
-  // Writes a world-aligned scaled-and-translated transform for the selected bone
-  // into gizmoTransformBuffer, then runs 6 line-list draw calls (3 axes + 3 rings).
-  // Scale keeps the gizmo at a ~constant screen fraction regardless of zoom.
+  // Writes gizmo transform = T(bonePos) · R(boneWorldRot) · S(GIZMO_WORLD_SIZE),
+  // then runs 6 triangle-list draws (3 axes + 3 rings). Local-axes mode: rotation
+  // aligns rings with the bone's current world orientation, so clicking a ring
+  // rotates around that bone's natural axis.
   private renderGizmoPass(encoder: GPUCommandEncoder, swapchainView: GPUTextureView): void {
     if (!this.selectedBone || !this.camera) return
     const inst = this.modelInstances.get(this.selectedBone.modelName)
@@ -2888,19 +2985,25 @@ export class Engine {
     const worldMats = inst.model.getWorldMatrices()
     if (this.selectedBone.boneIndex >= worldMats.length) return
 
-    const bonePos = worldMats[this.selectedBone.boneIndex].getPosition()
-    const camPos = this.camera.getPosition()
-    const dx = bonePos.x - camPos.x
-    const dy = bonePos.y - camPos.y
-    const dz = bonePos.z - camPos.z
-    const dist = Math.max(0.01, Math.sqrt(dx * dx + dy * dy + dz * dz))
-    // Radius such that the gizmo circle projects to GIZMO_SCREEN_RADIUS × viewport-half-height.
-    const size = dist * Math.tan(this.camera.fov * 0.5) * Engine.GIZMO_SCREEN_RADIUS
+    const boneMat = worldMats[this.selectedBone.boneIndex]
+    const bonePos = boneMat.getPosition()
+    const q = boneMat.toQuat().normalize() // world rotation
+    const s = Engine.GIZMO_WORLD_SIZE
 
-    const m = new Float32Array(16)
-    m[0] = size; m[5] = size; m[10] = size; m[15] = 1
-    m[12] = bonePos.x; m[13] = bonePos.y; m[14] = bonePos.z
-    this.device.queue.writeBuffer(this.gizmoTransformBuffer, 0, m)
+    // Column-major mat4: rotation columns × scale, then translation in col 3.
+    const xx = q.x * q.x, yy = q.y * q.y, zz = q.z * q.z
+    const xy = q.x * q.y, xz = q.x * q.z, yz = q.y * q.z
+    const wx = q.w * q.x, wy = q.w * q.y, wz = q.w * q.z
+    const u = new Float32Array(20)
+    u[0] = s * (1 - 2 * (yy + zz)); u[1] = s * 2 * (xy + wz);     u[2] = s * 2 * (xz - wy);     u[3] = 0
+    u[4] = s * 2 * (xy - wz);       u[5] = s * (1 - 2 * (xx + zz)); u[6] = s * 2 * (yz + wx);   u[7] = 0
+    u[8] = s * 2 * (xz + wy);       u[9] = s * 2 * (yz - wx);     u[10] = s * (1 - 2 * (xx + yy)); u[11] = 0
+    u[12] = bonePos.x; u[13] = bonePos.y; u[14] = bonePos.z; u[15] = 1
+    u[16] = this.canvas.width
+    u[17] = this.canvas.height
+    u[18] = Engine.GIZMO_THICKNESS_PX
+    u[19] = 0
+    this.device.queue.writeBuffer(this.gizmoTransformBuffer, 0, u)
 
     const att = (this.gizmoPassDescriptor.colorAttachments as GPURenderPassColorAttachment[])[0]
     att.view = swapchainView
@@ -2908,11 +3011,340 @@ export class Engine {
     pass.setPipeline(this.gizmoPipeline)
     pass.setBindGroup(0, this.gizmoBindGroup0)
     pass.setVertexBuffer(0, this.gizmoVertexBuffer)
-    for (const d of Engine.GIZMO_DRAWS) {
+    for (const d of this.gizmoDraws) {
       pass.setBindGroup(1, this.gizmoColorBindGroups[d.color])
       pass.draw(d.count, 1, d.first, 0)
     }
     pass.end()
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Gizmo drag — hit test + input handlers + rotation/translation math
+  // ──────────────────────────────────────────────────────────────────
+
+  private rotateVec3ByQuat(v: Vec3, q: Quat): Vec3 {
+    // Standard rodrigues-via-quat formulation. Cheaper than q * v * q_conj.
+    const tx = 2 * (q.y * v.z - q.z * v.y)
+    const ty = 2 * (q.z * v.x - q.x * v.z)
+    const tz = 2 * (q.x * v.y - q.y * v.x)
+    return new Vec3(
+      v.x + q.w * tx + (q.y * tz - q.z * ty),
+      v.y + q.w * ty + (q.z * tx - q.x * tz),
+      v.z + q.w * tz + (q.x * ty - q.y * tx),
+    )
+  }
+
+  private unproject(invVP: Mat4, ndcX: number, ndcY: number, ndcZ: number): Vec3 | null {
+    const m = invVP.values
+    const x = m[0] * ndcX + m[4] * ndcY + m[8] * ndcZ + m[12]
+    const y = m[1] * ndcX + m[5] * ndcY + m[9] * ndcZ + m[13]
+    const z = m[2] * ndcX + m[6] * ndcY + m[10] * ndcZ + m[14]
+    const w = m[3] * ndcX + m[7] * ndcY + m[11] * ndcZ + m[15]
+    if (Math.abs(w) < 1e-9) return null
+    return new Vec3(x / w, y / w, z / w)
+  }
+
+  // World-space ray from camera through a canvas pixel. Uses WebGPU's NDC z ∈ [0,1].
+  private buildMouseRay(px: number, py: number): { origin: Vec3; dir: Vec3 } | null {
+    if (!this.camera) return null
+    const width = this.canvas.clientWidth
+    const height = this.canvas.clientHeight
+    if (width <= 0 || height <= 0) return null
+    const ndcX = (px / width) * 2 - 1
+    const ndcY = -((py / height) * 2 - 1)
+    const view = this.camera.getViewMatrix()
+    const proj = this.camera.getProjectionMatrix()
+    const invVP = proj.multiply(view).inverse()
+    const near = this.unproject(invVP, ndcX, ndcY, 0)
+    const far = this.unproject(invVP, ndcX, ndcY, 1)
+    if (!near || !far) return null
+    return { origin: near, dir: far.subtract(near).normalize() }
+  }
+
+  // Finds the closest gizmo handle to the mouse ray, within `worldThreshold`.
+  // `worldAxes[i]` is the i-th local axis rotated into world by bone world rotation.
+  private hitTestGizmo(
+    ray: { origin: Vec3; dir: Vec3 },
+    bonePos: Vec3,
+    gizmoSize: number,
+    worldThreshold: number,
+    worldAxes: [Vec3, Vec3, Vec3],
+  ): { kind: "axis" | "ring"; axis: 0 | 1 | 2 } | null {
+    let bestKind: "axis" | "ring" | null = null
+    let bestAxis: 0 | 1 | 2 = 0
+    let bestDist = worldThreshold
+
+    // Axes only hit on their OUTER portion (past the ring radius). Inside the
+    // ring the axis line passes through the plane of the perpendicular ring
+    // (e.g. X-axis passes through the interior of the Y ring), so including the
+    // full axis produced ring-vs-axis ties and constant misclicks. Axis extends
+    // to AXIS_LENGTH, so the hit zone is roughly half the visible axis length —
+    // easy to grab while leaving the ring's interior unambiguous.
+    const axisHitStart = gizmoSize * (Engine.GIZMO_RING_RADIUS + 0.05)
+    const axisHitEnd = gizmoSize * Engine.GIZMO_AXIS_LENGTH
+    for (let i = 0; i < 3; i++) {
+      const segA = bonePos.add(worldAxes[i].scale(axisHitStart))
+      const segB = bonePos.add(worldAxes[i].scale(axisHitEnd))
+      const d = this.distSegmentRay(segA, segB, ray.origin, ray.dir)
+      if (d < bestDist) {
+        bestDist = d
+        bestKind = "axis"
+        bestAxis = i as 0 | 1 | 2
+      }
+    }
+
+    const ringR = gizmoSize * Engine.GIZMO_RING_RADIUS
+    for (let i = 0; i < 3; i++) {
+      const n = worldAxes[i]
+      const denom = ray.dir.dot(n)
+      if (Math.abs(denom) < 1e-6) continue
+      const t = bonePos.subtract(ray.origin).dot(n) / denom
+      if (t < 0) continue
+      const hit = ray.origin.add(ray.dir.scale(t))
+      const rel = hit.subtract(bonePos)
+      const radial = rel.subtract(n.scale(rel.dot(n)))
+      const radius = radial.length()
+      const d = Math.abs(radius - ringR)
+      if (d < bestDist) {
+        bestDist = d
+        bestKind = "ring"
+        bestAxis = i as 0 | 1 | 2
+      }
+    }
+
+    return bestKind ? { kind: bestKind, axis: bestAxis } : null
+  }
+
+  // Shortest distance between segment [A, B] and ray (origin, dir-unit).
+  private distSegmentRay(A: Vec3, B: Vec3, rayO: Vec3, rayD: Vec3): number {
+    const u = B.subtract(A) // segment direction (not normalized)
+    const w = A.subtract(rayO)
+    const a = u.dot(u)
+    const b = u.dot(rayD)
+    const d = u.dot(w)
+    const e = rayD.dot(w)
+    const denom = a - b * b // since |rayD|=1
+    let sc: number, tc: number
+    if (Math.abs(denom) < 1e-9) {
+      sc = 0
+      tc = e
+    } else {
+      sc = (b * e - d) / denom
+      tc = (a * e - b * d) / denom
+    }
+    sc = Math.max(0, Math.min(1, sc))
+    if (tc < 0) tc = 0
+    const ps = new Vec3(A.x + sc * u.x, A.y + sc * u.y, A.z + sc * u.z)
+    const pr = new Vec3(rayO.x + tc * rayD.x, rayO.y + tc * rayD.y, rayO.z + tc * rayD.z)
+    return ps.subtract(pr).length()
+  }
+
+  // Line-line closest point: returns the parameter t on line (A, dir) where the
+  // closest approach to the ray is. Used by axis-translation drag so frame N
+  // reads a signed delta vs the mouse-down snapshot.
+  private closestParamOnAxisLine(A: Vec3, dir: Vec3, rayO: Vec3, rayD: Vec3): number {
+    const w = A.subtract(rayO)
+    const b = dir.dot(rayD)
+    const d = dir.dot(w)
+    const e = rayD.dot(w)
+    const denom = 1 - b * b // |dir|=|rayD|=1
+    if (Math.abs(denom) < 1e-9) return -d // lines parallel
+    return (b * e - d) / denom
+  }
+
+  // Ray-vs-plane (point bonePos, normal n). Returns the hit point or null.
+  private rayPlane(rayO: Vec3, rayD: Vec3, bonePos: Vec3, n: Vec3): Vec3 | null {
+    const denom = rayD.dot(n)
+    if (Math.abs(denom) < 1e-6) return null
+    const t = bonePos.subtract(rayO).dot(n) / denom
+    if (t < 0) return null
+    return rayO.add(rayD.scale(t))
+  }
+
+  // 2D angle of `hit` around `bonePos` in a plane spanned by (u, v). Basis vectors
+  // are snapshotted at drag start so the angle frame is stable even if the bone
+  // (and gizmo visual) rotates during the drag.
+  private angleInRingPlane(hit: Vec3, bonePos: Vec3, u: Vec3, v: Vec3): number {
+    const rel = hit.subtract(bonePos)
+    return Math.atan2(rel.dot(v), rel.dot(u))
+  }
+
+  private handleGizmoMouseDown = (e: MouseEvent) => {
+    if (!this.selectedBone || !this.camera || !this.device || e.button !== 0) return
+    const inst = this.modelInstances.get(this.selectedBone.modelName)
+    if (!inst) return
+    const worldMats = inst.model.getWorldMatrices()
+    const boneMat = worldMats[this.selectedBone.boneIndex]
+    if (!boneMat) return
+    const bonePos = boneMat.getPosition()
+    const boneWorldRot = boneMat.toQuat().normalize()
+
+    const rect = this.canvas.getBoundingClientRect()
+    const px = e.clientX - rect.left
+    const py = e.clientY - rect.top
+    const ray = this.buildMouseRay(px, py)
+    if (!ray) return
+
+    const gizmoSize = Engine.GIZMO_WORLD_SIZE
+
+    // Bounding-sphere check: if the mouse ray passes inside an imaginary sphere
+    // around the gizmo, ALWAYS consume the event — so the user never accidentally
+    // orbits the camera while trying to click near a handle. Outside the sphere,
+    // let the camera handler take over as normal.
+    const sphereR = gizmoSize * Engine.GIZMO_AXIS_LENGTH * 1.05
+    const f = ray.origin.subtract(bonePos)
+    const fd = f.dot(ray.dir)
+    const rayInsideSphere = fd * fd - (f.dot(f) - sphereR * sphereR) >= 0
+    if (!rayInsideSphere) return
+
+    // We're inside the gizmo's claim area — the event is ours regardless of hit.
+    e.stopImmediatePropagation()
+    e.preventDefault()
+
+    // Pick threshold stays pixel-based — clicking should feel the same at any zoom.
+    const camPos = this.camera.getPosition()
+    const dist = Math.max(0.01, bonePos.subtract(camPos).length())
+    const worldPerPixel = (dist * Math.tan(this.camera.fov * 0.5) * 2) / Math.max(1, this.canvas.clientHeight)
+    const worldThreshold = Engine.GIZMO_PICK_THRESHOLD_PX * worldPerPixel
+
+    // World-rotated local axes (where the visible gizmo arms actually point).
+    const worldAxes: [Vec3, Vec3, Vec3] = [
+      this.rotateVec3ByQuat(new Vec3(1, 0, 0), boneWorldRot),
+      this.rotateVec3ByQuat(new Vec3(0, 1, 0), boneWorldRot),
+      this.rotateVec3ByQuat(new Vec3(0, 0, 1), boneWorldRot),
+    ]
+
+    const hit = this.hitTestGizmo(ray, bonePos, gizmoSize, worldThreshold, worldAxes)
+    if (!hit) return // Inside sphere but didn't hit a handle — event consumed, no drag.
+
+    this.camera.setInputLocked(true)
+
+    const parentIdx = inst.model.getSkeleton().bones[this.selectedBone.boneIndex].parentIndex
+    const parentWorldRot =
+      parentIdx >= 0 && parentIdx < worldMats.length ? worldMats[parentIdx].toQuat().normalize() : Quat.identity()
+    const parentWorldRotInv = parentWorldRot.clone().conjugate()
+
+    const worldAxis = worldAxes[hit.axis]
+    // In-plane basis for the ring: u/v are the OTHER two world-rotated axes.
+    //   X ring (normal X) → (u=Y, v=Z); Y ring → (u=Z, v=X); Z ring → (u=X, v=Y)
+    const basisU = hit.axis === 0 ? worldAxes[1] : hit.axis === 1 ? worldAxes[2] : worldAxes[0]
+    const basisV = hit.axis === 0 ? worldAxes[2] : hit.axis === 1 ? worldAxes[0] : worldAxes[1]
+
+    let initialAngle = 0
+    let initialAxisParam = 0
+    if (hit.kind === "ring") {
+      const p = this.rayPlane(ray.origin, ray.dir, bonePos, worldAxis)
+      if (p) initialAngle = this.angleInRingPlane(p, bonePos, basisU, basisV)
+    } else {
+      initialAxisParam = this.closestParamOnAxisLine(bonePos, worldAxis, ray.origin, ray.dir)
+    }
+
+    const initialLocalRot = inst.model.getBoneLocalRotation(this.selectedBone.boneIndex).clone()
+    const initTrans = inst.model.getBoneLocalTranslation(this.selectedBone.boneIndex)
+    const initialLocalTrans = new Vec3(initTrans.x, initTrans.y, initTrans.z)
+
+    this.gizmoDrag = {
+      kind: hit.kind,
+      axis: hit.axis,
+      bonePos,
+      worldAxis,
+      basisU,
+      basisV,
+      initialLocalRot,
+      initialLocalTrans,
+      parentWorldRot,
+      parentWorldRotInv,
+      initialAngle,
+      initialAxisParam,
+    }
+
+    if (this.onGizmoDrag) {
+      this.onGizmoDrag({
+        modelName: this.selectedBone.modelName,
+        boneName: this.selectedBone.boneName,
+        boneIndex: this.selectedBone.boneIndex,
+        kind: hit.kind === "ring" ? "rotate" : "translate",
+        localRotation: initialLocalRot.clone(),
+        localTranslation: new Vec3(initialLocalTrans.x, initialLocalTrans.y, initialLocalTrans.z),
+        phase: "start",
+      })
+    }
+  }
+
+  private handleGizmoMouseMove = (e: MouseEvent) => {
+    const drag = this.gizmoDrag
+    if (!drag || !this.selectedBone || !this.camera) return
+    const inst = this.modelInstances.get(this.selectedBone.modelName)
+    if (!inst) return
+
+    const rect = this.canvas.getBoundingClientRect()
+    const px = e.clientX - rect.left
+    const py = e.clientY - rect.top
+    const ray = this.buildMouseRay(px, py)
+    if (!ray) return
+
+    // Compute the target local rotation / translation. The engine never writes
+    // to the skeleton itself — we hand the result to the host callback and let
+    // it decide (runtime write, tween, clip keyframe edit, …).
+    let nextRot = drag.initialLocalRot
+    let nextTrans = drag.initialLocalTrans
+    if (drag.kind === "ring") {
+      const p = this.rayPlane(ray.origin, ray.dir, drag.bonePos, drag.worldAxis)
+      if (!p) return
+      const currentAngle = this.angleInRingPlane(p, drag.bonePos, drag.basisU, drag.basisV)
+      const deltaAngle = currentAngle - drag.initialAngle
+      const qWorld = Quat.fromAxisAngle(drag.worldAxis, deltaAngle)
+      // L_new = P_inv · Q_world · P · L_initial
+      const lNew = drag.parentWorldRotInv
+        .multiply(qWorld)
+        .multiply(drag.parentWorldRot)
+        .multiply(drag.initialLocalRot)
+      lNew.normalize()
+      nextRot = lNew
+    } else {
+      const tNow = this.closestParamOnAxisLine(drag.bonePos, drag.worldAxis, ray.origin, ray.dir)
+      const deltaParam = tNow - drag.initialAxisParam
+      const worldDelta = drag.worldAxis.scale(deltaParam)
+      const localDelta = this.rotateVec3ByQuat(worldDelta, drag.parentWorldRotInv)
+      nextTrans = new Vec3(
+        drag.initialLocalTrans.x + localDelta.x,
+        drag.initialLocalTrans.y + localDelta.y,
+        drag.initialLocalTrans.z + localDelta.z,
+      )
+    }
+
+    this.onGizmoDrag?.({
+      modelName: this.selectedBone.modelName,
+      boneName: this.selectedBone.boneName,
+      boneIndex: this.selectedBone.boneIndex,
+      kind: drag.kind === "ring" ? "rotate" : "translate",
+      localRotation: nextRot,
+      localTranslation: nextTrans,
+    })
+  }
+
+  private handleGizmoMouseUp = () => {
+    const drag = this.gizmoDrag
+    if (!drag) return
+    if (this.onGizmoDrag && this.selectedBone) {
+      const inst = this.modelInstances.get(this.selectedBone.modelName)
+      if (inst) {
+        const finalRot = inst.model.getBoneLocalRotation(this.selectedBone.boneIndex).clone()
+        const t = inst.model.getBoneLocalTranslation(this.selectedBone.boneIndex)
+        const finalTrans = new Vec3(t.x, t.y, t.z)
+        this.onGizmoDrag({
+          modelName: this.selectedBone.modelName,
+          boneName: this.selectedBone.boneName,
+          boneIndex: this.selectedBone.boneIndex,
+          kind: drag.kind === "ring" ? "rotate" : "translate",
+          localRotation: finalRot,
+          localTranslation: finalTrans,
+          phase: "end",
+        })
+      }
+    }
+    this.gizmoDrag = null
+    this.camera?.setInputLocked(false)
   }
 
   private renderPickPass(encoder: GPUCommandEncoder): void {

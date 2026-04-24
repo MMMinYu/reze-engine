@@ -9,6 +9,9 @@ export {
   type LoadModelFromFilesOptions,
   type MaterialPreset,
   type MaterialPresetMap,
+  type GizmoDragEvent,
+  type GizmoDragCallback,
+  type GizmoDragKind,
 } from "./engine"
 export { parsePmxFolderInput, pmxFileAtRelativePath, type PmxFolderInputResult } from "./folder-upload"
 export { Model } from "./model"

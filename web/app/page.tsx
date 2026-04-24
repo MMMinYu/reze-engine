@@ -46,50 +46,7 @@ export default function Home() {
     playing: false,
     paused: false,
   })
-  const [selectedMaterial, setSelectedMaterial] = useState<string | null>(null)
-  const [selectedBone, setSelectedBone] = useState<string | null>(null)
-  // "material" | "bone" — governs what a dblclick selects. Default bone while we
-  // build out the animation editor. Kept in a ref so the engine's onRaycast
-  // closure (captured once at Engine construction) always reads the latest mode.
-  const [pickMode, setPickMode] = useState<"material" | "bone">("bone")
-  const pickModeRef = useRef(pickMode)
-  useEffect(() => {
-    pickModeRef.current = pickMode
-  }, [pickMode])
-  const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 })
-  const [rippleId, setRippleId] = useState(0)
   const seekResetRafRef = useRef<number | null>(null)
-
-  // Clear both selections whenever mode flips, so stale highlights don't persist.
-  useEffect(() => {
-    setSelectedMaterial(null)
-    setSelectedBone(null)
-    engineRef.current?.setSelectedMaterial(null, null)
-    engineRef.current?.setSelectedBone(null, null)
-  }, [pickMode])
-
-  const handleRaycast = useCallback(
-    (modelName: string, material: string | null, bone: string | null, screenX: number, screenY: number) => {
-      if (modelName) {
-        setMousePosition({ x: screenX, y: screenY })
-        setRippleId((prev) => prev + 1)
-      }
-      if (pickModeRef.current === "material") {
-        setSelectedMaterial(material)
-        setSelectedBone(null)
-        engineRef.current?.setSelectedMaterial(modelName || null, material)
-        engineRef.current?.setSelectedBone(null, null)
-        console.log("picked material:", modelName, material)
-      } else {
-        setSelectedBone(bone)
-        setSelectedMaterial(null)
-        engineRef.current?.setSelectedMaterial(null, null)
-        engineRef.current?.setSelectedBone(modelName || null, bone)
-        console.log("picked bone:", modelName, bone)
-      }
-    },
-    [],
-  )
 
   // Sync progress from model (current/duration in seconds, name)
   useEffect(() => {
@@ -248,7 +205,6 @@ export default function Home() {
       const engine = new Engine(canvasRef.current, {
         camera: { distance: 31.5, target: new Vec3(0, 11.5, 0) },
         bloom: { color: new Vec3(0.9, 0.3, 0.6) },
-        onRaycast: handleRaycast,
       })
       engineRef.current = engine
       await engine.init()
@@ -302,8 +258,6 @@ export default function Home() {
       await new Promise((resolve) => requestAnimationFrame(resolve))
 
       engine.resetPhysics()
-
-      console.log(m1.getMaterials())
 
       const prog: AnimationProgress = m1.getAnimationProgress()
       setProgress({
@@ -362,30 +316,6 @@ export default function Home() {
         </div>
       )}
       {loading && !engineError && <Loading loading={loading} />}
-
-      {selectedMaterial && (
-        <div
-          key={rippleId}
-          className="absolute pointer-events-none z-2"
-          style={{
-            left: mousePosition.x - 35,
-            top: mousePosition.y - 35,
-            width: 70,
-            height: 70,
-          }}
-        >
-          <div
-            className="w-full h-full rounded-full"
-            style={{
-              background:
-                "radial-gradient(circle, rgba(255,59,48,1) 0%, rgba(255,59,48,0.9) 20%, rgba(255,59,48,0.7) 40%, rgba(255,59,48,0.6) 60%, rgba(255,59,48,0.1) 80%, transparent 100%)",
-              boxShadow:
-                "0 0 35px rgba(255,59,48,1.0), 0 0 70px rgba(255,59,48,0.7), inset 0 0 25px rgba(255,59,48,0.5)",
-              animation: "ripple 0.5s ease-out forwards",
-            }}
-          />
-        </div>
-      )}
 
       <canvas ref={canvasRef} className="absolute inset-0 w-full h-full touch-none pointer-events-auto z-1" />
 

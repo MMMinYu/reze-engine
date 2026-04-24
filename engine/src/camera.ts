@@ -16,6 +16,7 @@ export class Camera {
 
   // Input state
   private canvas: HTMLCanvasElement | null = null
+  private inputLocked: boolean = false
   private isDragging: boolean = false
   private mouseButton: number | null = null // Track which mouse button is pressed (0 = left, 2 = right)
   private lastMousePos = { x: 0, y: 0 }
@@ -176,13 +177,24 @@ export class Camera {
     this.canvas = null
   }
 
+  setInputLocked(locked: boolean) {
+    this.inputLocked = locked
+    if (locked) {
+      this.isDragging = false
+      this.isPinching = false
+      this.touchIdentifier = null
+    }
+  }
+
   private onMouseDown(e: MouseEvent) {
+    if (this.inputLocked) return
     this.isDragging = true
     this.mouseButton = e.button
     this.lastMousePos = { x: e.clientX, y: e.clientY }
   }
 
   private onMouseMove(e: MouseEvent) {
+    if (this.inputLocked) return
     if (!this.isDragging) return
 
     const deltaX = e.clientX - this.lastMousePos.x
@@ -224,6 +236,7 @@ export class Camera {
   }
 
   private onTouchStart(e: TouchEvent) {
+    if (this.inputLocked) return
     e.preventDefault()
 
     if (e.touches.length === 1) {
@@ -253,6 +266,7 @@ export class Camera {
   }
 
   private onTouchMove(e: TouchEvent) {
+    if (this.inputLocked) return
     e.preventDefault()
 
     if (this.isPinching && e.touches.length === 2) {
