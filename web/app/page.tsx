@@ -25,10 +25,7 @@ function formatRemainingTime(current: number, duration: number): string {
 }
 
 /** Scene models: same order as load — transport + seek drive all entries together. */
-const SCENE_MODELS = [
-  { id: "serqet", clip: "m1" },
-  { id: "selene", clip: "m2" },
-] as const
+const SCENE_MODELS = [{ id: "serqet", clip: "m1" }] as const
 
 export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -50,9 +47,49 @@ export default function Home() {
     paused: false,
   })
   const [selectedMaterial, setSelectedMaterial] = useState<string | null>(null)
+  const [selectedBone, setSelectedBone] = useState<string | null>(null)
+  // "material" | "bone" — governs what a dblclick selects. Default bone while we
+  // build out the animation editor. Kept in a ref so the engine's onRaycast
+  // closure (captured once at Engine construction) always reads the latest mode.
+  const [pickMode, setPickMode] = useState<"material" | "bone">("bone")
+  const pickModeRef = useRef(pickMode)
+  useEffect(() => {
+    pickModeRef.current = pickMode
+  }, [pickMode])
   const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 })
   const [rippleId, setRippleId] = useState(0)
   const seekResetRafRef = useRef<number | null>(null)
+
+  // Clear both selections whenever mode flips, so stale highlights don't persist.
+  useEffect(() => {
+    setSelectedMaterial(null)
+    setSelectedBone(null)
+    engineRef.current?.setSelectedMaterial(null, null)
+    engineRef.current?.setSelectedBone(null, null)
+  }, [pickMode])
+
+  const handleRaycast = useCallback(
+    (modelName: string, material: string | null, bone: string | null, screenX: number, screenY: number) => {
+      if (modelName) {
+        setMousePosition({ x: screenX, y: screenY })
+        setRippleId((prev) => prev + 1)
+      }
+      if (pickModeRef.current === "material") {
+        setSelectedMaterial(material)
+        setSelectedBone(null)
+        engineRef.current?.setSelectedMaterial(modelName || null, material)
+        engineRef.current?.setSelectedBone(null, null)
+        console.log("picked material:", modelName, material)
+      } else {
+        setSelectedBone(bone)
+        setSelectedMaterial(null)
+        engineRef.current?.setSelectedMaterial(null, null)
+        engineRef.current?.setSelectedBone(modelName || null, bone)
+        console.log("picked bone:", modelName, bone)
+      }
+    },
+    [],
+  )
 
   // Sync progress from model (current/duration in seconds, name)
   useEffect(() => {
@@ -90,7 +127,7 @@ export default function Home() {
 
   // Create and preload audio element on mount
   useEffect(() => {
-    const audio = new Audio("/audios/LAYSHA - CHOCOLATE CREAM.wav")
+    const audio = new Audio("/audios/One More Last Time.wav")
     audio.preload = "auto"
     audio.setAttribute("playsinline", "true")
     audio.setAttribute("webkit-playsinline", "true")
@@ -211,22 +248,14 @@ export default function Home() {
       const engine = new Engine(canvasRef.current, {
         camera: { distance: 31.5, target: new Vec3(0, 11.5, 0) },
         bloom: { color: new Vec3(0.9, 0.3, 0.6) },
-        onRaycast: (modelName: string, material: string | null, screenX: number, screenY: number) => {
-          if (material) {
-            setMousePosition({ x: screenX, y: screenY })
-            setRippleId((prev) => prev + 1)
-            console.log("material selected:", modelName, material)
-          }
-          setSelectedMaterial(material)
-        },
+        onRaycast: handleRaycast,
       })
       engineRef.current = engine
       await engine.init()
 
       const m1 = await engine.loadModel(SCENE_MODELS[0].id, "/models/塞尔凯特/塞尔凯特.pmx")
-      const m2 = await engine.loadModel(SCENE_MODELS[1].id, "/models/塞勒涅/塞勒涅.pmx")
 
-      modelsRef.current = [m1, m2]
+      modelsRef.current = [m1]
 
       engine.setMaterialPresets(SCENE_MODELS[0].id, {
         eye: ["眼睛", "眼白", "目白", "右瞳", "左瞳", "眉毛"],
@@ -258,29 +287,17 @@ export default function Home() {
         metal: ["metal01", "earring"],
       })
 
-      engine.setMaterialPresets(SCENE_MODELS[1].id, {
-        eye: ["目白", "瞳1", "瞳2", "eyebrow", "eyelash"],
-        face: ["face01"],
-        body: ["skin"],
-        hair: ["hair_F"],
-        cloth_smooth: ["cloth_naive", "cloth01_alpha", "cloth01", "skin_cloth"],
-        stockings: ["stocking"],
-        metal: ["metal", "gem", "skin_metal"],
-      })
-
       engine.addGround({
         diffuseColor: new Vec3(1, 0.3, 0.6),
       })
 
-      await m1.loadVmd(SCENE_MODELS[0].clip, "/animations/m1.vmd")
-      await m2.loadVmd(SCENE_MODELS[1].clip, "/animations/m2.vmd")
+      await m1.loadVmd(SCENE_MODELS[0].clip, "/animations/One More Last Time.vmd")
 
       engine.runRenderLoop(() => setStats(engine.getStats()))
 
       await new Promise((resolve) => requestAnimationFrame(resolve))
 
       m1.show(SCENE_MODELS[0].clip)
-      m2.show(SCENE_MODELS[1].clip)
 
       await new Promise((resolve) => requestAnimationFrame(resolve))
 

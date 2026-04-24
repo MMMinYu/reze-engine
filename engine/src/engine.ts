@@ -27,6 +27,8 @@ import { LTC_MAG_LUT_SIZE, LTC_MAG_LUT_DATA } from "./shaders/ltc_mag_lut"
 import { SHADOW_DEPTH_SHADER_WGSL } from "./shaders/passes/shadow"
 import { GROUND_SHADOW_SHADER_WGSL } from "./shaders/passes/ground"
 import { OUTLINE_SHADER_WGSL } from "./shaders/passes/outline"
+import { SELECTION_MASK_SHADER_WGSL, SELECTION_EDGE_SHADER_WGSL } from "./shaders/passes/selection"
+import { GIZMO_SHADER_WGSL } from "./shaders/passes/gizmo"
 import {
   BLOOM_BLIT_SHADER_WGSL,
   BLOOM_DOWNSAMPLE_SHADER_WGSL,
@@ -59,7 +61,13 @@ function resolvePreset(materialName: string, map: MaterialPresetMap | undefined)
   return "default"
 }
 
-export type RaycastCallback = (modelName: string, material: string | null, screenX: number, screenY: number) => void
+export type RaycastCallback = (
+  modelName: string,
+  material: string | null,
+  bone: string | null,
+  screenX: number,
+  screenY: number,
+) => void
 
 /** Select a folder (webkitdirectory) and pass FileList or File[]; pmxFile picks which .pmx when several exist. */
 export type LoadModelFromFilesOptions = {
@@ -237,6 +245,43 @@ export class Engine {
   private groundShadowPipeline!: GPURenderPipeline
   private groundShadowBindGroupLayout!: GPUBindGroupLayout
   private outlinePipeline!: GPURenderPipeline
+  private selectedMaterial: { modelName: string; materialName: string } | null = null
+  private selectionMaskTexture?: GPUTexture
+  private selectionMaskView?: GPUTextureView
+  private selectionMaskPipeline!: GPURenderPipeline
+  private selectionMaskPassDescriptor!: GPURenderPassDescriptor
+  private selectionEdgePipeline!: GPURenderPipeline
+  private selectionEdgeBindGroupLayout!: GPUBindGroupLayout
+  private selectionEdgeBindGroup?: GPUBindGroup
+  private selectionEdgeUniformBuffer!: GPUBuffer
+  private selectionEdgePassDescriptor!: GPURenderPassDescriptor
+  private selectionSampler!: GPUSampler
+
+  // ─── Transform gizmo ───────────────────────────────────────────────
+  private selectedBone: { modelName: string; boneName: string; boneIndex: number } | null = null
+  private gizmoVertexBuffer!: GPUBuffer
+  private gizmoTransformBuffer!: GPUBuffer
+  private gizmoPipeline!: GPURenderPipeline
+  private gizmoBindGroup0!: GPUBindGroup
+  private gizmoColorBindGroups: GPUBindGroup[] = []
+  private gizmoPassDescriptor!: GPURenderPassDescriptor
+  private static readonly GIZMO_RING_SEGMENTS = 64
+  // Vertex layout in gizmoVertexBuffer (all line-list):
+  //   [0..6): 3 axis lines   — X, Y, Z (2 verts each)
+  //   [6..134): X ring       — 128 verts (64 segments × 2 endpoints)
+  //   [134..262): Y ring
+  //   [262..390): Z ring
+  private static readonly GIZMO_DRAWS: { first: number; count: number; color: number }[] = [
+    { first: 0, count: 2, color: 0 }, // X axis
+    { first: 2, count: 2, color: 1 }, // Y axis
+    { first: 4, count: 2, color: 2 }, // Z axis
+    { first: 6, count: 128, color: 0 }, // X ring
+    { first: 134, count: 128, color: 1 }, // Y ring
+    { first: 262, count: 128, color: 2 }, // Z ring
+  ]
+  // Gizmo radius as a fraction of viewport half-height at the gizmo's depth.
+  // ~0.18 means the gizmo occupies ~36% of viewport height — matches Blender / Maya feel.
+  private static readonly GIZMO_SCREEN_RADIUS = 0.18
   private mainPerFrameBindGroupLayout!: GPUBindGroupLayout
   private mainPerInstanceBindGroupLayout!: GPUBindGroupLayout
   private mainPerMaterialBindGroupLayout!: GPUBindGroupLayout
@@ -319,7 +364,7 @@ export class Engine {
   private bloomUpsampleBindGroups: GPUBindGroup[] = []
   /** Single-attachment pass; colorAttachments[0].view set per bloom step. */
   private bloomPassDescriptor!: GPURenderPassDescriptor
-  private static readonly BLOOM_MAX_LEVELS = 7
+  private static readonly BLOOM_MAX_LEVELS = 5
 
   // Ground properties (shadow only)
   private groundVertexBuffer?: GPUBuffer
@@ -329,7 +374,7 @@ export class Engine {
   private shadowMapDepthView!: GPUTextureView
   private brdfLutTexture!: GPUTexture
   private brdfLutView!: GPUTextureView
-  private static readonly SHADOW_MAP_SIZE = 4096
+  private static readonly SHADOW_MAP_SIZE = 2048
   private shadowDepthPipeline!: GPURenderPipeline
   private shadowLightVPBuffer!: GPUBuffer
   private shadowLightVPMatrix = new Float32Array(16)
@@ -1164,6 +1209,82 @@ export class Engine {
       },
     })
 
+    // ─── Selection overlay (screen-space edge-detect on a per-material mask) ───
+    // Reuses outline camera + main skinMats bind group layouts. No group 2 (no per-mat uniform).
+    const selectionMaskPipelineLayout = this.device.createPipelineLayout({
+      label: "selection mask pipeline layout",
+      bindGroupLayouts: [this.outlinePerFrameBindGroupLayout, this.mainPerInstanceBindGroupLayout],
+    })
+    const selectionMaskShaderModule = this.device.createShaderModule({
+      label: "selection mask shader",
+      code: SELECTION_MASK_SHADER_WGSL,
+    })
+    this.selectionMaskPipeline = this.device.createRenderPipeline({
+      label: "selection mask pipeline",
+      layout: selectionMaskPipelineLayout,
+      vertex: { module: selectionMaskShaderModule, entryPoint: "vs", buffers: outlineVertexBuffers },
+      fragment: {
+        module: selectionMaskShaderModule,
+        entryPoint: "fs",
+        targets: [{ format: "r8unorm" }],
+      },
+      primitive: { cullMode: "none" },
+      // Single-sample, no depth (depth-always via not attaching a depth buffer at all).
+      multisample: { count: 1 },
+    })
+
+    this.selectionEdgeBindGroupLayout = this.device.createBindGroupLayout({
+      label: "selection edge bind group layout",
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+      ],
+    })
+    const selectionEdgePipelineLayout = this.device.createPipelineLayout({
+      label: "selection edge pipeline layout",
+      bindGroupLayouts: [this.selectionEdgeBindGroupLayout],
+    })
+    const selectionEdgeShaderModule = this.device.createShaderModule({
+      label: "selection edge shader",
+      code: SELECTION_EDGE_SHADER_WGSL,
+    })
+    this.selectionEdgePipeline = this.device.createRenderPipeline({
+      label: "selection edge pipeline",
+      layout: selectionEdgePipelineLayout,
+      vertex: { module: selectionEdgeShaderModule, entryPoint: "vs" },
+      fragment: {
+        module: selectionEdgeShaderModule,
+        entryPoint: "fs",
+        targets: [
+          {
+            format: this.presentationFormat,
+            blend: {
+              color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha", operation: "add" },
+              alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" },
+            },
+          },
+        ],
+      },
+      primitive: { topology: "triangle-list" },
+      multisample: { count: 1 },
+    })
+    this.selectionSampler = this.device.createSampler({
+      label: "selection sampler",
+      magFilter: "linear",
+      minFilter: "linear",
+    })
+    this.selectionEdgeUniformBuffer = this.device.createBuffer({
+      label: "selection edge uniforms",
+      size: 16,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    })
+    // thickness (pixels), + 3 floats padding
+    this.device.queue.writeBuffer(this.selectionEdgeUniformBuffer, 0, new Float32Array([5.0, 0, 0, 0]))
+
+    // ─── Transform gizmo (3 axes + 3 rings) ─────────────────────────
+    this.setupGizmo()
+
     // ─── Bloom (EEVEE 3.6 pyramid): blit(Karis prefilter) → 13-tap downsamples → 9-tap tent upsamples ───
     // Mirrors source/blender/draw/engines/eevee/shaders/effect_bloom_frag.glsl.
     // Firefly suppression lives in the blit (Karis luminance-weighted 4-tap average). A single-pass
@@ -1512,6 +1633,46 @@ export class Engine {
         ],
       }
 
+      // Selection mask: single-channel canvas-res texture. Depth-always (no depth attachment).
+      this.selectionMaskTexture = this.device.createTexture({
+        label: "selection mask",
+        size: [width, height],
+        format: "r8unorm",
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+      })
+      this.selectionMaskView = this.selectionMaskTexture.createView()
+      this.selectionMaskPassDescriptor = {
+        label: "selection mask pass",
+        colorAttachments: [
+          {
+            view: this.selectionMaskView,
+            clearValue: { r: 0, g: 0, b: 0, a: 0 },
+            loadOp: "clear",
+            storeOp: "store",
+          },
+        ],
+      }
+      this.selectionEdgeBindGroup = this.device.createBindGroup({
+        label: "selection edge bind group",
+        layout: this.selectionEdgeBindGroupLayout,
+        entries: [
+          { binding: 0, resource: this.selectionMaskView },
+          { binding: 1, resource: this.selectionSampler },
+          { binding: 2, resource: { buffer: this.selectionEdgeUniformBuffer } },
+        ],
+      })
+      // Edge pass draws on top of the composite output — load-store on swapchain.
+      this.selectionEdgePassDescriptor = {
+        label: "selection edge pass",
+        colorAttachments: [
+          {
+            view: undefined as unknown as GPUTextureView,
+            loadOp: "load",
+            storeOp: "store",
+          },
+        ],
+      }
+
       this.writeBloomUniforms()
 
       if (this.compositeBindGroupLayout && this.bloomBlitBindGroupLayout) {
@@ -1591,6 +1752,136 @@ export class Engine {
           usage: GPUTextureUsage.RENDER_ATTACHMENT,
         })
       }
+    }
+  }
+
+  // Builds the gizmo pipeline, its shared transform bind group, 3 per-color bind
+  // groups (R/G/B), and the packed line-list vertex buffer containing 3 axes +
+  // 3 rings (390 verts total, see GIZMO_DRAWS for vertex ranges).
+  private setupGizmo() {
+    // Geometry: axes + 3 rings as line-list.
+    const verts: number[] = []
+    // Axes: 3 pairs (line-list endpoints).
+    verts.push(0, 0, 0, 1, 0, 0)
+    verts.push(0, 0, 0, 0, 1, 0)
+    verts.push(0, 0, 0, 0, 0, 1)
+    // Rings at radius 0.8 so axes (radius 1.0) protrude visibly beyond them.
+    const SEG = Engine.GIZMO_RING_SEGMENTS
+    const R = 0.8
+    for (let plane = 0; plane < 3; plane++) {
+      for (let i = 0; i < SEG; i++) {
+        const t0 = (i / SEG) * Math.PI * 2
+        const t1 = ((i + 1) / SEG) * Math.PI * 2
+        const c0 = Math.cos(t0) * R, s0 = Math.sin(t0) * R
+        const c1 = Math.cos(t1) * R, s1 = Math.sin(t1) * R
+        if (plane === 0) verts.push(0, c0, s0, 0, c1, s1) // X ring (YZ plane)
+        else if (plane === 1) verts.push(s0, 0, c0, s1, 0, c1) // Y ring (XZ plane)
+        else verts.push(c0, s0, 0, c1, s1, 0) // Z ring (XY plane)
+      }
+    }
+    const geom = new Float32Array(verts)
+    this.gizmoVertexBuffer = this.device.createBuffer({
+      label: "gizmo vertex buffer",
+      size: geom.byteLength,
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    })
+    this.device.queue.writeBuffer(this.gizmoVertexBuffer, 0, geom)
+
+    // Shared transform buffer — rewritten each frame from the selected bone's world matrix.
+    this.gizmoTransformBuffer = this.device.createBuffer({
+      label: "gizmo transform",
+      size: 64, // mat4x4f
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    })
+
+    const bg0Layout = this.device.createBindGroupLayout({
+      label: "gizmo group 0 layout (camera + transform)",
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "uniform" } },
+        { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: "uniform" } },
+      ],
+    })
+    const bg1Layout = this.device.createBindGroupLayout({
+      label: "gizmo group 1 layout (color)",
+      entries: [{ binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } }],
+    })
+    const pipelineLayout = this.device.createPipelineLayout({
+      label: "gizmo pipeline layout",
+      bindGroupLayouts: [bg0Layout, bg1Layout],
+    })
+    const shader = this.device.createShaderModule({ label: "gizmo shader", code: GIZMO_SHADER_WGSL })
+    this.gizmoPipeline = this.device.createRenderPipeline({
+      label: "gizmo pipeline",
+      layout: pipelineLayout,
+      vertex: {
+        module: shader,
+        entryPoint: "vs",
+        buffers: [
+          {
+            arrayStride: 12,
+            attributes: [{ shaderLocation: 0, offset: 0, format: "float32x3" as GPUVertexFormat }],
+          },
+        ],
+      },
+      fragment: {
+        module: shader,
+        entryPoint: "fs",
+        targets: [
+          {
+            format: this.presentationFormat,
+            blend: {
+              color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha", operation: "add" },
+              alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" },
+            },
+          },
+        ],
+      },
+      primitive: { topology: "line-list" },
+      multisample: { count: 1 },
+    })
+
+    this.gizmoBindGroup0 = this.device.createBindGroup({
+      label: "gizmo bind group 0",
+      layout: bg0Layout,
+      entries: [
+        { binding: 0, resource: { buffer: this.cameraUniformBuffer } },
+        { binding: 1, resource: { buffer: this.gizmoTransformBuffer } },
+      ],
+    })
+
+    // R/G/B colors for X/Y/Z. Emissive-range RGB to stay vivid over any composite background.
+    const colors = [
+      new Float32Array([1.6, 0.15, 0.15, 1.0]), // X (red)
+      new Float32Array([0.15, 1.2, 0.25, 1.0]), // Y (green)
+      new Float32Array([0.3, 0.45, 1.6, 1.0]), // Z (blue)
+    ]
+    this.gizmoColorBindGroups = []
+    for (let i = 0; i < 3; i++) {
+      const buf = this.device.createBuffer({
+        label: `gizmo color ${i}`,
+        size: 16,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      })
+      this.device.queue.writeBuffer(buf, 0, colors[i])
+      this.gizmoColorBindGroups.push(
+        this.device.createBindGroup({
+          label: `gizmo color bg ${i}`,
+          layout: bg1Layout,
+          entries: [{ binding: 0, resource: { buffer: buf } }],
+        }),
+      )
+    }
+
+    // Gizmo pass — depth-less, loads the swapchain so it composites on top.
+    this.gizmoPassDescriptor = {
+      label: "gizmo pass",
+      colorAttachments: [
+        {
+          view: undefined as unknown as GPUTextureView,
+          loadOp: "load",
+          storeOp: "store",
+        },
+      ],
     }
   }
 
@@ -1907,6 +2198,24 @@ export class Engine {
         return
       }
     }
+  }
+
+  setSelectedMaterial(modelName: string | null, materialName: string | null): void {
+    this.selectedMaterial = modelName && materialName ? { modelName, materialName } : null
+  }
+
+  setSelectedBone(modelName: string | null, boneName: string | null): void {
+    if (!modelName || !boneName) {
+      this.selectedBone = null
+      return
+    }
+    const inst = this.modelInstances.get(modelName)
+    if (!inst) {
+      this.selectedBone = null
+      return
+    }
+    const boneIndex = inst.model.getSkeleton().bones.findIndex((b) => b.name === boneName)
+    this.selectedBone = boneIndex >= 0 ? { modelName, boneName, boneIndex } : null
   }
 
   setMaterialPresets(modelName: string, presets: MaterialPresetMap): void {
@@ -2241,7 +2550,7 @@ export class Engine {
     const eye = new Vec3(target.x - dir.x * 72, target.y - dir.y * 72, target.z - dir.z * 72)
     const up = Math.abs(dir.y) > 0.99 ? new Vec3(0, 0, -1) : new Vec3(0, 1, 0)
     const view = Mat4.lookAt(eye, target, up)
-    const proj = Mat4.orthographicLh(-72, 72, -72, 72, 1, 140)
+    const proj = Mat4.orthographicLh(-32, 32, -32, 32, 1, 140)
     const vp = proj.multiply(view)
     this.shadowLightVPMatrix.set(vp.values)
     this.device.queue.writeBuffer(this.shadowLightVPBuffer, 0, this.shadowLightVPMatrix)
@@ -2528,11 +2837,82 @@ export class Engine {
 
   private performRaycast(screenX: number, screenY: number) {
     if (!this.onRaycast || this.modelInstances.size === 0) {
-      this.onRaycast?.("", null, screenX, screenY)
+      this.onRaycast?.("", null, null, screenX, screenY)
       return
     }
     const dpr = window.devicePixelRatio || 1
     this.pendingPick = { x: Math.floor(screenX * dpr), y: Math.floor(screenY * dpr) }
+  }
+
+  private renderSelectionPasses(encoder: GPUCommandEncoder, swapchainView: GPUTextureView): void {
+    if (!this.selectedMaterial || !this.selectionEdgeBindGroup) return
+    const inst = this.modelInstances.get(this.selectedMaterial.modelName)
+    if (!inst) return
+    const target = this.selectedMaterial.materialName
+    const draw = inst.drawCalls.find(
+      (d) => (d.type === "opaque" || d.type === "transparent") && d.materialName === target,
+    )
+    if (!draw || !this.shouldRenderDrawCall(inst, draw)) return
+
+    // Mask pass: fill the selected material's projected footprint with 1.0. Depth-always
+    // (no depth attachment) so the outline traces complete boundaries even when the
+    // material is partially occluded — matches Blender selection-through behaviour.
+    const mpass = encoder.beginRenderPass(this.selectionMaskPassDescriptor)
+    mpass.setPipeline(this.selectionMaskPipeline)
+    mpass.setBindGroup(0, this.outlinePerFrameBindGroup)
+    mpass.setBindGroup(1, inst.mainPerInstanceBindGroup)
+    mpass.setVertexBuffer(0, inst.vertexBuffer)
+    mpass.setVertexBuffer(1, inst.jointsBuffer)
+    mpass.setVertexBuffer(2, inst.weightsBuffer)
+    mpass.setIndexBuffer(inst.indexBuffer, "uint32")
+    mpass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
+    mpass.end()
+
+    // Edge pass: screen-space edge detect on the mask, alpha-blended over swapchain.
+    const edgeAttachment = (this.selectionEdgePassDescriptor.colorAttachments as GPURenderPassColorAttachment[])[0]
+    edgeAttachment.view = swapchainView
+    const epass = encoder.beginRenderPass(this.selectionEdgePassDescriptor)
+    epass.setPipeline(this.selectionEdgePipeline)
+    epass.setBindGroup(0, this.selectionEdgeBindGroup)
+    epass.draw(3)
+    epass.end()
+  }
+
+  // Writes a world-aligned scaled-and-translated transform for the selected bone
+  // into gizmoTransformBuffer, then runs 6 line-list draw calls (3 axes + 3 rings).
+  // Scale keeps the gizmo at a ~constant screen fraction regardless of zoom.
+  private renderGizmoPass(encoder: GPUCommandEncoder, swapchainView: GPUTextureView): void {
+    if (!this.selectedBone || !this.camera) return
+    const inst = this.modelInstances.get(this.selectedBone.modelName)
+    if (!inst) return
+    const worldMats = inst.model.getWorldMatrices()
+    if (this.selectedBone.boneIndex >= worldMats.length) return
+
+    const bonePos = worldMats[this.selectedBone.boneIndex].getPosition()
+    const camPos = this.camera.getPosition()
+    const dx = bonePos.x - camPos.x
+    const dy = bonePos.y - camPos.y
+    const dz = bonePos.z - camPos.z
+    const dist = Math.max(0.01, Math.sqrt(dx * dx + dy * dy + dz * dz))
+    // Radius such that the gizmo circle projects to GIZMO_SCREEN_RADIUS × viewport-half-height.
+    const size = dist * Math.tan(this.camera.fov * 0.5) * Engine.GIZMO_SCREEN_RADIUS
+
+    const m = new Float32Array(16)
+    m[0] = size; m[5] = size; m[10] = size; m[15] = 1
+    m[12] = bonePos.x; m[13] = bonePos.y; m[14] = bonePos.z
+    this.device.queue.writeBuffer(this.gizmoTransformBuffer, 0, m)
+
+    const att = (this.gizmoPassDescriptor.colorAttachments as GPURenderPassColorAttachment[])[0]
+    att.view = swapchainView
+    const pass = encoder.beginRenderPass(this.gizmoPassDescriptor)
+    pass.setPipeline(this.gizmoPipeline)
+    pass.setBindGroup(0, this.gizmoBindGroup0)
+    pass.setVertexBuffer(0, this.gizmoVertexBuffer)
+    for (const d of Engine.GIZMO_DRAWS) {
+      pass.setBindGroup(1, this.gizmoColorBindGroups[d.color])
+      pass.draw(d.count, 1, d.first, 0)
+    }
+    pass.end()
   }
 
   private renderPickPass(encoder: GPUCommandEncoder): void {
@@ -2588,10 +2968,11 @@ export class Engine {
     const data = new Uint8Array(this.pickReadbackBuffer.getMappedRange())
     const modelId = data[0]
     const materialId = data[1]
+    const boneId = data[2]
     this.pickReadbackBuffer.unmap()
 
     if (modelId === 0) {
-      this.onRaycast("", null, screenX, screenY)
+      this.onRaycast("", null, null, screenX, screenY)
       return
     }
 
@@ -2606,11 +2987,12 @@ export class Engine {
       idx++
     }
 
-    // Find material by 1-based index (skipping zero-vertex materials)
     let hitMaterial: string | null = null
+    let hitBone: string | null = null
     if (hitModel) {
       const inst = this.modelInstances.get(hitModel)
       if (inst) {
+        // Find material by 1-based index (skipping zero-vertex materials)
         const materials = inst.model.getMaterials()
         let matIdx = 0
         for (const mat of materials) {
@@ -2621,10 +3003,13 @@ export class Engine {
             break
           }
         }
+        // Bone index is 0-based (matches joints0 attribute values fed to pick shader).
+        const bones = inst.model.getSkeleton().bones
+        if (boneId < bones.length) hitBone = bones[boneId].name
       }
     }
 
-    this.onRaycast(hitModel, hitMaterial, screenX, screenY)
+    this.onRaycast(hitModel, hitMaterial, hitBone, screenX, screenY)
   }
 
   render() {
@@ -2716,8 +3101,9 @@ export class Engine {
     }
 
     // Composite: HDR + bloom → Filmic tonemap → swapchain.
+    const swapchainView = this.context.getCurrentTexture().createView()
     const compositeAttachment = (this.compositePassDescriptor.colorAttachments as GPURenderPassColorAttachment[])[0]
-    compositeAttachment.view = this.context.getCurrentTexture().createView()
+    compositeAttachment.view = swapchainView
     const cpass = encoder.beginRenderPass(this.compositePassDescriptor)
     const compositePipeline =
       this.viewTransform.gamma === 1.0 ? this.compositePipelineIdentity : this.compositePipelineGamma
@@ -2725,6 +3111,9 @@ export class Engine {
     cpass.setBindGroup(0, this.compositeBindGroup)
     cpass.draw(3)
     cpass.end()
+
+    if (this.selectedMaterial && hasModels) this.renderSelectionPasses(encoder, swapchainView)
+    if (this.selectedBone && hasModels) this.renderGizmoPass(encoder, swapchainView)
 
     const pick = this.pendingPick
     if (pick && hasModels) this.renderPickPass(encoder)

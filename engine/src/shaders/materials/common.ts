@@ -69,7 +69,7 @@ struct LightVP { viewProj: mat4x4f, };
 `;
 
 // ─── Shadow sampler (3×3 PCF) ───────────────────────────────────────
-// 4096-map, normal-bias 0.08, depth-bias 0.001. Unrolled — Safari's Metal backend
+// 2048-map, normal-bias 0.08, depth-bias 0.001. Unrolled — Safari's Metal backend
 // doesn't unroll nested shadow loops reliably, and the early out on back-facing
 // fragments saves 9 texture taps per skipped pixel.
 
@@ -82,7 +82,7 @@ fn sampleShadow(worldPos: vec3f, n: vec3f) -> f32 {
   let ndc = lclip.xyz / max(lclip.w, 1e-6);
   let suv = vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
   let cmpZ = ndc.z - 0.001;
-  let ts = 1.0 / 4096.0;
+  let ts = 1.0 / 2048.0;
   let s00 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(-ts, -ts), cmpZ);
   let s10 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f(0.0, -ts), cmpZ);
   let s20 = textureSampleCompareLevel(shadowMap, shadowSampler, suv + vec2f( ts, -ts), cmpZ);
