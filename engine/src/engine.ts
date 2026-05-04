@@ -2,7 +2,8 @@ import { Camera } from "./camera"
 import { Mat4, Quat, Vec3 } from "./math"
 import { Model } from "./model"
 import { PmxLoader } from "./pmx-loader"
-import { Physics, type PhysicsOptions } from "./physics"
+import { RezePhysics, type PhysicsOptions } from "./physics"
+import { PhysicsDebugRenderer } from "./physics-debug"
 import {
   createFetchAssetReader,
   createFileMapAssetReader,
@@ -231,7 +232,7 @@ interface ModelInstance {
   pickDrawCalls: PickDrawCall[]
   hiddenMaterials: Set<string>
   materialPresets: MaterialPresetMap | undefined
-  physics: Physics | null
+  physics: RezePhysics | null
   vertexBufferNeedsUpdate: boolean
 }
 
@@ -455,6 +456,8 @@ export class Engine {
   // IK and physics enabled at engine level (same for all models)
   private ikEnabled = true
   private physicsEnabled = true
+  private physicsDebugVisible = false
+  private physicsDebugRenderer: PhysicsDebugRenderer | null = null
 
   // Camera target binding (Babylon/Three style: camera follows model)
   private cameraTargetModel: Model | null = null
@@ -991,7 +994,7 @@ export class Engine {
       },
     })
 
-    // Hair-over-eyes: same shader with IS_OVER_EYES=true so alpha is halved at compile time.
+    // Hair-over-eyes: same shader with IS_OVER_EYES=true so alpha is scaled to 25% at compile time.
     // Only fragments where eye stencil == EYE_VALUE pass; depth test still culls fragments
     // that are further from camera than the eye, so hair behind the eye never shows through.
     // depthWriteEnabled=false keeps the eye's depth authoritative for everything drawn after.
@@ -1533,6 +1536,16 @@ export class Engine {
       size: 256,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     })
+
+    // Physics debug overlay — wireframe + solid sphere/box/capsule per body.
+    // Renders in its own swapchain pass after composite (see renderPhysicsDebug),
+    // so it always sits on top of the tonemapped scene regardless of depth /
+    // MSAA / camera angle. Toggled by setPhysicsDebug().
+    this.physicsDebugRenderer = new PhysicsDebugRenderer(
+      this.device,
+      this.cameraUniformBuffer,
+      this.presentationFormat,
+    )
   }
 
   // Step 3: Setup canvas resize handling
@@ -2358,6 +2371,14 @@ export class Engine {
     return this.physicsEnabled
   }
 
+  setPhysicsDebug(enabled: boolean): void {
+    this.physicsDebugVisible = enabled
+  }
+
+  getPhysicsDebug(): boolean {
+    return this.physicsDebugVisible
+  }
+
   resetPhysics(): void {
     this.forEachInstance((inst) => {
       if (!inst.physics) return
@@ -2452,7 +2473,7 @@ export class Engine {
     this.device.queue.writeBuffer(indexBuffer, 0, indices)
 
     const rbs = model.getRigidbodies()
-    const physics = rbs.length > 0 ? new Physics(rbs, model.getJoints(), this.physicsOptions) : null
+    const physics = rbs.length > 0 ? new RezePhysics(rbs, model.getJoints(), this.physicsOptions) : null
 
     const shadowBindGroup = this.device.createBindGroup({
       label: `${name}: shadow bind`,
@@ -3544,6 +3565,7 @@ export class Engine {
     cpass.draw(3)
     cpass.end()
 
+    if (this.physicsDebugVisible && hasModels) this.renderPhysicsDebug(encoder, swapchainView)
     if (this.selectedMaterial && hasModels) this.renderSelectionPasses(encoder, swapchainView)
     if (this.selectedBone && hasModels) this.renderGizmoPass(encoder, swapchainView)
 
@@ -3654,10 +3676,31 @@ export class Engine {
     this.drawOutlines(pass, inst, "transparent-outline")
   }
 
+  // Physics debug — separate swapchain pass after composite, no depth/MSAA so
+  // the overlay never gets clipped by the model's depth buffer or aliased away
+  // by per-sample line rasterization at oblique angles.
+  private renderPhysicsDebug(encoder: GPUCommandEncoder, swapchainView: GPUTextureView): void {
+    if (!this.physicsDebugRenderer) return
+    let pass: GPURenderPassEncoder | null = null
+    this.forEachInstance((inst) => {
+      if (!inst.physics) return
+      if (!pass) {
+        pass = encoder.beginRenderPass({
+          label: "physics debug pass",
+          colorAttachments: [
+            { view: swapchainView, loadOp: "load", storeOp: "store" },
+          ],
+        })
+      }
+      this.physicsDebugRenderer!.render(pass, inst.physics)
+    })
+    if (pass) (pass as GPURenderPassEncoder).end()
+  }
+
   /**
    * Second hair pass for the see-through-hair effect. Re-draws every hair opaque
    * draw using `hairOverEyesPipeline` — which stencil-matches `EYE_VALUE` and runs
-   * the hair shader with `IS_OVER_EYES=true` so alpha is halved. depthWriteEnabled
+   * the hair shader with `IS_OVER_EYES=true` so alpha is scaled to 25%. depthWriteEnabled
    * is off, so the eye's depth stays authoritative for anything drawn after.
    */
   private drawHairOverEyes(pass: GPURenderPassEncoder, inst: ModelInstance): void {

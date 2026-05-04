@@ -11,7 +11,7 @@ ${COMMON_MATERIAL_PRELUDE_WGSL}
 
 // Pipeline-override: the engine compiles two variants — the normal opaque hair pipeline
 // (IS_OVER_EYES=false) and a second pipeline that re-draws hair fragments stencil-matched
-// against the eye stamp with 50% alpha so eyes read through the hair silhouette. Resolved
+// against the eye stamp with 25% alpha so eyes read through the hair silhouette. Resolved
 // at pipeline-compile time; the dead branch is dropped by the shader compiler.
 override IS_OVER_EYES: bool = false;
 
@@ -71,7 +71,7 @@ const HAIR_MIX_NPR: f32 = 0.2;
   let final_color = mix(npr_stack, principled, HAIR_MIX_NPR);
 
   var outAlpha = alpha;
-  if (IS_OVER_EYES) { outAlpha = alpha * 0.5; }
+  if (IS_OVER_EYES) { outAlpha = alpha * 0.25; }
 
   var out: FSOut;
   out.color = vec4f(final_color, outAlpha);

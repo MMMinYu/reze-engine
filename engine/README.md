@@ -17,7 +17,7 @@ npm install reze-engine
 - **HDR pipeline** with bloom mip pyramid, Filmic tone mapping, 4× MSAA, tile-memory-friendly on Apple Silicon
 - **Alpha-hashed transparency** (Wyman & McGuire 2017) for self-overlapping transparent meshes like stockings
 - **Screen-space outlines** on opaque + transparent materials
-- **See-through hair over eyes** — stencil-gated MMD post-alpha-eye so eyes read at 50% through hair silhouettes
+- **See-through hair over eyes** — stencil-gated MMD post-alpha-eye so eyes read at 75% through hair silhouettes
 - **VMD animation** with IK solver and Bullet physics
 - **Orbit camera** with bone-follow mode
 - **GPU picking** (double-click/tap)
@@ -400,11 +400,11 @@ Assign presets per-model with `engine.setMaterialPresets(name, map)` (see the [U
 
 ### See-through hair over eyes (MMD post-alpha-eye)
 
-The classic MMD effect where hair strands covering the eye are rendered at 50% so the iris stays readable — implemented as a single extra pass driven by the stencil buffer, not a two-texture composite.
+The classic MMD effect where hair strands covering the eye are rendered at 25% so the iris stays readable — implemented as a single extra pass driven by the stencil buffer, not a two-texture composite.
 
 - **Eye pipeline** stamps `stencil = EYE_VALUE` on every fragment it writes, with `cullMode: "front"` and a small negative `depthBias` so only the back half of the eye mesh renders (the MMD trick that keeps eyes from leaking through the back of the head).
 - **Main hair pipeline** stencil-tests `not-equal EYE_VALUE` and skips those fragments.
-- **Hair-over-eyes pipeline** re-issues the hair draws with `IS_OVER_EYES = true`, stencil-tests `equal EYE_VALUE`, disables depth writes, and alpha blends at 50% — eye-stamped pixels end up `0.5·hair + 0.5·eye` in linear HDR before tonemap.
+- **Hair-over-eyes pipeline** re-issues the hair draws with `IS_OVER_EYES = true`, stencil-tests `equal EYE_VALUE`, disables depth writes, and alpha blends at 25% — eye-stamped pixels end up `0.25·hair + 0.75·eye` in linear HDR before tonemap.
 - **Outline pipeline** stencil-tests `not-equal EYE_VALUE` so edge color does not overwrite the see-through region.
 
 Draw order within a model: non-eye/non-hair opaque → eye (stamp) → hair (skip stamp) → outlines (skip stamp) → hair-over-eyes (match stamp).

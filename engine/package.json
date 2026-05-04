@@ -29,13 +29,11 @@
         "3d",
         "engine",
         "pmx",
-        "physics",
-        "ammo"
+        "physics"
     ],
     "author": "",
     "license": "MIT",
     "dependencies": {
-        "@fred3d/ammo": "^1.0.0",
         "@webgpu/types": "^0.1.66",
         "encoding-japanese": "^2.2.0"
     },

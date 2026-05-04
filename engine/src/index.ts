@@ -26,4 +26,4 @@ export type {
   ControlPoint,
 } from "./animation"
 export { FPS } from "./animation"
-export { Physics, type PhysicsOptions } from "./physics"
+export { RezePhysics, type PhysicsOptions } from "./physics"
