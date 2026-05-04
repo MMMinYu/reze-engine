@@ -3,6 +3,7 @@ import type { RigidBodyStore } from "./body"
 import { RigidbodyType } from "./types"
 import type { SixDofSpringConstraint } from "./constraint"
 import { solveConstraints } from "./solver"
+import { findContacts, type ContactPool } from "./contact"
 
 // World owns the simulator. Steps in Bullet's predict → solve → integrate
 // order so constraint impulses take effect on the same frame they're computed:
@@ -30,7 +31,12 @@ export class World {
     this.gravity.z = g.z
   }
 
-  step(store: RigidBodyStore, constraints: SixDofSpringConstraint[], dt: number): void {
+  step(
+    store: RigidBodyStore,
+    constraints: SixDofSpringConstraint[],
+    contacts: ContactPool,
+    dt: number,
+  ): void {
     if (dt <= 0) return
 
     const N = store.count
@@ -65,14 +71,19 @@ export class World {
       av[i3 + 0] *= ad; av[i3 + 1] *= ad; av[i3 + 2] *= ad
     }
 
-    // 2. Solve constraints: pulls bodies back into their joint envelopes,
-    //    applies spring forces. Velocity-only correction so it composes with
-    //    the integration step below.
-    if (constraints.length > 0) {
-      solveConstraints(store, constraints, dt, this.solverIterations)
+    // 2. Collision detection (broadphase + narrowphase) — must run after
+    //    velocities are predicted but before constraint solve, so contact
+    //    impulses can be applied alongside joint impulses in the same loop.
+    contacts.reset()
+    findContacts(store, contacts)
+
+    // 3. Solve joint constraints + contacts in the same SI loop. Velocity-
+    //    only correction so it composes with the integration step below.
+    if (constraints.length > 0 || contacts.count > 0) {
+      solveConstraints(store, constraints, contacts, dt, this.solverIterations)
     }
 
-    // 3. Integrate transforms.
+    // 4. Integrate transforms.
     for (let i = 0; i < N; i++) {
       if (types[i] !== RigidbodyType.Dynamic || invMass[i] <= 0) continue
       const i3 = i * 3

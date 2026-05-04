@@ -1,0 +1,613 @@
+// Narrowphase contact generation. Each detect* function takes two body
+// indices and the store, and either appends a Contact to the output array or
+// returns early when the shapes don't overlap.
+//
+// Contact convention: `normal` points from body A toward body B, so applying
+// +impulse along normal pushes B away from A. `rA` / `rB` are the world-space
+// offsets from each body's CG to the contact point — same lever-arm input
+// the joint solver expects, so contact and joint constraints share helpers.
+//
+// Penetration depth is positive when shapes overlap; zero means just-touching.
+//
+// MMD only uses sphere/box/capsule, so we cover sphere-sphere, sphere-capsule,
+// sphere-box, capsule-capsule, capsule-box. Box-box is rare in PMX rigs and
+// requires SAT + clipping, so we skip it for now.
+
+import { RigidbodyShape } from "./types"
+import type { RigidBodyStore } from "./body"
+
+export interface Contact {
+  bodyA: number
+  bodyB: number
+  // Lever arms (world-space) from each body's CG to the contact point.
+  rAx: number; rAy: number; rAz: number
+  rBx: number; rBy: number; rBz: number
+  // Unit normal pointing A → B.
+  nx: number; ny: number; nz: number
+  depth: number
+  friction: number
+  restitution: number
+  // SI-row state, written by the solver each step. Keeping it on the Contact
+  // means the solver doesn't need a parallel array.
+  appliedNormalImpulse: number
+  appliedFrictionImpulse1: number
+  appliedFrictionImpulse2: number
+}
+
+function makeContact(): Contact {
+  return {
+    bodyA: 0, bodyB: 0,
+    rAx: 0, rAy: 0, rAz: 0,
+    rBx: 0, rBy: 0, rBz: 0,
+    nx: 0, ny: 0, nz: 0,
+    depth: 0, friction: 0, restitution: 0,
+    appliedNormalImpulse: 0,
+    appliedFrictionImpulse1: 0,
+    appliedFrictionImpulse2: 0,
+  }
+}
+
+// Pool of reusable Contact objects. The world clears the active count each
+// step and the narrowphase fills entries via getContact() — keeps GC quiet.
+export class ContactPool {
+  private pool: Contact[] = []
+  count = 0
+
+  acquire(): Contact {
+    if (this.count < this.pool.length) {
+      const c = this.pool[this.count]
+      // Reset SI state so warmstart never carries over a stale impulse.
+      c.appliedNormalImpulse = 0
+      c.appliedFrictionImpulse1 = 0
+      c.appliedFrictionImpulse2 = 0
+      this.count++
+      return c
+    }
+    const c = makeContact()
+    this.pool.push(c)
+    this.count++
+    return c
+  }
+
+  reset(): void { this.count = 0 }
+  get(i: number): Contact { return this.pool[i] }
+}
+
+// Combined friction / restitution per Bullet's default: geometric mean for
+// friction (closer to material physics than Bullet's actual `a*b`, but matches
+// what the SI solver uses), arithmetic mean for restitution.
+function combineMaterials(store: RigidBodyStore, a: number, b: number, out: Contact): void {
+  out.friction = Math.sqrt(store.friction[a] * store.friction[b])
+  out.restitution = (store.restitution[a] + store.restitution[b]) * 0.5
+}
+
+// --- AABB overlap (broadphase reuses this) ---------------------------------
+export function aabbOverlap(store: RigidBodyStore, a: number, b: number): boolean {
+  const a3 = a * 3, b3 = b * 3
+  const minA = store.aabbMin, maxA = store.aabbMax
+  return (
+    minA[a3 + 0] <= maxA[b3 + 0] && maxA[a3 + 0] >= minA[b3 + 0] &&
+    minA[a3 + 1] <= maxA[b3 + 1] && maxA[a3 + 1] >= minA[b3 + 1] &&
+    minA[a3 + 2] <= maxA[b3 + 2] && maxA[a3 + 2] >= minA[b3 + 2]
+  )
+}
+
+// --- Sphere–sphere ---------------------------------------------------------
+function detectSphereSphere(store: RigidBodyStore, a: number, b: number, pool: ContactPool): void {
+  const ai = a * 3, bi = b * 3
+  const pos = store.positions, sz = store.size
+  const dx = pos[bi + 0] - pos[ai + 0]
+  const dy = pos[bi + 1] - pos[ai + 1]
+  const dz = pos[bi + 2] - pos[ai + 2]
+  const rA = sz[ai + 0]
+  const rB = sz[bi + 0]
+  const sumR = rA + rB
+  const d2 = dx * dx + dy * dy + dz * dz
+  if (d2 > sumR * sumR) return
+  const d = Math.sqrt(d2)
+  let nx: number, ny: number, nz: number
+  if (d > 1e-6) { nx = dx / d; ny = dy / d; nz = dz / d }
+  else { nx = 0; ny = 1; nz = 0 } // arbitrary axis when fully co-located
+  const c = pool.acquire()
+  c.bodyA = a; c.bodyB = b
+  c.nx = nx; c.ny = ny; c.nz = nz
+  c.depth = sumR - d
+  c.rAx = nx * rA; c.rAy = ny * rA; c.rAz = nz * rA
+  c.rBx = -nx * rB; c.rBy = -ny * rB; c.rBz = -nz * rB
+  combineMaterials(store, a, b, c)
+}
+
+// --- Sphere–capsule helper -------------------------------------------------
+// Returns closest point on capsule's line segment (centered at cBody, axis=R·ŷ,
+// half-height halfH) to the sphere center sx,sy,sz. Out is (cx,cy,cz).
+function closestPointOnCapsuleSegment(
+  cx: number, cy: number, cz: number,
+  ax: number, ay: number, az: number,
+  halfH: number,
+  sx: number, sy: number, sz: number,
+  out: Float32Array,
+): void {
+  const dx = sx - cx, dy = sy - cy, dz = sz - cz
+  let t = dx * ax + dy * ay + dz * az
+  if (t > halfH) t = halfH
+  else if (t < -halfH) t = -halfH
+  out[0] = cx + ax * t
+  out[1] = cy + ay * t
+  out[2] = cz + az * t
+}
+
+const _capPoint = new Float32Array(3)
+const _capPointB = new Float32Array(3)
+
+function capsuleAxis(store: RigidBodyStore, i: number, out: Float32Array): void {
+  const i4 = i * 4
+  const qx = store.orientations[i4 + 0]
+  const qy = store.orientations[i4 + 1]
+  const qz = store.orientations[i4 + 2]
+  const qw = store.orientations[i4 + 3]
+  // R · (0,1,0)
+  out[0] = 2 * (qx * qy - qw * qz)
+  out[1] = 1 - 2 * (qx * qx + qz * qz)
+  out[2] = 2 * (qy * qz + qw * qx)
+}
+
+// --- Sphere–capsule (sphere = a, capsule = b) ------------------------------
+function detectSphereCapsule(store: RigidBodyStore, a: number, b: number, pool: ContactPool): void {
+  const pos = store.positions, sz = store.size
+  const ai = a * 3, bi = b * 3
+  const sx = pos[ai + 0], sy = pos[ai + 1], sz_ = pos[ai + 2]
+  const cx = pos[bi + 0], cy = pos[bi + 1], cz = pos[bi + 2]
+  const rA = sz[ai + 0]
+  const rB = sz[bi + 0]
+  const halfH = sz[bi + 1] * 0.5
+  const axis = _capPoint
+  capsuleAxis(store, b, axis)
+  const closest = _capPointB
+  closestPointOnCapsuleSegment(cx, cy, cz, axis[0], axis[1], axis[2], halfH, sx, sy, sz_, closest)
+  const dx = closest[0] - sx
+  const dy = closest[1] - sy
+  const dz = closest[2] - sz_
+  const sumR = rA + rB
+  const d2 = dx * dx + dy * dy + dz * dz
+  if (d2 > sumR * sumR) return
+  const d = Math.sqrt(d2)
+  let nx: number, ny: number, nz: number
+  if (d > 1e-6) { nx = dx / d; ny = dy / d; nz = dz / d }
+  else { nx = 0; ny = 1; nz = 0 }
+  const c = pool.acquire()
+  c.bodyA = a; c.bodyB = b
+  c.nx = nx; c.ny = ny; c.nz = nz
+  c.depth = sumR - d
+  // Contact point on A's surface: sphere center + n * rA. Lever arm rA = that
+  // offset since A's CG = sphere center.
+  c.rAx = nx * rA; c.rAy = ny * rA; c.rAz = nz * rA
+  // Contact point on B's surface: closest_on_segment − n * rB, lever from B's CG.
+  c.rBx = closest[0] - nx * rB - cx
+  c.rBy = closest[1] - ny * rB - cy
+  c.rBz = closest[2] - nz * rB - cz
+  combineMaterials(store, a, b, c)
+}
+
+// --- Capsule–capsule -------------------------------------------------------
+const _cpA = new Float32Array(3)
+const _cpB = new Float32Array(3)
+
+// Closest pair on two segments. Adapted from Real-Time Collision Detection §5.1.9.
+function closestPointsTwoSegments(
+  p1x: number, p1y: number, p1z: number, q1x: number, q1y: number, q1z: number,
+  p2x: number, p2y: number, p2z: number, q2x: number, q2y: number, q2z: number,
+  outA: Float32Array, outB: Float32Array,
+): void {
+  const d1x = q1x - p1x, d1y = q1y - p1y, d1z = q1z - p1z
+  const d2x = q2x - p2x, d2y = q2y - p2y, d2z = q2z - p2z
+  const rx = p1x - p2x, ry = p1y - p2y, rz = p1z - p2z
+  const a = d1x*d1x + d1y*d1y + d1z*d1z
+  const e = d2x*d2x + d2y*d2y + d2z*d2z
+  const f = d2x*rx + d2y*ry + d2z*rz
+  let s = 0, t = 0
+  const EPS = 1e-8
+  if (a <= EPS && e <= EPS) {
+    outA[0] = p1x; outA[1] = p1y; outA[2] = p1z
+    outB[0] = p2x; outB[1] = p2y; outB[2] = p2z
+    return
+  }
+  if (a <= EPS) {
+    s = 0
+    t = clamp01(f / e)
+  } else {
+    const c = d1x*rx + d1y*ry + d1z*rz
+    if (e <= EPS) {
+      t = 0
+      s = clamp01(-c / a)
+    } else {
+      const b = d1x*d2x + d1y*d2y + d1z*d2z
+      const denom = a * e - b * b
+      if (denom !== 0) s = clamp01((b * f - c * e) / denom)
+      t = (b * s + f) / e
+      if (t < 0) { t = 0; s = clamp01(-c / a) }
+      else if (t > 1) { t = 1; s = clamp01((b - c) / a) }
+    }
+  }
+  outA[0] = p1x + d1x * s
+  outA[1] = p1y + d1y * s
+  outA[2] = p1z + d1z * s
+  outB[0] = p2x + d2x * t
+  outB[1] = p2y + d2y * t
+  outB[2] = p2z + d2z * t
+}
+
+function clamp01(x: number): number { return x < 0 ? 0 : x > 1 ? 1 : x }
+
+function detectCapsuleCapsule(store: RigidBodyStore, a: number, b: number, pool: ContactPool): void {
+  const pos = store.positions, sz = store.size
+  const ai = a * 3, bi = b * 3
+  const cAx = pos[ai + 0], cAy = pos[ai + 1], cAz = pos[ai + 2]
+  const cBx = pos[bi + 0], cBy = pos[bi + 1], cBz = pos[bi + 2]
+  const rA = sz[ai + 0], hA = sz[ai + 1] * 0.5
+  const rB = sz[bi + 0], hB = sz[bi + 1] * 0.5
+  const aAx = _capPoint
+  const aBx = _capPointB
+  capsuleAxis(store, a, aAx)
+  capsuleAxis(store, b, aBx)
+  const p1x = cAx - aAx[0] * hA, p1y = cAy - aAx[1] * hA, p1z = cAz - aAx[2] * hA
+  const q1x = cAx + aAx[0] * hA, q1y = cAy + aAx[1] * hA, q1z = cAz + aAx[2] * hA
+  const p2x = cBx - aBx[0] * hB, p2y = cBy - aBx[1] * hB, p2z = cBz - aBx[2] * hB
+  const q2x = cBx + aBx[0] * hB, q2y = cBy + aBx[1] * hB, q2z = cBz + aBx[2] * hB
+  closestPointsTwoSegments(p1x, p1y, p1z, q1x, q1y, q1z, p2x, p2y, p2z, q2x, q2y, q2z, _cpA, _cpB)
+  const dx = _cpB[0] - _cpA[0]
+  const dy = _cpB[1] - _cpA[1]
+  const dz = _cpB[2] - _cpA[2]
+  const sumR = rA + rB
+  const d2 = dx * dx + dy * dy + dz * dz
+  if (d2 > sumR * sumR) return
+  const d = Math.sqrt(d2)
+  let nx: number, ny: number, nz: number
+  if (d > 1e-6) { nx = dx / d; ny = dy / d; nz = dz / d }
+  else { nx = 0; ny = 1; nz = 0 }
+  const c = pool.acquire()
+  c.bodyA = a; c.bodyB = b
+  c.nx = nx; c.ny = ny; c.nz = nz
+  c.depth = sumR - d
+  // Contact points are the closest-segment points pushed outward by each radius.
+  c.rAx = _cpA[0] + nx * rA - cAx
+  c.rAy = _cpA[1] + ny * rA - cAy
+  c.rAz = _cpA[2] + nz * rA - cAz
+  c.rBx = _cpB[0] - nx * rB - cBx
+  c.rBy = _cpB[1] - ny * rB - cBy
+  c.rBz = _cpB[2] - nz * rB - cBz
+  combineMaterials(store, a, b, c)
+}
+
+// --- Sphere–box (sphere = a, box = b) --------------------------------------
+const _localPt = new Float32Array(3)
+
+// Rotation matrix from body i's orientation, in row-major order:
+//   R = | 1−(yy+zz)   xy−wz       xz+wy     |
+//       | xy+wz       1−(xx+zz)   yz−wx     |
+//       | xz−wy       yz+wx       1−(xx+yy) |
+// (Same convention as math.ts Mat4.fromQuatInto; xx = 2·qx·qx etc.)
+const _rot = new Float32Array(9)
+function loadBodyRot(store: RigidBodyStore, i: number): void {
+  const i4 = i * 4
+  const qx = store.orientations[i4 + 0]
+  const qy = store.orientations[i4 + 1]
+  const qz = store.orientations[i4 + 2]
+  const qw = store.orientations[i4 + 3]
+  const x2 = qx + qx, y2 = qy + qy, z2 = qz + qz
+  const xx = qx * x2, yy = qy * y2, zz = qz * z2
+  const xy = qx * y2, xz = qx * z2, yz = qy * z2
+  const wx = qw * x2, wy = qw * y2, wz = qw * z2
+  _rot[0] = 1 - (yy + zz); _rot[1] = xy - wz;       _rot[2] = xz + wy
+  _rot[3] = xy + wz;       _rot[4] = 1 - (xx + zz); _rot[5] = yz - wx
+  _rot[6] = xz - wy;       _rot[7] = yz + wx;       _rot[8] = 1 - (xx + yy)
+}
+
+// Transform world point into body i's local frame: v_local = R^T · (p − bodyPos).
+function worldToBodyLocal(store: RigidBodyStore, i: number, px: number, py: number, pz: number, out: Float32Array): void {
+  const i3 = i * 3
+  const dx = px - store.positions[i3 + 0]
+  const dy = py - store.positions[i3 + 1]
+  const dz = pz - store.positions[i3 + 2]
+  loadBodyRot(store, i)
+  // R^T · v = (col k of R) · v.
+  out[0] = _rot[0] * dx + _rot[3] * dy + _rot[6] * dz
+  out[1] = _rot[1] * dx + _rot[4] * dy + _rot[7] * dz
+  out[2] = _rot[2] * dx + _rot[5] * dy + _rot[8] * dz
+}
+
+// Rotate a body-local direction into world space: v_world = R · v_local.
+function bodyLocalToWorldDir(store: RigidBodyStore, i: number, lx: number, ly: number, lz: number, out: Float32Array): void {
+  loadBodyRot(store, i)
+  out[0] = _rot[0] * lx + _rot[1] * ly + _rot[2] * lz
+  out[1] = _rot[3] * lx + _rot[4] * ly + _rot[5] * lz
+  out[2] = _rot[6] * lx + _rot[7] * ly + _rot[8] * lz
+}
+
+function detectSphereBox(store: RigidBodyStore, a: number, b: number, pool: ContactPool): void {
+  const ai = a * 3, bi = b * 3
+  const sx = store.positions[ai + 0]
+  const sy = store.positions[ai + 1]
+  const sz_ = store.positions[ai + 2]
+  const rA = store.size[ai + 0]
+  const hx = store.size[bi + 0]
+  const hy = store.size[bi + 1]
+  const hz = store.size[bi + 2]
+
+  // Sphere center in box-local frame.
+  worldToBodyLocal(store, b, sx, sy, sz_, _localPt)
+  const lx = _localPt[0], ly = _localPt[1], lz = _localPt[2]
+
+  // Closest point on box (clamp to half-extents).
+  let qx = lx, qy = ly, qz = lz
+  if (qx > hx) qx = hx; else if (qx < -hx) qx = -hx
+  if (qy > hy) qy = hy; else if (qy < -hy) qy = -hy
+  if (qz > hz) qz = hz; else if (qz < -hz) qz = -hz
+
+  let dx = lx - qx, dy = ly - qy, dz = lz - qz
+  let d2 = dx * dx + dy * dy + dz * dz
+
+  let nLocalX: number, nLocalY: number, nLocalZ: number
+  let depth: number
+
+  if (d2 > rA * rA) return // no contact
+
+  if (d2 > 1e-12) {
+    const d = Math.sqrt(d2)
+    nLocalX = dx / d; nLocalY = dy / d; nLocalZ = dz / d
+    depth = rA - d
+  } else {
+    // Sphere center inside box — pick shortest axis to escape.
+    const px = hx - Math.abs(lx), py = hy - Math.abs(ly), pz = hz - Math.abs(lz)
+    if (px < py && px < pz) {
+      nLocalX = lx > 0 ? 1 : -1; nLocalY = 0; nLocalZ = 0
+      depth = rA + px
+      qx = lx > 0 ? hx : -hx; qy = ly; qz = lz
+    } else if (py < pz) {
+      nLocalX = 0; nLocalY = ly > 0 ? 1 : -1; nLocalZ = 0
+      depth = rA + py
+      qx = lx; qy = ly > 0 ? hy : -hy; qz = lz
+    } else {
+      nLocalX = 0; nLocalY = 0; nLocalZ = lz > 0 ? 1 : -1
+      depth = rA + pz
+      qx = lx; qy = ly; qz = lz > 0 ? hz : -hz
+    }
+  }
+
+  // Rotate local normal back to world. Convention: normal points A→B, but we
+  // computed n = (lx − qx) which goes "from box surface toward sphere center"
+  // (= B → A). Flip sign.
+  const out = _capPoint
+  bodyLocalToWorldDir(store, b, -nLocalX, -nLocalY, -nLocalZ, out)
+  const nx = out[0], ny = out[1], nz = out[2]
+
+  // Box's contact point in world: rotate (qx,qy,qz) and translate by box pos.
+  const bp = _capPointB
+  bodyLocalToWorldDir(store, b, qx, qy, qz, bp)
+  const bpx = bp[0] + store.positions[bi + 0]
+  const bpy = bp[1] + store.positions[bi + 1]
+  const bpz = bp[2] + store.positions[bi + 2]
+
+  const c = pool.acquire()
+  c.bodyA = a; c.bodyB = b
+  c.nx = nx; c.ny = ny; c.nz = nz
+  c.depth = depth
+  c.rAx = nx * rA; c.rAy = ny * rA; c.rAz = nz * rA
+  c.rBx = bpx - store.positions[bi + 0]
+  c.rBy = bpy - store.positions[bi + 1]
+  c.rBz = bpz - store.positions[bi + 2]
+  combineMaterials(store, a, b, c)
+}
+
+// --- Capsule–box -----------------------------------------------------------
+// Closest-point approach: transform the capsule's line segment into box-local
+// space, walk the segment to find the parameter t ∈ [0,1] whose point is
+// closest to the box (clamping each component into the box's extents), then
+// do sphere-box at the corresponding world-space sample. Falls back to
+// endpoint samples when the closest-point parameter is at the segment ends,
+// which catches cases where the capsule tangentially grazes a face.
+//
+// More accurate than the prior 3-fixed-samples version, which missed
+// penetration when a long capsule cut diagonally through a thin box (the
+// closest sphere-box wasn't at any of the fixed t = -1, 0, 1 samples).
+function detectCapsuleBox(store: RigidBodyStore, a: number, b: number, pool: ContactPool): void {
+  const pos = store.positions, sz = store.size
+  const ai = a * 3, bi = b * 3
+  const cx = pos[ai + 0], cy = pos[ai + 1], cz = pos[ai + 2]
+  const rA = sz[ai + 0]
+  const hA = sz[ai + 1] * 0.5
+  const ax = _capPoint
+  capsuleAxis(store, a, ax)
+
+  // Endpoints in world space.
+  const p1wx = cx - ax[0] * hA, p1wy = cy - ax[1] * hA, p1wz = cz - ax[2] * hA
+  const p2wx = cx + ax[0] * hA, p2wy = cy + ax[1] * hA, p2wz = cz + ax[2] * hA
+
+  // Endpoints in box-local space.
+  worldToBodyLocal(store, b, p1wx, p1wy, p1wz, _localPt)
+  const p1lx = _localPt[0], p1ly = _localPt[1], p1lz = _localPt[2]
+  worldToBodyLocal(store, b, p2wx, p2wy, p2wz, _localPt)
+  const p2lx = _localPt[0], p2ly = _localPt[1], p2lz = _localPt[2]
+
+  const hx = sz[bi + 0], hy = sz[bi + 1], hz = sz[bi + 2]
+
+  // Closest point on segment to box (in box-local). Iterate a few times to
+  // converge — clamp each component, recompute t, repeat. Two passes is
+  // enough for our use case (capsule modestly larger than box).
+  let t = 0.5
+  for (let iter = 0; iter < 4; iter++) {
+    const px = p1lx + (p2lx - p1lx) * t
+    const py = p1ly + (p2ly - p1ly) * t
+    const pz = p1lz + (p2lz - p1lz) * t
+    let qx = px, qy = py, qz = pz
+    if (qx > hx) qx = hx; else if (qx < -hx) qx = -hx
+    if (qy > hy) qy = hy; else if (qy < -hy) qy = -hy
+    if (qz > hz) qz = hz; else if (qz < -hz) qz = -hz
+    // Project clamped point back onto the segment to refine t.
+    const dx = p2lx - p1lx, dy = p2ly - p1ly, dz = p2lz - p1lz
+    const segLen2 = dx * dx + dy * dy + dz * dz
+    if (segLen2 < 1e-8) break
+    t = ((qx - p1lx) * dx + (qy - p1ly) * dy + (qz - p1lz) * dz) / segLen2
+    if (t < 0) { t = 0; break }
+    if (t > 1) { t = 1; break }
+  }
+
+  // Sample at the converged t plus both endpoints — endpoints catch capsule
+  // caps grazing the box surface where the closest-point loop sits at one
+  // segment end.
+  let bestDepth = -Infinity
+  let bestNX = 0, bestNY = 0, bestNZ = 0
+  let bestRAX = 0, bestRAY = 0, bestRAZ = 0
+  let bestRBX = 0, bestRBY = 0, bestRBZ = 0
+  let found = false
+
+  const samples = [t, 0, 1]
+  for (const s of samples) {
+    const sx = p1wx + (p2wx - p1wx) * s
+    const sy = p1wy + (p2wy - p1wy) * s
+    const sz_ = p1wz + (p2wz - p1wz) * s
+    worldToBodyLocal(store, b, sx, sy, sz_, _localPt)
+    const lx = _localPt[0], ly = _localPt[1], lz = _localPt[2]
+    let qx = lx, qy = ly, qz = lz
+    if (qx > hx) qx = hx; else if (qx < -hx) qx = -hx
+    if (qy > hy) qy = hy; else if (qy < -hy) qy = -hy
+    if (qz > hz) qz = hz; else if (qz < -hz) qz = -hz
+    const dx = lx - qx, dy = ly - qy, dz = lz - qz
+    const d2 = dx * dx + dy * dy + dz * dz
+    if (d2 > rA * rA) continue
+    let nLocalX = 0, nLocalY = 0, nLocalZ = 0
+    let depth: number
+    if (d2 > 1e-12) {
+      const d = Math.sqrt(d2)
+      nLocalX = dx / d; nLocalY = dy / d; nLocalZ = dz / d
+      depth = rA - d
+    } else {
+      const px = hx - Math.abs(lx), py = hy - Math.abs(ly), pz = hz - Math.abs(lz)
+      if (px < py && px < pz) {
+        nLocalX = lx > 0 ? 1 : -1; depth = rA + px
+        qx = lx > 0 ? hx : -hx; qy = ly; qz = lz
+      } else if (py < pz) {
+        nLocalY = ly > 0 ? 1 : -1; depth = rA + py
+        qx = lx; qy = ly > 0 ? hy : -hy; qz = lz
+      } else {
+        nLocalZ = lz > 0 ? 1 : -1; depth = rA + pz
+        qx = lx; qy = ly; qz = lz > 0 ? hz : -hz
+      }
+    }
+    if (depth <= bestDepth) continue
+    bestDepth = depth
+    found = true
+    const dirOut = _localPt
+    bodyLocalToWorldDir(store, b, -nLocalX, -nLocalY, -nLocalZ, dirOut)
+    bestNX = dirOut[0]; bestNY = dirOut[1]; bestNZ = dirOut[2]
+    const bpOut = _localPt
+    bodyLocalToWorldDir(store, b, qx, qy, qz, bpOut)
+    const bpx = bpOut[0] + pos[bi + 0]
+    const bpy = bpOut[1] + pos[bi + 1]
+    const bpz = bpOut[2] + pos[bi + 2]
+    bestRAX = sx + bestNX * rA - cx
+    bestRAY = sy + bestNY * rA - cy
+    bestRAZ = sz_ + bestNZ * rA - cz
+    bestRBX = bpx - pos[bi + 0]
+    bestRBY = bpy - pos[bi + 1]
+    bestRBZ = bpz - pos[bi + 2]
+  }
+
+  if (!found) return
+  const c = pool.acquire()
+  c.bodyA = a; c.bodyB = b
+  c.nx = bestNX; c.ny = bestNY; c.nz = bestNZ
+  c.depth = bestDepth
+  c.rAx = bestRAX; c.rAy = bestRAY; c.rAz = bestRAZ
+  c.rBx = bestRBX; c.rBy = bestRBY; c.rBz = bestRBZ
+  combineMaterials(store, a, b, c)
+}
+
+// --- Dispatch --------------------------------------------------------------
+// Routes a colliding pair to the right narrowphase. Returns nothing — emits
+// 0..N contacts into the pool. Caller is responsible for the broadphase reject
+// and group/mask check.
+export function generateContacts(store: RigidBodyStore, a: number, b: number, pool: ContactPool): void {
+  const sA = store.shape[a]
+  const sB = store.shape[b]
+  // Canonicalize the pair so we have one branch per shape combination. We
+  // swap (a, b) when needed — narrowphase functions are written assuming a
+  // specific "smaller" shape on the A side (sphere < capsule < box for the
+  // ordering below).
+  if (sA === RigidbodyShape.Sphere && sB === RigidbodyShape.Sphere) {
+    detectSphereSphere(store, a, b, pool); return
+  }
+  if (sA === RigidbodyShape.Sphere && sB === RigidbodyShape.Capsule) {
+    detectSphereCapsule(store, a, b, pool); return
+  }
+  if (sA === RigidbodyShape.Capsule && sB === RigidbodyShape.Sphere) {
+    detectSphereCapsule(store, b, a, pool); flipLastNormal(pool); return
+  }
+  if (sA === RigidbodyShape.Capsule && sB === RigidbodyShape.Capsule) {
+    detectCapsuleCapsule(store, a, b, pool); return
+  }
+  if (sA === RigidbodyShape.Sphere && sB === RigidbodyShape.Box) {
+    detectSphereBox(store, a, b, pool); return
+  }
+  if (sA === RigidbodyShape.Box && sB === RigidbodyShape.Sphere) {
+    detectSphereBox(store, b, a, pool); flipLastNormal(pool); return
+  }
+  if (sA === RigidbodyShape.Capsule && sB === RigidbodyShape.Box) {
+    detectCapsuleBox(store, a, b, pool); return
+  }
+  if (sA === RigidbodyShape.Box && sB === RigidbodyShape.Capsule) {
+    detectCapsuleBox(store, b, a, pool); flipLastNormal(pool); return
+  }
+  // Box-box left unimplemented — see header note.
+}
+
+// When we swap (a, b) to reuse a shape pair's narrowphase, the produced
+// contact has its normal pointing the wrong way. Flip it and re-anchor the
+// lever arms so bodyA refers to the original A again.
+function flipLastNormal(pool: ContactPool): void {
+  if (pool.count === 0) return
+  const c = pool.get(pool.count - 1)
+  // Swap body indices and lever arms.
+  const ta = c.bodyA; c.bodyA = c.bodyB; c.bodyB = ta
+  const trAx = c.rAx, trAy = c.rAy, trAz = c.rAz
+  c.rAx = c.rBx; c.rAy = c.rBy; c.rAz = c.rBz
+  c.rBx = trAx; c.rBy = trAy; c.rBz = trAz
+  c.nx = -c.nx; c.ny = -c.ny; c.nz = -c.nz
+}
+
+// --- Broadphase + dispatch -------------------------------------------------
+// O(N²) AABB pair test gated by PMX group/mask and the static-static skip.
+// For 30-100 PMX bodies this is well under 5000 cheap checks per step; SAP
+// or dynamic AABB tree only pays off above ~500 bodies, which MMD never hits.
+//
+// Collision filter: `(maskA & groupB) && (maskB & groupA)` — Bullet's standard
+// AND form. PMX rigs are tuned around symmetric-agreement semantics: a chest
+// collider explicitly opts OUT of breast (group 3) by clearing the bit, so
+// even though the breast body's mask lists group 0, the chest collider's
+// "no" wins and the pair is rejected. Switching to OR re-includes those
+// rejected pairs and breaks breast / accessory rigs that depend on the AND.
+// Hair-vs-body collision in PMX flows through hair group bit being set on
+// the body's mask AND the body group bit being set on hair's mask — when the
+// rig designer wants that collision, they make the masks symmetric.
+//
+// Caller resets the pool first.
+export function findContacts(store: RigidBodyStore, pool: ContactPool): void {
+  store.updateAabbs()
+  const N = store.count
+  const invMass = store.invMass
+  const group = store.collisionGroup
+  const mask = store.willCollideMask
+
+  for (let i = 0; i < N; i++) {
+    const gi = group[i]
+    const mi = mask[i]
+    const dynA = invMass[i] > 0
+    for (let j = i + 1; j < N; j++) {
+      // Skip pairs where neither body can move — pure static-static contact
+      // has no resolution to apply.
+      if (!dynA && invMass[j] === 0) continue
+      if ((mi & group[j]) === 0 || (mask[j] & gi) === 0) continue
+      if (!aabbOverlap(store, i, j)) continue
+      generateContacts(store, i, j, pool)
+    }
+  }
+}

@@ -4,6 +4,7 @@ import { RigidbodyType } from "./types"
 import { RigidBodyStore } from "./body"
 import { World } from "./world"
 import { buildConstraints, type SixDofSpringConstraint } from "./constraint"
+import { ContactPool } from "./contact"
 
 // Scratch storage shared across all instances — RezePhysics step() runs
 // synchronously and never re-enters itself, so reusing module-local buffers
@@ -28,6 +29,7 @@ export class RezePhysics {
   private store: RigidBodyStore
   private world: World
   private constraints: SixDofSpringConstraint[]
+  private contacts: ContactPool
   private firstFrame = true
 
   constructor(rigidbodies: Rigidbody[], joints: Joint[] = [], options?: PhysicsOptions) {
@@ -36,7 +38,8 @@ export class RezePhysics {
     this.options = options ?? {}
     this.store = new RigidBodyStore(rigidbodies)
     this.world = new World(new Vec3(0, -98, 0)) // MMD scale, cm/s²
-    this.constraints = buildConstraints(rigidbodies, joints, this.options)
+    this.constraints = buildConstraints(rigidbodies, joints)
+    this.contacts = new ContactPool()
   }
 
   setGravity(gravity: Vec3): void { this.world.setGravity(gravity) }
@@ -82,8 +85,8 @@ export class RezePhysics {
     // Pull static & kinematic bodies along with their bones.
     this.syncFromBones(boneWorldMatrices)
 
-    // Integrate dynamics + solve joint constraints.
-    this.world.step(this.store, this.constraints, dt)
+    // Integrate dynamics + solve joint constraints + contacts.
+    this.world.step(this.store, this.constraints, this.contacts, dt)
 
     // Push dynamic body transforms back to their bones.
     this.applyDynamicsToBones(boneWorldMatrices)

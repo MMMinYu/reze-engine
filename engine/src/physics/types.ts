@@ -48,9 +48,7 @@ export interface Joint {
   springRotation: Vec3 // Spring stiffness values
 }
 
-export interface PhysicsOptions {
-  // Per-joint Bullet 2.75 constraint solver behavior. Joints whose name contains
-  // any keyword get m_useOffsetForConstraintFrame disabled (matching Bullet 2.75).
-  // All others keep the stable Ammo 2.82+ default.
-  constraintSolverKeywords?: string[]
-}
+// Reserved for future engine-level overrides (gravity scale, solver iter count,
+// etc.). The Bullet 2.75 anchor convention removed the only previous field
+// (constraintSolverKeywords), so the shape is currently empty.
+export type PhysicsOptions = Record<string, never>

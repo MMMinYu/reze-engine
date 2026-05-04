@@ -1,10 +1,9 @@
 import { Mat4, Quat } from "../math"
 import { RigidbodyType, RigidbodyShape, type Rigidbody } from "./types"
 
-// SoA storage for all rigid bodies in a RezePhysics world.
-// Fields are intentionally minimal for the gravity-only stage; broadphase AABBs,
-// world inertia tensors, friction, group/mask, etc. will be added as the
-// solver pipeline grows.
+// SoA storage for all rigid bodies in a RezePhysics world. Holds per-body
+// state (positions, velocities), constants (mass/inertia/damping/group/mask),
+// the bind-pose↔bone coupling matrices, and a per-step AABB for broadphase.
 export class RigidBodyStore {
   readonly count: number
 
@@ -20,12 +19,30 @@ export class RigidBodyStore {
   // PMX shapes are roughly compact so a single I⁻¹ is good enough — and *much*
   // better than collapsing to invMass (which under-rotates by 100-1000×).
   // Sphere:  I = (2/5)·m·r²;  Box: I = (1/3)·m·max(a,b,c)²
-  // Capsule: I = (1/3)·m·(half-height)² (treat as cylinder, transverse axis).
+  // Capsule: I = (1/12)·m·(3r² + h²) (cylinder, transverse axis).
   readonly invInertia: Float32Array    // N (0 for static / kinematic)
   readonly linearDamping: Float32Array // N
   readonly angularDamping: Float32Array// N
   readonly type: Uint8Array            // N (RigidbodyType)
   readonly boneIndex: Int32Array       // N (-1 if unattached)
+  readonly friction: Float32Array      // N (Coulomb friction coefficient)
+  readonly restitution: Float32Array   // N (bounciness, 0..1)
+
+  // Collision filtering. PMX has 16 groups; group is the body's own index
+  // (1..16, stored as zero-based 0..15) and collisionMask is the set of
+  // groups it *will not* collide with — invert to get "willCollide" mask
+  // (the form solvers actually want to test).
+  readonly collisionGroup: Uint16Array  // N (single bit, 1<<groupIndex)
+  readonly willCollideMask: Uint16Array // N (16 bits, 1 = pair allowed)
+
+  // Shape descriptor for narrowphase. Same layout as PMX.
+  readonly shape: Uint8Array            // N (RigidbodyShape)
+  readonly size: Float32Array           // 3*N (semantics depend on shape)
+
+  // Per-step AABB (world space, axis-aligned). Refreshed by updateAabbs()
+  // each step from current position + orientation + shape.
+  readonly aabbMin: Float32Array        // 3*N
+  readonly aabbMax: Float32Array        // 3*N
 
   // Bone↔body coupling. bodyOffsetMatrix[i] = boneInverseBind × shapeWorldBind.
   // bodyWorld = boneWorld × bodyOffsetMatrix; boneWorld = bodyWorld × bodyOffsetInverse.
@@ -50,6 +67,14 @@ export class RigidBodyStore {
     this.boneIndex = new Int32Array(N)
     this.bodyOffsetMatrix = new Float32Array(N * 16)
     this.bodyOffsetInverse = new Float32Array(N * 16)
+    this.friction = new Float32Array(N)
+    this.restitution = new Float32Array(N)
+    this.collisionGroup = new Uint16Array(N)
+    this.willCollideMask = new Uint16Array(N)
+    this.shape = new Uint8Array(N)
+    this.size = new Float32Array(N * 3)
+    this.aabbMin = new Float32Array(N * 3)
+    this.aabbMax = new Float32Array(N * 3)
 
     for (let i = 0; i < N; i++) {
       const rb = rigidbodies[i]
@@ -73,6 +98,84 @@ export class RigidBodyStore {
       this.angularDamping[i] = rb.angularDamping
       this.type[i] = rb.type
       this.boneIndex[i] = rb.boneIndex
+      this.friction[i] = rb.friction
+      this.restitution[i] = rb.restitution
+      // PMX `group` is 1..16 (or 0..15 zero-based). Encode as single-bit set.
+      // collisionMask in PMX lists groups this body WILL collide with — store
+      // directly so solvers can do `(maskA & groupB) && (maskB & groupA)`.
+      this.collisionGroup[i] = 1 << (rb.group & 0xf)
+      this.willCollideMask[i] = rb.collisionMask & 0xffff
+      this.shape[i] = rb.shape
+      this.size[i * 3 + 0] = rb.size.x
+      this.size[i * 3 + 1] = rb.size.y
+      this.size[i * 3 + 2] = rb.size.z
+    }
+  }
+
+  // Refresh world-space AABBs for every body. Called once per step before
+  // broadphase. Includes a small inflation margin so contacts stay paired
+  // across velocity-induced jitter without re-checking AABBs each iteration.
+  updateAabbs(margin = 0.5): void {
+    const N = this.count
+    const pos = this.positions
+    const ori = this.orientations
+    const shapes = this.shape
+    const sz = this.size
+    const minA = this.aabbMin
+    const maxA = this.aabbMax
+
+    for (let i = 0; i < N; i++) {
+      const i3 = i * 3
+      const i4 = i * 4
+      const px = pos[i3 + 0], py = pos[i3 + 1], pz = pos[i3 + 2]
+      let hx = 0, hy = 0, hz = 0
+
+      switch (shapes[i]) {
+        case RigidbodyShape.Sphere: {
+          const r = sz[i3 + 0]
+          hx = hy = hz = r
+          break
+        }
+        case RigidbodyShape.Box: {
+          // Conservative AABB of an OBB: half-extents projected by |R|·size.
+          const qx = ori[i4 + 0], qy = ori[i4 + 1], qz = ori[i4 + 2], qw = ori[i4 + 3]
+          const x2 = qx + qx, y2 = qy + qy, z2 = qz + qz
+          const xx = qx * x2, yy = qy * y2, zz = qz * z2
+          const xy = qx * y2, xz = qx * z2, yz = qy * z2
+          const wx = qw * x2, wy = qw * y2, wz = qw * z2
+          const m00 = Math.abs(1 - (yy + zz)), m01 = Math.abs(xy + wz), m02 = Math.abs(xz - wy)
+          const m10 = Math.abs(xy - wz),       m11 = Math.abs(1 - (xx + zz)), m12 = Math.abs(yz + wx)
+          const m20 = Math.abs(xz + wy),       m21 = Math.abs(yz - wx),       m22 = Math.abs(1 - (xx + yy))
+          const sx = sz[i3 + 0], sy = sz[i3 + 1], szz = sz[i3 + 2]
+          hx = m00 * sx + m01 * sy + m02 * szz
+          hy = m10 * sx + m11 * sy + m12 * szz
+          hz = m20 * sx + m21 * sy + m22 * szz
+          break
+        }
+        case RigidbodyShape.Capsule: {
+          // Capsule is a sphere swept along Y in body-local: AABB = sphere
+          // around each cap, unioned. After rotation, the cap offsets become
+          // ±halfHeight·R·ŷ, so AABB half-extents = |R·ŷ|·halfH + radius.
+          const r = sz[i3 + 0]
+          const halfH = sz[i3 + 1] * 0.5
+          const qx = ori[i4 + 0], qy = ori[i4 + 1], qz = ori[i4 + 2], qw = ori[i4 + 3]
+          // R · (0,1,0) = (2(xy − wz), 1 − 2(xx + zz), 2(yz + wx))
+          const rx = 2 * (qx * qy - qw * qz)
+          const ry = 1 - 2 * (qx * qx + qz * qz)
+          const rz = 2 * (qy * qz + qw * qx)
+          hx = Math.abs(rx) * halfH + r
+          hy = Math.abs(ry) * halfH + r
+          hz = Math.abs(rz) * halfH + r
+          break
+        }
+      }
+
+      minA[i3 + 0] = px - hx - margin
+      minA[i3 + 1] = py - hy - margin
+      minA[i3 + 2] = pz - hz - margin
+      maxA[i3 + 0] = px + hx + margin
+      maxA[i3 + 1] = py + hy + margin
+      maxA[i3 + 2] = pz + hz + margin
     }
   }
 

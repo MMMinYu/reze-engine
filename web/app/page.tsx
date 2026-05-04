@@ -208,6 +208,7 @@ export default function Home() {
       })
       engineRef.current = engine
       await engine.init()
+      // engine.setPhysicsDebug(true)
 
       const m1 = await engine.loadModel(SCENE_MODELS[0].id, "/models/塞尔凯特/塞尔凯特.pmx")
 

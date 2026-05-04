@@ -187,7 +187,7 @@ export const DEFAULT_ENGINE_OPTIONS = {
   sun: { color: new Vec3(1.0, 1.0, 1.0), strength: 2.0, direction: new Vec3(-0.0873, -0.3844, 0.919) },
   camera: { distance: 26.6, target: new Vec3(0, 12.5, 0), fov: Math.PI / 4 },
   onRaycast: undefined,
-  physicsOptions: { constraintSolverKeywords: ["胸"] },
+  physicsOptions: {},
 }
 
 export interface EngineStats {

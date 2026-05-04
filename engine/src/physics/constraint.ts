@@ -1,5 +1,5 @@
 import { Mat4 } from "../math"
-import type { Joint, Rigidbody, PhysicsOptions } from "./types"
+import type { Joint, Rigidbody } from "./types"
 
 // 6DOF spring constraint, modeled after btGeneric6DofSpringConstraint but
 // trimmed to what MMD actually uses. The constraint connects bodyA and bodyB
@@ -15,6 +15,10 @@ import type { Joint, Rigidbody, PhysicsOptions } from "./types"
 //
 // stopERP = 0.475 mirrors the old Ammo init: setParam(BT_CONSTRAINT_STOP_ERP,
 // 0.475, i) for every axis; PMX joints rely on this softness.
+//
+// The solver is hard-coded to Bullet 2.75's `useOffsetForConstraintFrame =
+// false` behavior (m_AnchorPos as mass-weighted blend), so there is no
+// per-constraint flag — the historical "胸" keyword whitelist is unnecessary.
 export interface SixDofSpringConstraint {
   bodyA: number
   bodyB: number
@@ -31,11 +35,6 @@ export interface SixDofSpringConstraint {
   springEnabled: Uint8Array     // length 6
   springStiffness: Float32Array // length 6 (k)
   equilibriumPoint: Float32Array// length 6, baked at setup time
-  // Bullet's m_useOffsetForConstraintFrame quirk. PMX rigs that contain the
-  // user-supplied keywords (e.g. "胸") opt out, matching Bullet 2.75 behavior.
-  // Today we don't yet differentiate; kept as a flag for the future ERP/anchor
-  // tweak so callers don't lose the metadata.
-  useOffsetForConstraintFrame: boolean
 }
 
 export const STOP_ERP = 0.475
@@ -52,13 +51,11 @@ export const STOP_ERP = 0.475
 export function buildConstraints(
   rigidbodies: Rigidbody[],
   joints: Joint[],
-  options: PhysicsOptions,
 ): SixDofSpringConstraint[] {
   const out: SixDofSpringConstraint[] = []
   const jointWorld = new Float32Array(16)
   const bodyWorld = new Float32Array(16)
   const bodyInv = new Float32Array(16)
-  const keywords = options.constraintSolverKeywords ?? []
 
   for (let j = 0; j < joints.length; j++) {
     const joint = joints[j]
@@ -108,14 +105,6 @@ export function buildConstraints(
     springStiffness[5] = joint.springRotation.z
     for (let i = 0; i < 6; i++) springEnabled[i] = springStiffness[i] !== 0 ? 1 : 0
 
-    // Bullet 2.75 vs 2.82+ frame-offset quirk: certain PMX models (notably
-    // breast joints, named with "胸") need the older flag-off behavior.
-    const name = joint.name + " " + joint.englishName
-    let useOffset = true
-    for (const k of keywords) {
-      if (name.includes(k)) { useOffset = false; break }
-    }
-
     out.push({
       bodyA: a,
       bodyB: b,
@@ -128,7 +117,6 @@ export function buildConstraints(
       springEnabled,
       springStiffness,
       equilibriumPoint: new Float32Array(6),
-      useOffsetForConstraintFrame: useOffset,
     })
   }
 
