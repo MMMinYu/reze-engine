@@ -1,27 +1,19 @@
-// Narrowphase contact generation. Each detect* function takes two body
-// indices and the store, and either appends a Contact to the output array or
-// returns early when the shapes don't overlap.
+// Narrowphase contact generation for sphere/box/capsule pairs.
 //
-// Contact convention: `normal` points from body A toward body B, so applying
-// +impulse along normal pushes B away from A. `rA` / `rB` are the world-space
-// offsets from each body's CG to the contact point — same lever-arm input
-// the joint solver expects, so contact and joint constraints share helpers.
-//
-// Penetration depth is positive when shapes overlap; zero means just-touching.
-//
-// MMD only uses sphere/box/capsule, so we cover sphere-sphere, sphere-capsule,
-// sphere-box, capsule-capsule, capsule-box. Box-box is rare in PMX rigs and
-// requires SAT + clipping, so we skip it for now.
+// Contact convention: `normal` points from body A toward body B, so a
+// positive normal impulse pushes B away from A. `rA` / `rB` are world-space
+// lever arms from each CG to the contact point. Depth is positive when
+// shapes overlap, ≤ 0 for speculative contacts inside the margin band.
+// Box-box not implemented (PMX rigs rarely use it and it needs SAT + clipping).
 
 import { RigidbodyShape } from "./types"
 import type { RigidBodyStore } from "./body"
 
-// Bullet's CONVEX_DISTANCE_MARGIN. Contacts fire when shapes are within this
-// distance of touching, with depth reported relative to the un-inflated
-// surface (so depth ≤ 0 for near-touch, > 0 for actual overlap). The
-// push-only normal-impulse clamp keeps speculative contacts inert until they
-// actually press in — the win is one frame of preventive impulse before
-// fast-moving cloth can cross a thin surface (the "dress through legs" case).
+// Speculative contact range. Depth is reported relative to the un-inflated
+// surface, so values 0 ≥ depth ≥ −CONTACT_MARGIN cover the "near touch but
+// not overlapping yet" case. The push-only impulse clamp keeps these inert
+// until actual overlap, but they prevent fast bodies from crossing a thin
+// surface in one substep without ever generating a contact.
 export const CONTACT_MARGIN = 0.04
 
 export interface Contact {
@@ -41,8 +33,7 @@ export interface Contact {
   depth: number
   friction: number
   restitution: number
-  // SI-row state, written by the solver each step. Keeping it on the Contact
-  // means the solver doesn't need a parallel array.
+  // SI-row state, written by the solver each iter.
   appliedNormalImpulse: number
   appliedFrictionImpulse1: number
   appliedFrictionImpulse2: number
@@ -70,8 +61,7 @@ function makeContact(): Contact {
   }
 }
 
-// Pool of reusable Contact objects. The world clears the active count each
-// step and the narrowphase fills entries via getContact() — keeps GC quiet.
+// Pool of reusable Contact objects.
 export class ContactPool {
   private pool: Contact[] = []
   count = 0
@@ -79,7 +69,6 @@ export class ContactPool {
   acquire(): Contact {
     if (this.count < this.pool.length) {
       const c = this.pool[this.count]
-      // Reset SI state so warmstart never carries over a stale impulse.
       c.appliedNormalImpulse = 0
       c.appliedFrictionImpulse1 = 0
       c.appliedFrictionImpulse2 = 0
@@ -100,9 +89,7 @@ export class ContactPool {
   }
 }
 
-// Combined friction / restitution per Bullet's default: geometric mean for
-// friction (closer to material physics than Bullet's actual `a*b`, but matches
-// what the SI solver uses), arithmetic mean for restitution.
+// Geometric mean for friction, arithmetic for restitution.
 function combineMaterials(store: RigidBodyStore, a: number, b: number, out: Contact): void {
   out.friction = Math.sqrt(store.friction[a] * store.friction[b])
   out.restitution = (store.restitution[a] + store.restitution[b]) * 0.5
@@ -488,15 +475,9 @@ function detectCapsuleCapsule(store: RigidBodyStore, a: number, b: number, pool:
     cBz,
   )
 
-  // Multi-point stabilization for nearly-parallel capsules. The closest-pair
-  // algorithm is degenerate when axes are parallel (denom = a·e − b² ≈ 0)
-  // and returns one arbitrary point — typically segment-A's start. That
-  // leaves the cloth free to rotate around the contact axis (visible as
-  // jitter) and gives only one push along the length, so a long capsule
-  // can pass through a thin one with insufficient resistance. Sampling at
-  // A's endpoints adds two contacts that pin both rotation and length-wise
-  // push, matching what Bullet's persistent manifold accumulates over
-  // frames via GJK + EPA.
+  // For nearly-parallel axes the closest-pair algorithm is degenerate
+  // (denom = a·e − b² ≈ 0) and returns one arbitrary point. Sampling A's
+  // endpoints adds two contacts that pin both rotation and length-wise push.
   const cosA = Math.abs(aAx[0] * aBx[0] + aAx[1] * aBx[1] + aAx[2] * aBx[2])
   if (cosA > 0.9) {
     closestPointOnSegment(p2x, p2y, p2z, q2x, q2y, q2z, p1x, p1y, p1z, _cpB)
@@ -551,11 +532,7 @@ function detectCapsuleCapsule(store: RigidBodyStore, a: number, b: number, pool:
 // --- Sphere–box (sphere = a, box = b) --------------------------------------
 const _localPt = new Float32Array(3)
 
-// Rotation matrix from body i's orientation, in row-major order:
-//   R = | 1−(yy+zz)   xy−wz       xz+wy     |
-//       | xy+wz       1−(xx+zz)   yz−wx     |
-//       | xz−wy       yz+wx       1−(xx+yy) |
-// (Same convention as math.ts Mat4.fromQuatInto; xx = 2·qx·qx etc.)
+// 3×3 row-major rotation matrix for body i (xx = 2·qx·qx etc.).
 const _rot = new Float32Array(9)
 function loadBodyRot(store: RigidBodyStore, i: number): void {
   const i4 = i * 4
@@ -731,16 +708,10 @@ function detectSphereBox(store: RigidBodyStore, a: number, b: number, pool: Cont
 }
 
 // --- Capsule–box -----------------------------------------------------------
-// Closest-point approach: transform the capsule's line segment into box-local
-// space, walk the segment to find the parameter t ∈ [0,1] whose point is
-// closest to the box (clamping each component into the box's extents), then
-// do sphere-box at the corresponding world-space sample. Falls back to
-// endpoint samples when the closest-point parameter is at the segment ends,
-// which catches cases where the capsule tangentially grazes a face.
-//
-// More accurate than the prior 3-fixed-samples version, which missed
-// penetration when a long capsule cut diagonally through a thin box (the
-// closest sphere-box wasn't at any of the fixed t = -1, 0, 1 samples).
+// Walk the capsule's segment (in box-local space) toward the box, sample
+// sphere-box at the converged parameter plus both endpoints. Endpoint
+// samples catch caps grazing a face when the closest-point parameter sits
+// at one end of the segment.
 function detectCapsuleBox(store: RigidBodyStore, a: number, b: number, pool: ContactPool): void {
   const pos = store.positions,
     sz = store.size
@@ -921,17 +892,12 @@ function detectCapsuleBox(store: RigidBodyStore, a: number, b: number, pool: Con
   combineMaterials(store, a, b, c)
 }
 
-// --- Dispatch --------------------------------------------------------------
-// Routes a colliding pair to the right narrowphase. Returns nothing — emits
-// 0..N contacts into the pool. Caller is responsible for the broadphase reject
-// and group/mask check.
+// Dispatch a pair to the matching narrowphase. Caller has already done
+// broadphase + group/mask filtering. Some shape pairs (sphere-A capsule-B
+// etc.) reuse a canonical implementation via swap + flipLastNormal.
 export function generateContacts(store: RigidBodyStore, a: number, b: number, pool: ContactPool): void {
   const sA = store.shape[a]
   const sB = store.shape[b]
-  // Canonicalize the pair so we have one branch per shape combination. We
-  // swap (a, b) when needed — narrowphase functions are written assuming a
-  // specific "smaller" shape on the A side (sphere < capsule < box for the
-  // ordering below).
   if (sA === RigidbodyShape.Sphere && sB === RigidbodyShape.Sphere) {
     detectSphereSphere(store, a, b, pool)
     return
@@ -967,16 +933,14 @@ export function generateContacts(store: RigidBodyStore, a: number, b: number, po
     flipLastNormal(pool)
     return
   }
-  // Box-box left unimplemented — see header note.
+  // Box-box left unimplemented.
 }
 
-// When we swap (a, b) to reuse a shape pair's narrowphase, the produced
-// contact has its normal pointing the wrong way. Flip it and re-anchor the
-// lever arms so bodyA refers to the original A again.
+// After a swapped detect* call, the last contact's normal points the wrong
+// way and lever arms are mismatched. Flip and re-anchor.
 function flipLastNormal(pool: ContactPool): void {
   if (pool.count === 0) return
   const c = pool.get(pool.count - 1)
-  // Swap body indices and lever arms.
   const ta = c.bodyA
   c.bodyA = c.bodyB
   c.bodyB = ta
@@ -994,22 +958,10 @@ function flipLastNormal(pool: ContactPool): void {
   c.nz = -c.nz
 }
 
-// --- Broadphase + dispatch -------------------------------------------------
-// O(N²) AABB pair test gated by PMX group/mask and the static-static skip.
-// For 30-100 PMX bodies this is well under 5000 cheap checks per step; SAP
-// or dynamic AABB tree only pays off above ~500 bodies, which MMD never hits.
-//
-// Collision filter: `(maskA & groupB) && (maskB & groupA)` — Bullet's standard
-// AND form. PMX rigs are tuned around symmetric-agreement semantics: a chest
-// collider explicitly opts OUT of breast (group 3) by clearing the bit, so
-// even though the breast body's mask lists group 0, the chest collider's
-// "no" wins and the pair is rejected. Switching to OR re-includes those
-// rejected pairs and breaks breast / accessory rigs that depend on the AND.
-// Hair-vs-body collision in PMX flows through hair group bit being set on
-// the body's mask AND the body group bit being set on hair's mask — when the
-// rig designer wants that collision, they make the masks symmetric.
-//
-// Caller resets the pool first.
+// O(N²) AABB pair test. For 30–100 PMX bodies that's <5000 checks per
+// step; SAP / dynamic AABB tree pay off above ~500 bodies. The pair filter
+// uses the AND form `(maskA & groupB) && (maskB & groupA)` — both sides
+// must agree, which is what PMX rigs are tuned against.
 export function findContacts(store: RigidBodyStore, pool: ContactPool): void {
   store.updateAabbs()
   const N = store.count
@@ -1022,9 +974,7 @@ export function findContacts(store: RigidBodyStore, pool: ContactPool): void {
     const mi = mask[i]
     const dynA = invMass[i] > 0
     for (let j = i + 1; j < N; j++) {
-      // Skip pairs where neither body can move — pure static-static contact
-      // has no resolution to apply.
-      if (!dynA && invMass[j] === 0) continue
+      if (!dynA && invMass[j] === 0) continue // both static — no resolution
       if ((mi & group[j]) === 0 || (mask[j] & gi) === 0) continue
       if (!aabbOverlap(store, i, j)) continue
       generateContacts(store, i, j, pool)

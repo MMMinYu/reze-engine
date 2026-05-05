@@ -48,7 +48,3 @@ export interface Joint {
   springRotation: Vec3 // Spring stiffness values
 }
 
-// Reserved for future engine-level overrides (gravity scale, solver iter count,
-// etc.). The Bullet 2.75 anchor convention removed the only previous field
-// (constraintSolverKeywords), so the shape is currently empty.
-export type PhysicsOptions = Record<string, never>

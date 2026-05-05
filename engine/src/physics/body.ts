@@ -1,52 +1,41 @@
 import { Mat4, Quat } from "../math"
 import { RigidbodyType, RigidbodyShape, type Rigidbody } from "./types"
 
-// SoA storage for all rigid bodies in a RezePhysics world. Holds per-body
-// state (positions, velocities), constants (mass/inertia/damping/group/mask),
-// the bind-pose↔bone coupling matrices, and a per-step AABB for broadphase.
+// SoA storage for all rigid bodies. Per-body state, constants, bone-coupling
+// matrices, and a per-step AABB.
 export class RigidBodyStore {
   readonly count: number
 
-  // Per-body state (parallel arrays).
   readonly positions: Float32Array // 3*N
   readonly orientations: Float32Array // 4*N (xyzw)
   readonly linearVelocities: Float32Array // 3*N
   readonly angularVelocities: Float32Array // 3*N
 
-  // Per-body constants (set once from PMX, not mutated by the simulator).
   readonly invMass: Float32Array // N (0 for static / kinematic)
-  // Scalar isotropic inverse inertia. Real bodies have a 3x3 tensor, but
-  // PMX shapes are roughly compact so a single I⁻¹ is good enough — and *much*
-  // better than collapsing to invMass (which under-rotates by 100-1000×).
-  // Sphere:  I = (2/5)·m·r²;  Box: I = (1/3)·m·max(a,b,c)²
-  // Capsule: I = (1/12)·m·(3r² + h²) (cylinder, transverse axis).
-  readonly invInertia: Float32Array // N (0 for static / kinematic)
-  readonly linearDamping: Float32Array // N
-  readonly angularDamping: Float32Array // N
-  readonly type: Uint8Array // N (RigidbodyType)
-  readonly boneIndex: Int32Array // N (-1 if unattached)
-  readonly friction: Float32Array // N (Coulomb friction coefficient)
-  readonly restitution: Float32Array // N (bounciness, 0..1)
+  // Scalar isotropic inverse inertia. The full 3×3 tensor would be more
+  // accurate but PMX shapes are roughly compact, and a single I⁻¹ is far
+  // better than reusing invMass (which under-rotates by 100–1000×).
+  readonly invInertia: Float32Array
+  readonly linearDamping: Float32Array
+  readonly angularDamping: Float32Array
+  readonly type: Uint8Array
+  readonly boneIndex: Int32Array
+  readonly friction: Float32Array
+  readonly restitution: Float32Array
 
-  // Collision filtering. PMX has 16 groups; group is the body's own index
-  // (1..16, stored as zero-based 0..15) and collisionMask is the set of
-  // groups it *will not* collide with — invert to get "willCollide" mask
-  // (the form solvers actually want to test).
-  readonly collisionGroup: Uint16Array // N (single bit, 1<<groupIndex)
-  readonly willCollideMask: Uint16Array // N (16 bits, 1 = pair allowed)
+  // PMX has 16 collision groups. `collisionGroup[i]` is a single-bit set;
+  // `willCollideMask[i]` is the 16-bit set of groups body i collides with.
+  readonly collisionGroup: Uint16Array
+  readonly willCollideMask: Uint16Array
 
-  // Shape descriptor for narrowphase. Same layout as PMX.
-  readonly shape: Uint8Array // N (RigidbodyShape)
+  readonly shape: Uint8Array
   readonly size: Float32Array // 3*N (semantics depend on shape)
 
-  // Per-step AABB (world space, axis-aligned). Refreshed by updateAabbs()
-  // each step from current position + orientation + shape.
   readonly aabbMin: Float32Array // 3*N
   readonly aabbMax: Float32Array // 3*N
 
-  // Bone↔body coupling. bodyOffsetMatrix[i] = boneInverseBind × shapeWorldBind.
-  // bodyWorld = boneWorld × bodyOffsetMatrix; boneWorld = bodyWorld × bodyOffsetInverse.
-  // Filled by computeBoneOffsets() — until then, both arrays are zero.
+  // bodyOffsetMatrix[i] = boneInverseBind · shapeWorldBind.
+  // bodyWorld = boneWorld · bodyOffsetMatrix; boneWorld = bodyWorld · bodyOffsetInverse.
   readonly bodyOffsetMatrix: Float32Array // 16*N column-major
   readonly bodyOffsetInverse: Float32Array // 16*N column-major
   private boneOffsetsReady = false
@@ -100,9 +89,6 @@ export class RigidBodyStore {
       this.boneIndex[i] = rb.boneIndex
       this.friction[i] = rb.friction
       this.restitution[i] = rb.restitution
-      // PMX `group` is 1..16 (or 0..15 zero-based). Encode as single-bit set.
-      // collisionMask in PMX lists groups this body WILL collide with — store
-      // directly so solvers can do `(maskA & groupB) && (maskB & groupA)`.
       this.collisionGroup[i] = 1 << (rb.group & 0xf)
       this.willCollideMask[i] = rb.collisionMask & 0xffff
       this.shape[i] = rb.shape
@@ -112,9 +98,8 @@ export class RigidBodyStore {
     }
   }
 
-  // Refresh world-space AABBs for every body. Called once per step before
-  // broadphase. Includes a small inflation margin so contacts stay paired
-  // across velocity-induced jitter without re-checking AABBs each iteration.
+  // World-space AABBs for every body. Inflated by margin so contacts stay
+  // paired across small velocity jitter without recomputing per iteration.
   updateAabbs(margin = 0.5): void {
     const N = this.count
     const pos = this.positions
@@ -141,7 +126,7 @@ export class RigidBodyStore {
           break
         }
         case RigidbodyShape.Box: {
-          // Conservative AABB of an OBB: half-extents projected by |R|·size.
+          // OBB AABB: half-extents projected by |R|·size.
           const qx = ori[i4 + 0],
             qy = ori[i4 + 1],
             qz = ori[i4 + 2],
@@ -176,9 +161,8 @@ export class RigidBodyStore {
           break
         }
         case RigidbodyShape.Capsule: {
-          // Capsule is a sphere swept along Y in body-local: AABB = sphere
-          // around each cap, unioned. After rotation, the cap offsets become
-          // ±halfHeight·R·ŷ, so AABB half-extents = |R·ŷ|·halfH + radius.
+          // After rotation, cap offsets are ±halfH · R·ŷ, so AABB half-
+          // extents = |R·ŷ|·halfH + radius.
           const r = sz[i3 + 0]
           const halfH = sz[i3 + 1] * 0.5
           const qx = ori[i4 + 0],
@@ -205,9 +189,8 @@ export class RigidBodyStore {
     }
   }
 
-  // Compute bodyOffsetMatrix + bodyOffsetInverse for every body bound to a bone.
-  // Called once on the first physics step, when bone inverse-bind matrices are
-  // available. Bodies with boneIndex < 0 get identity offsets.
+  // Compute bone-coupling matrices once, on the first step. Bodies with
+  // boneIndex < 0 get identity offsets.
   computeBoneOffsets(boneInverseBindMatrices: Float32Array): void {
     const N = this.count
     const offsets = this.bodyOffsetMatrix
@@ -266,17 +249,14 @@ export class RigidBodyStore {
   }
 }
 
-// Module-local scratch matrices, used only inside computeBoneOffsets above and
-// reset on every call so concurrent calls would still be safe per-instance
-// (we don't run RezePhysics concurrently).
 const _scratchA = new Float32Array(16)
 const _scratchB = new Float32Array(16)
 const _scratchC = new Float32Array(16)
 
-// Scalar isotropic inverse inertia. Conservative analytical formulas per shape
-// (treated as a single transverse-axis value — exact along that axis, slight
-// over-/under-estimate on others). Skips static bodies (mass = 0) by returning
-// 0; the solver guards against ÷0 separately.
+// Scalar isotropic inverse inertia. Returns 0 for static bodies (mass = 0).
+//   Sphere:  I = (2/5)·m·r²
+//   Box:     I = (1/3)·m·max(a,b,c)²
+//   Capsule: I = (1/12)·m·(3r² + h²)  (cylinder transverse axis)
 function computeInvInertia(rb: Rigidbody): number {
   const m = rb.mass
   if (m <= 0) return 0
@@ -288,14 +268,12 @@ function computeInvInertia(rb: Rigidbody): number {
       break
     }
     case RigidbodyShape.Box: {
-      // Use the largest half-extent — produces a single isotropic value that
-      // doesn't under-rotate the long axis.
+      // Largest half-extent so the long axis isn't under-rotated.
       const a = Math.max(rb.size.x, rb.size.y, rb.size.z)
       I = (1 / 3) * m * a * a
       break
     }
     case RigidbodyShape.Capsule: {
-      // Cylinder transverse axis: I = (1/12)·m·(3r² + h²) where h = full height.
       const r = rb.size.x
       const h = rb.size.y
       I = (1 / 12) * m * (3 * r * r + h * h)

@@ -2,8 +2,7 @@ import { Camera } from "./camera"
 import { Mat4, Quat, Vec3 } from "./math"
 import { Model } from "./model"
 import { PmxLoader } from "./pmx-loader"
-import { RezePhysics, type PhysicsOptions } from "./physics"
-import { PhysicsDebugRenderer } from "./physics-debug"
+import { RezePhysics } from "./physics"
 import {
   createFetchAssetReader,
   createFileMapAssetReader,
@@ -179,7 +178,6 @@ export type EngineOptions = {
   onRaycast?: RaycastCallback
   /** See {@link GizmoDragCallback}. */
   onGizmoDrag?: GizmoDragCallback
-  physicsOptions?: PhysicsOptions
 }
 
 export const DEFAULT_ENGINE_OPTIONS = {
@@ -187,7 +185,6 @@ export const DEFAULT_ENGINE_OPTIONS = {
   sun: { color: new Vec3(1.0, 1.0, 1.0), strength: 2.0, direction: new Vec3(-0.0873, -0.3844, 0.919) },
   camera: { distance: 26.6, target: new Vec3(0, 12.5, 0), fov: Math.PI / 4 },
   onRaycast: undefined,
-  physicsOptions: {},
 }
 
 export interface EngineStats {
@@ -431,7 +428,6 @@ export class Engine {
 
   private onRaycast?: RaycastCallback
   private onGizmoDrag?: GizmoDragCallback
-  private physicsOptions: PhysicsOptions = DEFAULT_ENGINE_OPTIONS.physicsOptions
   private lastTouchTime = 0
   private readonly DOUBLE_TAP_DELAY = 300
   // GPU picking
@@ -456,8 +452,6 @@ export class Engine {
   // IK and physics enabled at engine level (same for all models)
   private ikEnabled = true
   private physicsEnabled = true
-  private physicsDebugVisible = false
-  private physicsDebugRenderer: PhysicsDebugRenderer | null = null
 
   // Camera target binding (Babylon/Three style: camera follows model)
   private cameraTargetModel: Model | null = null
@@ -497,7 +491,6 @@ export class Engine {
     }
     this.onRaycast = options?.onRaycast
     this.onGizmoDrag = options?.onGizmoDrag
-    this.physicsOptions = options?.physicsOptions ?? d.physicsOptions
     this.bloomSettings = Engine.mergeBloomDefaults(options?.bloom)
     this.viewTransform = Engine.mergeViewTransformDefaults(options?.view)
   }
@@ -1536,16 +1529,6 @@ export class Engine {
       size: 256,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     })
-
-    // Physics debug overlay — wireframe + solid sphere/box/capsule per body.
-    // Renders in its own swapchain pass after composite (see renderPhysicsDebug),
-    // so it always sits on top of the tonemapped scene regardless of depth /
-    // MSAA / camera angle. Toggled by setPhysicsDebug().
-    this.physicsDebugRenderer = new PhysicsDebugRenderer(
-      this.device,
-      this.cameraUniformBuffer,
-      this.presentationFormat,
-    )
   }
 
   // Step 3: Setup canvas resize handling
@@ -2371,14 +2354,6 @@ export class Engine {
     return this.physicsEnabled
   }
 
-  setPhysicsDebug(enabled: boolean): void {
-    this.physicsDebugVisible = enabled
-  }
-
-  getPhysicsDebug(): boolean {
-    return this.physicsDebugVisible
-  }
-
   resetPhysics(): void {
     this.forEachInstance((inst) => {
       if (!inst.physics) return
@@ -2473,7 +2448,7 @@ export class Engine {
     this.device.queue.writeBuffer(indexBuffer, 0, indices)
 
     const rbs = model.getRigidbodies()
-    const physics = rbs.length > 0 ? new RezePhysics(rbs, model.getJoints(), this.physicsOptions) : null
+    const physics = rbs.length > 0 ? new RezePhysics(rbs, model.getJoints()) : null
 
     const shadowBindGroup = this.device.createBindGroup({
       label: `${name}: shadow bind`,
@@ -3565,7 +3540,6 @@ export class Engine {
     cpass.draw(3)
     cpass.end()
 
-    if (this.physicsDebugVisible && hasModels) this.renderPhysicsDebug(encoder, swapchainView)
     if (this.selectedMaterial && hasModels) this.renderSelectionPasses(encoder, swapchainView)
     if (this.selectedBone && hasModels) this.renderGizmoPass(encoder, swapchainView)
 
@@ -3674,27 +3648,6 @@ export class Engine {
     this.drawHairOverEyes(pass, inst)
     this.drawMaterials(pass, inst, "transparent")
     this.drawOutlines(pass, inst, "transparent-outline")
-  }
-
-  // Physics debug — separate swapchain pass after composite, no depth/MSAA so
-  // the overlay never gets clipped by the model's depth buffer or aliased away
-  // by per-sample line rasterization at oblique angles.
-  private renderPhysicsDebug(encoder: GPUCommandEncoder, swapchainView: GPUTextureView): void {
-    if (!this.physicsDebugRenderer) return
-    let pass: GPURenderPassEncoder | null = null
-    this.forEachInstance((inst) => {
-      if (!inst.physics) return
-      if (!pass) {
-        pass = encoder.beginRenderPass({
-          label: "physics debug pass",
-          colorAttachments: [
-            { view: swapchainView, loadOp: "load", storeOp: "store" },
-          ],
-        })
-      }
-      this.physicsDebugRenderer!.render(pass, inst.physics)
-    })
-    if (pass) (pass as GPURenderPassEncoder).end()
   }
 
   /**

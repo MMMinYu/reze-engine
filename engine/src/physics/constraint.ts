@@ -1,24 +1,15 @@
 import { Mat4 } from "../math"
 import type { Joint, Rigidbody } from "./types"
 
-// 6DOF spring constraint, modeled after btGeneric6DofSpringConstraint but
-// trimmed to what MMD actually uses. The constraint connects bodyA and bodyB
-// via local-space anchor frames frameA / frameB. At simulate time the world
-// frames are TA = worldA × frameA, TB = worldB × frameB. The 6 DOFs are the
-// linear diff in TA's basis (axes 0..2) and the Euler-XYZ angular diff between
-// TA's and TB's basis (axes 3..5), matching Bullet's index convention.
+// 6DOF spring constraint trimmed to what MMD uses. Connects bodyA and bodyB
+// via local-space anchor frames; at simulate time the world frames are
+// TA = worldA · frameA, TB = worldB · frameB. The 6 DOFs are the linear
+// diff in TA's basis (axes 0..2) and the Euler-XYZ angular diff between
+// TA's and TB's basis (axes 3..5).
 //
 // Springs (when enabled) drive each DOF toward equilibriumPoint[i] with
-// stiffness[i] (Hooke). Damping is fixed to 1.0 (no extra damping) — matches
-// the constructor default in btGeneric6DofSpringConstraint and what saba and
-// MMD-tuned rigs expect.
-//
-// stopERP = 0.475 mirrors the old Ammo init: setParam(BT_CONSTRAINT_STOP_ERP,
-// 0.475, i) for every axis; PMX joints rely on this softness.
-//
-// The solver is hard-coded to Bullet 2.75's `useOffsetForConstraintFrame =
-// false` behavior (m_AnchorPos as mass-weighted blend), so there is no
-// per-constraint flag — the historical "胸" keyword whitelist is unnecessary.
+// stiffness[i]. Per-axis stop ERP is 0.475 — PMX joint limits are tuned
+// against this softness.
 export interface SixDofSpringConstraint {
   bodyA: number
   bodyB: number
@@ -39,15 +30,10 @@ export interface SixDofSpringConstraint {
 
 export const STOP_ERP = 0.475
 
-// Build per-joint constraints from PMX joint + rigidbody data, matching the
-// math the deleted Ammo path used:
-//   frameA = (bodyA_worldBind)^(-1) × jointWorldBind
-//   frameB = (bodyB_worldBind)^(-1) × jointWorldBind
-// where bodyN_worldBind = T(rb.shapePosition) · R(rb.shapeRotation) and
-// jointWorldBind = T(joint.position) · R(joint.rotation).
-//
-// Equilibrium is set to zero on every axis (the "current" pose at bind = 0
-// linear diff and 0 angular diff, since both frames coincide on the joint).
+// Build per-joint constraints from PMX data:
+//   frameA = (bodyA_worldBind)^-1 · jointWorldBind
+//   frameB = (bodyB_worldBind)^-1 · jointWorldBind
+// Equilibrium is zero on every axis (both frames coincide at bind pose).
 export function buildConstraints(
   rigidbodies: Rigidbody[],
   joints: Joint[],
@@ -81,9 +67,8 @@ export function buildConstraints(
 
     const linearMin = new Float32Array([joint.positionMin.x, joint.positionMin.y, joint.positionMin.z])
     const linearMax = new Float32Array([joint.positionMax.x, joint.positionMax.y, joint.positionMax.z])
-    // Normalize angular bounds to [-π, π] — same as the old Ammo path; some
-    // PMX rigs encode "fully free" axes with values like ±π·N that drift over
-    // wrap and break the limit comparisons.
+    // Some PMX rigs encode "free" angular axes as ±π·N which wraps badly
+    // in limit comparisons — normalize to [-π, π] up front.
     const angularMin = new Float32Array([
       normalizeAngle(joint.rotationMin.x),
       normalizeAngle(joint.rotationMin.y),
@@ -123,8 +108,7 @@ export function buildConstraints(
   return out
 }
 
-// frame = bodyWorldBind^(-1) × jointWorld. Returns false if bodyWorldBind is
-// singular (shouldn't happen for sane PMX data).
+// frame = bodyWorldBind^-1 · jointWorld. False if bodyWorldBind is singular.
 function buildLocalFrame(
   rb: Rigidbody,
   jointWorld: Float32Array,
@@ -151,8 +135,8 @@ function normalizeAngle(a: number): number {
   return a
 }
 
-// Local helper — same convention as Quat.fromEuler (ZXY, LH PMX) but inlined
-// to avoid an allocation per joint.
+// ZXY left-handed Euler → quat (matches Quat.fromEuler), inlined to skip
+// the allocation per joint at build time.
 function eulerToQuat(rx: number, ry: number, rz: number) {
   const cx = Math.cos(rx * 0.5), sx = Math.sin(rx * 0.5)
   const cy = Math.cos(ry * 0.5), sy = Math.sin(ry * 0.5)

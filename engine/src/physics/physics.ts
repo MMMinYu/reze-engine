@@ -1,53 +1,37 @@
 import { Vec3, Quat, Mat4 } from "../math"
-import type { Rigidbody, Joint, PhysicsOptions } from "./types"
+import type { Rigidbody, Joint } from "./types"
 import { RigidbodyType } from "./types"
 import { RigidBodyStore } from "./body"
 import { World } from "./world"
 import { buildConstraints, type SixDofSpringConstraint } from "./constraint"
 import { ContactPool } from "./contact"
 
-// Scratch storage shared across all instances — RezePhysics step() runs
-// synchronously and never re-enters itself, so reusing module-local buffers
-// is safe and avoids per-frame allocation.
 const _bodyMat = new Float32Array(16)
 const _boneMat = new Float32Array(16)
 const _scratchQuat = new Quat(0, 0, 0, 1)
 
-// reze-physics public class. API matches the prior Ammo-backed Physics so the
-// engine integration in engine.ts is unchanged.
-//
-// Current behavior (gravity-only stage):
-//   - Static / kinematic bodies follow their bone via boneWorld × bodyOffset.
-//   - Dynamic bodies integrate under gravity + damping; their world transforms
-//     are written back to bones via bodyWorld × bodyOffsetInverse.
-//   - No contacts, no joints. Hair tips, skirts, etc. will free-fall until the
-//     6DOF spring constraint solver lands.
+// Static / kinematic bodies follow their bone via boneWorld × bodyOffset;
+// dynamic bodies integrate under gravity + constraints and write their pose
+// back via bodyWorld × bodyOffsetInverse.
 export class RezePhysics {
   private rigidbodies: Rigidbody[]
   private joints: Joint[]
-  private options: PhysicsOptions
   private store: RigidBodyStore
   private world: World
   private constraints: SixDofSpringConstraint[]
   private contacts: ContactPool
   private firstFrame = true
-  // Fixed-timestep accumulator. Matches Ammo's stepSimulation(dt, 10, 1/75)
-  // exactly: physics runs at a consistent 75 Hz regardless of render rate
-  // variance. Variable render dt makes spring impulse (∝ dt), damping
-  // (pow(1-d, dt)), and integration (pos += vel·dt) all change frame-to-frame
-  // — for a coupled cloth chain that prevents steady state and shows up as
-  // dress-shaking jitter that survives every other contact-side fix. Bullet
-  // doesn't have this problem because it always substeps internally.
+  // Fixed-timestep accumulator: physics runs at 75 Hz regardless of render
+  // rate, so spring impulse, damping, and integration are deterministic.
   private timeAccum = 0
   private readonly fixedTimeStep = 1 / 75
   private readonly maxSubSteps = 10
 
-  constructor(rigidbodies: Rigidbody[], joints: Joint[] = [], options?: PhysicsOptions) {
+  constructor(rigidbodies: Rigidbody[], joints: Joint[] = []) {
     this.rigidbodies = rigidbodies
     this.joints = joints
-    this.options = options ?? {}
     this.store = new RigidBodyStore(rigidbodies)
-    this.world = new World(new Vec3(0, -98, 0)) // MMD scale, cm/s²
+    this.world = new World(new Vec3(0, -98, 0))
     this.constraints = buildConstraints(rigidbodies, joints)
     this.contacts = new ContactPool()
   }
@@ -64,11 +48,6 @@ export class RezePhysics {
   getJoints(): Joint[] {
     return this.joints
   }
-  getOptions(): PhysicsOptions {
-    return this.options
-  }
-  // Direct SoA access for the debug renderer / future tooling. Treat as
-  // read-only — mutating these arrays will break the simulator.
   getStore(): RigidBodyStore {
     return this.store
   }
@@ -98,23 +77,19 @@ export class RezePhysics {
   step(dt: number, boneWorldMatrices: Mat4[], boneInverseBindMatrices: Float32Array): void {
     if (this.firstFrame) {
       this.store.computeBoneOffsets(boneInverseBindMatrices)
-      // Start every body at its bone-driven world pose, not the PMX bind pose,
-      // so animations that skip frame 0 don't pop bodies on first step.
+      // Start at current bone pose, not the PMX bind pose, so animations
+      // that skip frame 0 don't pop bodies on first step.
       this.snapBodiesToBones(boneWorldMatrices)
       this.firstFrame = false
     }
 
-    // Pull static & kinematic bodies along with their bones. Done once per
-    // render frame — kinematic targets don't change between substeps, same
-    // as Bullet's internal pipeline. Pass render dt so kinematic velocities
-    // can be derived from the bone-pose delta.
+    // Sync once per render frame; kinematic targets don't change between
+    // substeps. Render dt is used to derive kinematic velocities from the
+    // bone-pose delta so joints feel the kinematic motion.
     this.syncFromBones(boneWorldMatrices, dt)
 
-    // Fixed-timestep substeps. At 60 fps render with fixedTimeStep = 1/75,
-    // we run ~1.25 substeps per frame on average (1, 1, 1, 2, 1, 1, 1, 2…).
-    // The maxSubSteps cap prevents runaway after a long stall (tab
-    // backgrounded etc.) — if we hit it, we drop residual accumulation
-    // rather than letting debt pile up forever.
+    // Fixed-timestep substeps. The maxSubSteps cap prevents runaway after
+    // a long stall (tab backgrounded, etc.).
     this.timeAccum += dt
     let sub = 0
     while (this.timeAccum >= this.fixedTimeStep && sub < this.maxSubSteps) {
@@ -124,12 +99,10 @@ export class RezePhysics {
     }
     if (sub === this.maxSubSteps) this.timeAccum = 0
 
-    // Push dynamic body transforms back to their bones.
     this.applyDynamicsToBones(boneWorldMatrices)
   }
 
-  // For every bone-bound body, set its world transform to boneWorld × bodyOffset
-  // and clear its velocities. Used on first step + on reset.
+  // Snap all bone-bound bodies to boneWorld × bodyOffset, zero velocities.
   private snapBodiesToBones(boneWorldMatrices: Mat4[]): void {
     const N = this.store.count
     const offsets = this.store.bodyOffsetMatrix
@@ -165,13 +138,10 @@ export class RezePhysics {
     }
   }
 
-  // Static (FollowBone) and Kinematic bodies read their transform from bones.
-  // Linear + angular velocities are derived from the bone-pose delta so the
-  // joint solver sees fast-moving kinematic bodies actually moving — without
-  // this, joints attached to a fast arm only see a *position* jump and can't
-  // drag dependent cloth bodies along at the kinematic's pace, so cloth
-  // visibly lags during quick limb motion. Mirrors Bullet's
-  // btRigidBody::saveKinematicState → btTransformUtil::calculateVelocity.
+  // Pull Static / Kinematic bodies to their bones and derive velocities
+  // from the bone-pose delta — joints attached to fast limbs need to see
+  // the kinematic motion, not just the position jump, or dependent cloth
+  // bodies lag behind quick movement.
   private syncFromBones(boneWorldMatrices: Mat4[], dt: number): void {
     const N = this.store.count
     const offsets = this.store.bodyOffsetMatrix
@@ -194,37 +164,47 @@ export class RezePhysics {
       const i3 = i * 3
       const i4 = i * 4
 
-      // Save previous transform before overwriting — needed for velocity
-      // diff. invDt = 0 (first frame / reset) skips the diff and zeros
-      // velocities, matching the original behavior in those cases.
-      const oldPx = positions[i3 + 0], oldPy = positions[i3 + 1], oldPz = positions[i3 + 2]
-      const oldOx = orientations[i4 + 0], oldOy = orientations[i4 + 1]
-      const oldOz = orientations[i4 + 2], oldOw = orientations[i4 + 3]
+      // Save previous transform for the velocity diff. invDt = 0 (first
+      // frame / reset) skips the diff and zeros velocities.
+      const oldPx = positions[i3 + 0],
+        oldPy = positions[i3 + 1],
+        oldPz = positions[i3 + 2]
+      const oldOx = orientations[i4 + 0],
+        oldOy = orientations[i4 + 1]
+      const oldOz = orientations[i4 + 2],
+        oldOw = orientations[i4 + 3]
 
       positions[i3 + 0] = _bodyMat[12]
       positions[i3 + 1] = _bodyMat[13]
       positions[i3 + 2] = _bodyMat[14]
       Mat4.toQuatFromArrayInto(_bodyMat, 0, _scratchQuat)
-      const newOx = _scratchQuat.x, newOy = _scratchQuat.y
-      const newOz = _scratchQuat.z, newOw = _scratchQuat.w
+      const newOx = _scratchQuat.x,
+        newOy = _scratchQuat.y
+      const newOz = _scratchQuat.z,
+        newOw = _scratchQuat.w
       orientations[i4 + 0] = newOx
       orientations[i4 + 1] = newOy
       orientations[i4 + 2] = newOz
       orientations[i4 + 3] = newOw
 
       if (invDt === 0) {
-        lv[i3 + 0] = 0; lv[i3 + 1] = 0; lv[i3 + 2] = 0
-        av[i3 + 0] = 0; av[i3 + 1] = 0; av[i3 + 2] = 0
+        lv[i3 + 0] = 0
+        lv[i3 + 1] = 0
+        lv[i3 + 2] = 0
+        av[i3 + 0] = 0
+        av[i3 + 1] = 0
+        av[i3 + 2] = 0
       } else {
         lv[i3 + 0] = (_bodyMat[12] - oldPx) * invDt
         lv[i3 + 1] = (_bodyMat[13] - oldPy) * invDt
         lv[i3 + 2] = (_bodyMat[14] - oldPz) * invDt
 
-        // ω from quaternion delta. qDiff = qNew * conj(qOld); for the
-        // small-angle range typical of one render-frame's worth of bone
-        // motion, ω ≈ 2 · qDiff.xyz / dt. Pick the shortest-arc sign so
-        // qDiff and −qDiff (same rotation) don't double the angular speed.
-        const cox = -oldOx, coy = -oldOy, coz = -oldOz, cow = oldOw
+        // ω ≈ 2 · qDiff.xyz / dt with qDiff = qNew · conj(qOld). Shortest-
+        // arc sign keeps qDiff and −qDiff (same rotation) from doubling ω.
+        const cox = -oldOx,
+          coy = -oldOy,
+          coz = -oldOz,
+          cow = oldOw
         const dx = newOw * cox + newOx * cow + newOy * coz - newOz * coy
         const dy = newOw * coy - newOx * coz + newOy * cow + newOz * cox
         const dz = newOw * coz + newOx * coy - newOy * cox + newOz * cow

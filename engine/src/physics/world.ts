@@ -5,20 +5,13 @@ import type { SixDofSpringConstraint } from "./constraint"
 import { solveConstraints } from "./solver"
 import { findContacts, type ContactPool } from "./contact"
 
-// World owns the simulator. Steps in Bullet's predict → solve → integrate
-// order so constraint impulses take effect on the same frame they're computed:
-//
-//   1. Predict: gravity + damping update velocities (no position change).
-//   2. Solve constraints: SI-style impulse correction adjusts velocities.
-//   3. Integrate: pos += vel · dt; orientation += ½(ω · q) · dt, normalized.
-//
-// Damping matches Bullet 2.x: v *= clamp(1 − damping · dt, 0, 1). Static and
-// kinematic bodies are skipped during predict/integrate; RezePhysics syncs
-// those from bones around the step. Constraint solve runs on all bodies —
-// kinematic ones have invMass = 0 and act as anchors.
+// World step: predict velocities → collide → solve → position correction →
+// integrate. Static and kinematic bodies are skipped during predict and
+// integrate; the parent class syncs them from bones around the step. The
+// solver pass runs on all bodies — kinematic ones have invMass = 0 and
+// act as anchors.
 export class World {
   readonly gravity: Vec3
-  // Bullet defaults to 10 SI iterations; matching keeps tuning consistent.
   solverIterations = 10
 
   constructor(gravity: Vec3) {
@@ -31,12 +24,7 @@ export class World {
     this.gravity.z = g.z
   }
 
-  step(
-    store: RigidBodyStore,
-    constraints: SixDofSpringConstraint[],
-    contacts: ContactPool,
-    dt: number,
-  ): void {
+  step(store: RigidBodyStore, constraints: SixDofSpringConstraint[], contacts: ContactPool, dt: number): void {
     if (dt <= 0) return
 
     const N = store.count
@@ -53,12 +41,9 @@ export class World {
     const gy = this.gravity.y
     const gz = this.gravity.z
 
-    // 1. Predict: gravity + damping (velocities only, no position update).
-    // Damping form matches btRigidBody::applyDamping exactly:
-    //   vel *= (1 − damping)^dt
-    // The linear `1 − damping·dt` approximation diverges at high PMX damping
-    // values (e.g. 0.99) and changes how quickly motion bleeds out, so we
-    // mirror Bullet's pow form for parameter fidelity.
+    // 1. Predict — gravity + damping. The pow form (vs the linear
+    //    1−damping·dt approximation) stays stable at high PMX damping
+    //    values like 0.99.
     for (let i = 0; i < N; i++) {
       if (types[i] !== RigidbodyType.Dynamic || invMass[i] <= 0) continue
       const i3 = i * 3
@@ -71,28 +56,20 @@ export class World {
       av[i3 + 0] *= ad; av[i3 + 1] *= ad; av[i3 + 2] *= ad
     }
 
-    // 2. Collision detection (broadphase + narrowphase) — must run after
-    //    velocities are predicted but before constraint solve, so contact
-    //    impulses can be applied alongside joint impulses in the same loop.
+    // 2. Collide.
     contacts.reset()
     findContacts(store, contacts)
 
-    // 3. Solve joint constraints + contacts in the same SI loop. Velocity-
-    //    only correction so it composes with the integration step below.
+    // 3. Solve joint + contact constraints (velocity-only).
     if (constraints.length > 0 || contacts.count > 0) {
       solveConstraints(store, constraints, contacts, dt, this.solverIterations)
     }
 
-    // 3b. Position correction. Direct translation of penetrating bodies
-    //     along the contact normal — Bullet's split-impulse pattern. The
-    //     velocity-bias position correction inside solveConstraints (the
-    //     `posBias = depth · erp · invDt` line) routes position correction
-    //     through the velocity channel, where joint constraints in the same
-    //     SI loop can fight it back to zero each iteration. Direct position
-    //     translation can't be undone by anything else in the step, so a
-    //     joint pulling cloth into a leg can't keep the cloth penetrating.
-    //     Inverse-mass weighted so a kinematic body (invMass = 0) doesn't
-    //     move; only the dynamic body translates.
+    // 4. Position correction (split impulse). Direct translation along the
+    //    contact normal — joint constraints in the same SI loop can't undo
+    //    it because it doesn't go through the velocity channel. Inverse-mass
+    //    weighted so a kinematic body stays put and only the dynamic one
+    //    translates.
     const POS_CORRECTION_FACTOR = 0.4
     const POS_SLOP = 0.005
     for (let ci = 0; ci < contacts.count; ci++) {
@@ -122,7 +99,10 @@ export class World {
       }
     }
 
-    // 4. Integrate transforms.
+    // 5. Integrate. Cap angular velocity at π/2 per step — a high-impulse
+    //    contact spike on a low-inertia body would otherwise spin past π
+    //    in one step and trash the quaternion integration.
+    const MAX_ANGVEL_DT = Math.PI * 0.5
     for (let i = 0; i < N; i++) {
       if (types[i] !== RigidbodyType.Dynamic || invMass[i] <= 0) continue
       const i3 = i * 3
@@ -132,9 +112,15 @@ export class World {
       pos[i3 + 1] += lv[i3 + 1] * dt
       pos[i3 + 2] += lv[i3 + 2] * dt
 
-      const wx = av[i3 + 0]
-      const wy = av[i3 + 1]
-      const wz = av[i3 + 2]
+      let wx = av[i3 + 0]
+      let wy = av[i3 + 1]
+      let wz = av[i3 + 2]
+      const wmag = Math.sqrt(wx * wx + wy * wy + wz * wz)
+      if (wmag * dt > MAX_ANGVEL_DT) {
+        const scale = MAX_ANGVEL_DT / (wmag * dt)
+        wx *= scale; wy *= scale; wz *= scale
+        av[i3 + 0] = wx; av[i3 + 1] = wy; av[i3 + 2] = wz
+      }
       if (wx !== 0 || wy !== 0 || wz !== 0) {
         const qx = ori[i4 + 0]
         const qy = ori[i4 + 1]
@@ -164,4 +150,3 @@ export class World {
     }
   }
 }
-

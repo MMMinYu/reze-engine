@@ -1,6 +1,6 @@
 {
     "name": "reze-engine",
-    "version": "0.14.0",
+    "version": "0.15.0",
     "description": "A lightweight WebGPU engine for real-time 3D MMD/PMX model rendering",
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts",
@@ -34,8 +34,7 @@
     "author": "",
     "license": "MIT",
     "dependencies": {
-        "@webgpu/types": "^0.1.66",
-        "encoding-japanese": "^2.2.0"
+        "@webgpu/types": "^0.1.66"
     },
     "devDependencies": {
         "@types/node": "^20",

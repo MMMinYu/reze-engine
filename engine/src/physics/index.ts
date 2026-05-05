@@ -5,5 +5,4 @@ export {
   RigidbodyType,
   type Rigidbody,
   type Joint,
-  type PhysicsOptions,
 } from "./types"

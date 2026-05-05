@@ -1,6 +1,6 @@
 # Reze Engine
 
-A minimal-dependency WebGPU engine for real-time MMD/PMX rendering. Only external dependency is Ammo.js for physics.
+**Zero-runtime-dependency** WebGPU engine for real-time MMD/PMX rendering. Pure TypeScript — renderer, animation, IK, physics, all hand-written. The only `dependencies` entry is `@webgpu/types` and that's types-only; no JS at runtime.
 
 ![screenshot](./screenshot.png)
 
@@ -18,7 +18,8 @@ npm install reze-engine
 - **Alpha-hashed transparency** (Wyman & McGuire 2017) for self-overlapping transparent meshes like stockings
 - **Screen-space outlines** on opaque + transparent materials
 - **See-through hair over eyes** — stencil-gated MMD post-alpha-eye so eyes read at 75% through hair silhouettes
-- **VMD animation** with IK solver and Bullet physics
+- **In-house TS physics** — sequential-impulse 6DOF spring solver, sphere/box/capsule contacts, split-impulse position correction, fixed-step substepping
+- **VMD animation** with IK solver
 - **Orbit camera** with bone-follow mode
 - **GPU picking** (double-click/tap)
 - **Ground plane** with PCF shadow mapping
@@ -109,7 +110,7 @@ engine.dispose()
 
 Use a hidden `<input type="file" webkitdirectory multiple>` (or drag/drop) and pass the resulting `FileList` or `File[]` into the engine. Textures resolve relative to the chosen PMX file inside that tree.
 
-**Important:** read `input.files` into a normal array **before** setting `input.value = ""`. The browser’s `FileList` is _live_ — clearing the input empties it.
+**Important:** read `input.files` into a normal array **before** setting `input.value = ""`. The browser's `FileList` is _live_ — clearing the input empties it.
 
 1. **`parsePmxFolderInput(fileList)`** — returns a tagged result (`empty` | `not_directory` | `no_pmx` | `single` | `multiple`). For `single`, you already have `files` and `pmxFile`. For `multiple`, show a picker (dropdown) of `pmxRelativePaths`, then resolve with **`pmxFileAtRelativePath(files, path)`**.
 2. **`engine.loadModel(name, { files, pmxFile })`** — `pmxFile` selects which `.pmx` when the folder contains several.
@@ -231,9 +232,6 @@ Blender-style scene config — `world` = environment lighting, `sun` = the direc
   },
   onRaycast: (modelName, material, bone, screenX, screenY) => void,
   onGizmoDrag: (event: GizmoDragEvent) => void,
-  physicsOptions: {
-    constraintSolverKeywords: string[],
-  },
 }
 ```
 
@@ -306,103 +304,83 @@ onGizmoDrag: (e) => {
 
 Note the asymmetry: rotation uses `rotateBones({ name, q }, 0)` (the tween-based API reduces to an instant write when duration is 0) while translation uses `setBoneLocalTranslation(idx, v)` — `moveBones` can't be used because it converts VMD-relative input to local, and the gizmo's output is already local.
 
-`constraintSolverKeywords` — joints whose name contains any keyword use the Bullet 2.75 constraint solver; all others keep the stable Ammo 2.82+ default. See [babylon-mmd: Fix Constraint Behavior](https://noname0310.github.io/babylon-mmd/docs/reference/runtime/apply-physics-to-mmd-models/#fix-constraint-behavior) for details.
+## Physics
+
+Hand-written sequential-impulse rigid-body solver, no external physics dependency. Targets PMX rigs (sphere / box / capsule colliders, 6DOF spring joints) at quality comparable to Bullet's defaults but in ~1.5k lines of TypeScript.
+
+### Pipeline
+
+Per substep:
+
+```
+predict velocities  → broadphase + narrowphase  → solve constraints (10 iters)
+                   → split-impulse position correction  → integrate transforms
+```
+
+A fixed-timestep accumulator runs the substep at a constant **75 Hz** regardless of render rate, with up to 10 substeps per render frame. Constant `dt` keeps spring impulse, damping, and integration deterministic — without it, coupled cloth chains never reach steady state.
+
+### Implementation notes
+
+- **Solver** — projected Gauss-Seidel sequential impulse, 10 iterations, joint rows + contact rows in the same loop. Joint constraints are 6DOF springs (3 linear, 3 angular) with stop-ERP for limit correction and a per-axis spring impulse driven by stiffness × position error.
+- **Narrowphase** — analytical per pair: sphere-sphere, sphere-capsule, sphere-box, capsule-capsule, capsule-box. Capsule-capsule emits multiple contact points along nearly-parallel axes for rotational stability (otherwise a single closest-point contact lets cloth pivot freely around the line through that point).
+- **Speculative contacts** — `CONTACT_MARGIN = 0.04` fires contacts at near-touch with signed depth. The push-only impulse clamp keeps them inert until actual overlap, but they prevent fast bodies from crossing a thin surface in a single substep.
+- **Split-impulse position correction** — penetration is resolved by a direct mass-weighted translation along the contact normal *outside* the velocity solver, so joint pulls in the SI loop can't fight the contact's separation.
+- **Kinematic velocity propagation** — bone-driven kinematic bodies have their linear + angular velocities derived from the bone-pose delta each render frame, so joints attached to a fast limb feel the actual motion instead of a position teleport.
+- **Body sleeping** is disabled (cloth must always respond to bone motion); resting bodies rely on per-PMX damping to bleed off micro-velocity.
+
+### API
+
+```javascript
+engine.setPhysicsEnabled(enabled)
+engine.resetPhysics()  // re-snap bodies to bone poses, zero velocities
+```
+
+That's the entire engine-level surface — physics options live on the PMX rig itself (mass, damping, friction, restitution, joint stiffness / limits, collision groups).
 
 ## Rendering
 
-Each surface combines an NPR stack with a Principled-style BSDF, mixed per material — so anime characters keep their flat illustrated look while highlights and reflections stay grounded. Every per-material shader is ~40–120 lines of distinctive code standing on a small set of shared WGSL primitives (`engine/src/shaders/materials/`).
+Each surface combines an NPR stack with a Principled-style BSDF, mixed per material — anime characters keep their flat illustrated look while highlights and reflections stay grounded. Per-material shaders live in `engine/src/shaders/materials/`.
 
-### Anatomy of a material shader
+### Material pipeline
 
-Every material's fragment shader is the same 7-stage pipeline. The order is fixed; the content is per-material:
+Every fragment shader follows the same 7-stage layout (shared stages from `nodes.ts` / `common.ts`):
 
 ```
-(A) Fragment setup      → n, v, l, sun, amb, shadow    ← shared
-(B) Texture + alpha     → tex_rgb, discard             ← shared shape
-(C) NPR stack           → toon + rim + warm + …        ← UNIQUE per material
-(D) Optional bump       → noise → bump_lh              ← 3 presets
-(E) Principled BSDF     → eval_principled(...)         ← shared helper
-(F) NPR ↔ PBR mix       → mix(npr, principled, fac)    ← per-material fac
-(G) FSOut               → color + bloom mask           ← shared
+(A) Fragment setup → (B) Texture + alpha → (C) NPR stack → (D) Optional bump
+→ (E) Principled BSDF → (F) NPR ↔ PBR mix → (G) FSOut
 ```
 
-The simplest material (`default`) uses only A/B/E/G — no NPR stack at all:
+The `default` preset uses only A/B/E/G; NPR presets layer C (and sometimes D) on top, with stage F choosing how NPR-leaning the final result is.
 
-```wgsl
-let color = eval_principled(
-  PrincipledIn(albedo, 0.0, 0.5, 0.5, 1e30, 0.0, 0.0), // metallic, spec, rough, clamp, sheen, sheen_tint
-  n, l, v, sun, amb, shadow
-);
-```
+**PBR core** (`eval_principled`) — GGX microfacet with Schlick Fresnel, Walter–Smith G1, Fdez-Agüera 2019 multi-scatter compensation, Karis 2013 split-sum DFG LUT, Heitz 2016 LTC direct-spec scaling, optional sheen.
 
-NPR presets add stage C (and sometimes D) on top, and stage F chooses how NPR-leaning the surface is.
+**NPR toolbox** — toon ramps (constant or fwidth-AA'd), HSV warm-shadow / cool-light remaps, fresnel + layer-weight rims, value-noise bump, 3D Voronoi metallic sparkle, BT.601-luminance-gated emission.
 
-### Shared WGSL foundations
+| Preset         | Notes                                                                           |
+| -------------- | ------------------------------------------------------------------------------- |
+| `default`      | Plain Principled, metallic=0, rough=0.5                                         |
+| `eye`          | Plain + post-eval emission ×1.5                                                 |
+| `face`         | Toon + warm rim + dual-fresnel rim + bright-tex gate, noise bump                |
+| `body`         | Toon + warm rim + fresnel + facing rim, noise bump                              |
+| `hair`         | Toon + fresnel + bevel + bright-tex gate, mixed at 20% PBR                      |
+| `cloth_smooth` | Toon + bevel + emission overlay (×18)                                           |
+| `cloth_rough`  | Same NPR as cloth_smooth, live noise bump, rough=0.82                           |
+| `metal`        | Toon + emission overlay (×8), voronoi base, metallic=1                          |
+| `stockings`    | Gradient × facing mask + HSV emission (×5), sheen=0.7, **alpha-hashed**         |
 
-- **`nodes.ts`** — WGSL mirrors of the Blender shader nodes the presets use: `hue_sat`, `bright_contrast`, `ramp_constant/linear/cardinal`, `mix_overlay/lighten/linear_light`, `fresnel`, `layer_weight_fresnel/facing`, `tex_noise`, `tex_voronoi`, `mapping_point`, `bump_lh`, `normal_map`. Plus a combined DFG + LTC LUT, `eval_principled(PrincipledIn, N, L, V, sun, amb, shadow)`, and `principled_sheen`.
-- **`common.ts`** — Uniform structs, bind-group layout (same for every material pipeline), PCF shadow sampler, skinning vertex shader, shared `FSOut`.
-- **Per-material files** — constants + NPR stack + optional bump + `eval_principled` call + final mix.
+Assign per-model with `engine.setMaterialPresets(name, map)`. Unlisted material names fall through to `default`.
 
-### PBR specular core
-
-Inside `eval_principled`:
-
-- GGX microfacet specular with Schlick Fresnel and Walter–Smith G1
-- **Multi-scatter compensation** (Fdez-Agüera 2019) — restores energy at high roughness so metals don't darken
-- **Split-sum DFG LUT** (Karis 2013) — drives indirect specular
-- **LTC direct-spec scale** (Heitz 2016) — keeps analytic-light specular in the same energy budget as image-based lighting
-- **Sheen coarse curve** gated by the `sheen` field on `PrincipledIn`
-
-### NPR toolbox
-
-Every preset's stage C is built from these primitives:
-
-- **Toon ramps** — quantised NdotL through constant or `ramp_constant_edge_aa` (fwidth-based step anti-alias) for cel-shaded shadow terminators
-- **HSV remaps** — separate hue/sat/value tints for shadow vs lit zones, layered with mix-overlay against the lit texture for warm-shadow / cool-light shifts
-- **Fresnel rim & layer-weight wrap** — `fresnel × layer_weight_facing` (or two stacked fresnels) feeds a MixShader against an emissive backdrop for anime back-light
-- **Procedural micro-detail** — 3-octave value noise (PCG hash, fully unrolled) drives bump-from-height for skin and fabric; 3D Voronoi in reflection-coord space drives metallic sparkle
-- **Selective emission** — BT.601-luminance-gated boosts (eye iris, face highlights, stockings pattern) that survive into bloom
-
-### Per-material NPR stacks
-
-Each PMX material is assigned to one of these shaders. The NPR stack column is what's actually in stage C of that file; the Principled column is what gets passed to `eval_principled`.
-
-| Preset         | NPR stack (stage C)                                         | Principled (stage E)                                          |
-| -------------- | ----------------------------------------------------------- | ------------------------------------------------------------- |
-| `default`      | —                                                           | metallic=0, spec=0.5, rough=0.5                               |
-| `eye`          | — (emission = albedo × 1.5 added post-eval)                 | same as default                                               |
-| `face`         | toon + warm rim + dual-fresnel rim + BT.601 bright-tex gate | spec=0.5, rough=0.3, noise bump, spec clamp=10                |
-| `body`         | toon + warm rim + fresnel rim + facing rim                  | spec=0.5, rough=0.3, noise bump, spec clamp=10                |
-| `hair`         | toon + fresnel rim + bevel (n.y) + bright-tex gate          | spec=1.0, rough=0.3, mixed at 20% PBR                         |
-| `cloth_smooth` | toon + bevel + mix-overlay emission (×18)                   | spec=0.8, rough=0.5                                           |
-| `cloth_rough`  | same NPR as `cloth_smooth`                                  | spec=0.8, rough=0.82, live noise bump, spec clamp=10          |
-| `metal`        | toon + mix-overlay emission (×8)                            | metallic=1, voronoi-driven base (reflection-coord), rough=0.3 |
-| `stockings`    | gradient × facing mask + HSV-boosted emission (×5)          | metallic=0.1, spec=1, rough=0.5, **sheen=0.7**, hashed alpha  |
-
-Assign presets per-model with `engine.setMaterialPresets(name, map)` (see the [Usage](#usage) example). Material names not listed fall through to `default`.
-
-### Shadows, post, output
+### Post & output
 
 - Directional shadow map (2048², depth32float, PCF, normal + depth bias)
-- HDR main pass with 4× MSAA. Color is `rg11b10ufloat` paired with an `rg8unorm` aux MRT carrying bloom mask (`.r`) and accumulated alpha (`.g`). The combined footprint fits Apple Silicon TBDR tile memory, so the 4× MSAA buffer resolves in-tile rather than spilling to system memory every frame. Falls back to `rgba16float` when the device does not expose `rg11b10ufloat-renderable`.
-- Bloom via threshold + downsample/upsample mip pyramid, gated by the aux bloom-mask channel
+- HDR main pass at 4× MSAA, `rg11b10ufloat` color + `rg8unorm` aux MRT (bloom mask + accumulated alpha) — fits Apple Silicon TBDR tile memory so MSAA resolves in-tile. Falls back to `rgba16float` when `rg11b10ufloat-renderable` isn't available.
+- Bloom: threshold + downsample/upsample mip pyramid, gated by aux bloom mask
 - Filmic tone mapping (LUT extracted from Blender 3.6 OCIO "Filmic / Medium High Contrast")
-- Screen-space outline pass (inverted-hull) on opaque and transparent materials
+- Inverted-hull screen-space outline pass on opaque + transparent
 
-### Alpha-hashed transparency
+**Alpha-hashed transparency** (`stockings` only) — Wyman & McGuire 2017 derivative-aware stochastic discard with world-space hash, so self-overlapping transparent meshes resolve under MSAA with opaque-style depth writes and the dither doesn't swim with the camera.
 
-`stockings` uses the Wyman & McGuire 2017 derivative-aware stochastic discard so self-overlapping transparent meshes (e.g. the front and back of a stocking wrapped around a leg) resolve cleanly under MSAA with opaque-style depth writes. The hash is derived from world-space position, so the dither pattern does not swim when the camera moves.
-
-### See-through hair over eyes (MMD post-alpha-eye)
-
-The classic MMD effect where hair strands covering the eye are rendered at 25% so the iris stays readable — implemented as a single extra pass driven by the stencil buffer, not a two-texture composite.
-
-- **Eye pipeline** stamps `stencil = EYE_VALUE` on every fragment it writes, with `cullMode: "front"` and a small negative `depthBias` so only the back half of the eye mesh renders (the MMD trick that keeps eyes from leaking through the back of the head).
-- **Main hair pipeline** stencil-tests `not-equal EYE_VALUE` and skips those fragments.
-- **Hair-over-eyes pipeline** re-issues the hair draws with `IS_OVER_EYES = true`, stencil-tests `equal EYE_VALUE`, disables depth writes, and alpha blends at 25% — eye-stamped pixels end up `0.25·hair + 0.75·eye` in linear HDR before tonemap.
-- **Outline pipeline** stencil-tests `not-equal EYE_VALUE` so edge color does not overwrite the see-through region.
-
-Draw order within a model: non-eye/non-hair opaque → eye (stamp) → hair (skip stamp) → outlines (skip stamp) → hair-over-eyes (match stamp).
+**See-through hair over eyes** (MMD post-alpha-eye) — single stencil-gated extra pass: eye stamps `EYE_VALUE`, main hair skips it, an extra hair-over-eyes pass matches it and alpha-blends at 25% in linear HDR before tonemap. Outline pass also skips the stamp so the iris stays readable.
 
 ## Projects Using This Engine
 
