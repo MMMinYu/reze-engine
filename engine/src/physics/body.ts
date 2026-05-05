@@ -8,46 +8,46 @@ export class RigidBodyStore {
   readonly count: number
 
   // Per-body state (parallel arrays).
-  readonly positions: Float32Array         // 3*N
-  readonly orientations: Float32Array      // 4*N (xyzw)
-  readonly linearVelocities: Float32Array  // 3*N
+  readonly positions: Float32Array // 3*N
+  readonly orientations: Float32Array // 4*N (xyzw)
+  readonly linearVelocities: Float32Array // 3*N
   readonly angularVelocities: Float32Array // 3*N
 
   // Per-body constants (set once from PMX, not mutated by the simulator).
-  readonly invMass: Float32Array       // N (0 for static / kinematic)
+  readonly invMass: Float32Array // N (0 for static / kinematic)
   // Scalar isotropic inverse inertia. Real bodies have a 3x3 tensor, but
   // PMX shapes are roughly compact so a single I⁻¹ is good enough — and *much*
   // better than collapsing to invMass (which under-rotates by 100-1000×).
   // Sphere:  I = (2/5)·m·r²;  Box: I = (1/3)·m·max(a,b,c)²
   // Capsule: I = (1/12)·m·(3r² + h²) (cylinder, transverse axis).
-  readonly invInertia: Float32Array    // N (0 for static / kinematic)
+  readonly invInertia: Float32Array // N (0 for static / kinematic)
   readonly linearDamping: Float32Array // N
-  readonly angularDamping: Float32Array// N
-  readonly type: Uint8Array            // N (RigidbodyType)
-  readonly boneIndex: Int32Array       // N (-1 if unattached)
-  readonly friction: Float32Array      // N (Coulomb friction coefficient)
-  readonly restitution: Float32Array   // N (bounciness, 0..1)
+  readonly angularDamping: Float32Array // N
+  readonly type: Uint8Array // N (RigidbodyType)
+  readonly boneIndex: Int32Array // N (-1 if unattached)
+  readonly friction: Float32Array // N (Coulomb friction coefficient)
+  readonly restitution: Float32Array // N (bounciness, 0..1)
 
   // Collision filtering. PMX has 16 groups; group is the body's own index
   // (1..16, stored as zero-based 0..15) and collisionMask is the set of
   // groups it *will not* collide with — invert to get "willCollide" mask
   // (the form solvers actually want to test).
-  readonly collisionGroup: Uint16Array  // N (single bit, 1<<groupIndex)
+  readonly collisionGroup: Uint16Array // N (single bit, 1<<groupIndex)
   readonly willCollideMask: Uint16Array // N (16 bits, 1 = pair allowed)
 
   // Shape descriptor for narrowphase. Same layout as PMX.
-  readonly shape: Uint8Array            // N (RigidbodyShape)
-  readonly size: Float32Array           // 3*N (semantics depend on shape)
+  readonly shape: Uint8Array // N (RigidbodyShape)
+  readonly size: Float32Array // 3*N (semantics depend on shape)
 
   // Per-step AABB (world space, axis-aligned). Refreshed by updateAabbs()
   // each step from current position + orientation + shape.
-  readonly aabbMin: Float32Array        // 3*N
-  readonly aabbMax: Float32Array        // 3*N
+  readonly aabbMin: Float32Array // 3*N
+  readonly aabbMax: Float32Array // 3*N
 
   // Bone↔body coupling. bodyOffsetMatrix[i] = boneInverseBind × shapeWorldBind.
   // bodyWorld = boneWorld × bodyOffsetMatrix; boneWorld = bodyWorld × bodyOffsetInverse.
   // Filled by computeBoneOffsets() — until then, both arrays are zero.
-  readonly bodyOffsetMatrix: Float32Array  // 16*N column-major
+  readonly bodyOffsetMatrix: Float32Array // 16*N column-major
   readonly bodyOffsetInverse: Float32Array // 16*N column-major
   private boneOffsetsReady = false
 
@@ -127,8 +127,12 @@ export class RigidBodyStore {
     for (let i = 0; i < N; i++) {
       const i3 = i * 3
       const i4 = i * 4
-      const px = pos[i3 + 0], py = pos[i3 + 1], pz = pos[i3 + 2]
-      let hx = 0, hy = 0, hz = 0
+      const px = pos[i3 + 0],
+        py = pos[i3 + 1],
+        pz = pos[i3 + 2]
+      let hx = 0,
+        hy = 0,
+        hz = 0
 
       switch (shapes[i]) {
         case RigidbodyShape.Sphere: {
@@ -138,15 +142,34 @@ export class RigidBodyStore {
         }
         case RigidbodyShape.Box: {
           // Conservative AABB of an OBB: half-extents projected by |R|·size.
-          const qx = ori[i4 + 0], qy = ori[i4 + 1], qz = ori[i4 + 2], qw = ori[i4 + 3]
-          const x2 = qx + qx, y2 = qy + qy, z2 = qz + qz
-          const xx = qx * x2, yy = qy * y2, zz = qz * z2
-          const xy = qx * y2, xz = qx * z2, yz = qy * z2
-          const wx = qw * x2, wy = qw * y2, wz = qw * z2
-          const m00 = Math.abs(1 - (yy + zz)), m01 = Math.abs(xy + wz), m02 = Math.abs(xz - wy)
-          const m10 = Math.abs(xy - wz),       m11 = Math.abs(1 - (xx + zz)), m12 = Math.abs(yz + wx)
-          const m20 = Math.abs(xz + wy),       m21 = Math.abs(yz - wx),       m22 = Math.abs(1 - (xx + yy))
-          const sx = sz[i3 + 0], sy = sz[i3 + 1], szz = sz[i3 + 2]
+          const qx = ori[i4 + 0],
+            qy = ori[i4 + 1],
+            qz = ori[i4 + 2],
+            qw = ori[i4 + 3]
+          const x2 = qx + qx,
+            y2 = qy + qy,
+            z2 = qz + qz
+          const xx = qx * x2,
+            yy = qy * y2,
+            zz = qz * z2
+          const xy = qx * y2,
+            xz = qx * z2,
+            yz = qy * z2
+          const wx = qw * x2,
+            wy = qw * y2,
+            wz = qw * z2
+          const m00 = Math.abs(1 - (yy + zz)),
+            m01 = Math.abs(xy + wz),
+            m02 = Math.abs(xz - wy)
+          const m10 = Math.abs(xy - wz),
+            m11 = Math.abs(1 - (xx + zz)),
+            m12 = Math.abs(yz + wx)
+          const m20 = Math.abs(xz + wy),
+            m21 = Math.abs(yz - wx),
+            m22 = Math.abs(1 - (xx + yy))
+          const sx = sz[i3 + 0],
+            sy = sz[i3 + 1],
+            szz = sz[i3 + 2]
           hx = m00 * sx + m01 * sy + m02 * szz
           hy = m10 * sx + m11 * sy + m12 * szz
           hz = m20 * sx + m21 * sy + m22 * szz
@@ -158,7 +181,10 @@ export class RigidBodyStore {
           // ±halfHeight·R·ŷ, so AABB half-extents = |R·ŷ|·halfH + radius.
           const r = sz[i3 + 0]
           const halfH = sz[i3 + 1] * 0.5
-          const qx = ori[i4 + 0], qy = ori[i4 + 1], qz = ori[i4 + 2], qw = ori[i4 + 3]
+          const qx = ori[i4 + 0],
+            qy = ori[i4 + 1],
+            qz = ori[i4 + 2],
+            qw = ori[i4 + 3]
           // R · (0,1,0) = (2(xy − wz), 1 − 2(xx + zz), 2(yz + wx))
           const rx = 2 * (qx * qy - qw * qz)
           const ry = 1 - 2 * (qx * qx + qz * qz)
@@ -208,8 +234,13 @@ export class RigidBodyStore {
       const i3 = i * 3
       const i4 = i * 4
       Mat4.fromPositionRotationInto(
-        pos[i3 + 0], pos[i3 + 1], pos[i3 + 2],
-        ori[i4 + 0], ori[i4 + 1], ori[i4 + 2], ori[i4 + 3],
+        pos[i3 + 0],
+        pos[i3 + 1],
+        pos[i3 + 2],
+        ori[i4 + 0],
+        ori[i4 + 1],
+        ori[i4 + 2],
+        ori[i4 + 3],
         shapeWorldBind,
       )
 
@@ -277,8 +308,20 @@ function computeInvInertia(rb: Rigidbody): number {
 }
 
 function identity16(out: Float32Array, offset: number): void {
-  out[offset + 0] = 1; out[offset + 1] = 0; out[offset + 2] = 0; out[offset + 3] = 0
-  out[offset + 4] = 0; out[offset + 5] = 1; out[offset + 6] = 0; out[offset + 7] = 0
-  out[offset + 8] = 0; out[offset + 9] = 0; out[offset + 10] = 1; out[offset + 11] = 0
-  out[offset + 12] = 0; out[offset + 13] = 0; out[offset + 14] = 0; out[offset + 15] = 1
+  out[offset + 0] = 1
+  out[offset + 1] = 0
+  out[offset + 2] = 0
+  out[offset + 3] = 0
+  out[offset + 4] = 0
+  out[offset + 5] = 1
+  out[offset + 6] = 0
+  out[offset + 7] = 0
+  out[offset + 8] = 0
+  out[offset + 9] = 0
+  out[offset + 10] = 1
+  out[offset + 11] = 0
+  out[offset + 12] = 0
+  out[offset + 13] = 0
+  out[offset + 14] = 0
+  out[offset + 15] = 1
 }

@@ -343,6 +343,91 @@ function clamp01(x: number): number {
   return x < 0 ? 0 : x > 1 ? 1 : x
 }
 
+// Closest point on segment p1→q1 to a free point (sx,sy,sz). Out gets the
+// projected point clamped to the segment.
+function closestPointOnSegment(
+  p1x: number,
+  p1y: number,
+  p1z: number,
+  q1x: number,
+  q1y: number,
+  q1z: number,
+  sx: number,
+  sy: number,
+  sz: number,
+  out: Float32Array,
+): void {
+  const dx = q1x - p1x,
+    dy = q1y - p1y,
+    dz = q1z - p1z
+  const segLen2 = dx * dx + dy * dy + dz * dz
+  let t = 0
+  if (segLen2 > 1e-8) {
+    t = ((sx - p1x) * dx + (sy - p1y) * dy + (sz - p1z) * dz) / segLen2
+    if (t < 0) t = 0
+    else if (t > 1) t = 1
+  }
+  out[0] = p1x + dx * t
+  out[1] = p1y + dy * t
+  out[2] = p1z + dz * t
+}
+
+// Emit one capsule-vs-capsule contact given a pair of points (pA on A's
+// segment, pB on B's segment). Skips silently if outside speculative range.
+function emitCapsuleContact(
+  store: RigidBodyStore,
+  a: number,
+  b: number,
+  pool: ContactPool,
+  pAx: number,
+  pAy: number,
+  pAz: number,
+  pBx: number,
+  pBy: number,
+  pBz: number,
+  rA: number,
+  rB: number,
+  sumR: number,
+  sumExt: number,
+  cAx: number,
+  cAy: number,
+  cAz: number,
+  cBx: number,
+  cBy: number,
+  cBz: number,
+): void {
+  const dx = pBx - pAx,
+    dy = pBy - pAy,
+    dz = pBz - pAz
+  const d2 = dx * dx + dy * dy + dz * dz
+  if (d2 > sumExt * sumExt) return
+  const d = Math.sqrt(d2)
+  let nx: number, ny: number, nz: number
+  if (d > 1e-6) {
+    nx = dx / d
+    ny = dy / d
+    nz = dz / d
+  } else {
+    nx = 0
+    ny = 1
+    nz = 0
+  }
+  const c = pool.acquire()
+  c.bodyA = a
+  c.bodyB = b
+  c.nx = nx
+  c.ny = ny
+  c.nz = nz
+  c.depth = sumR - d
+  c.rAx = pAx + nx * rA - cAx
+  c.rAy = pAy + ny * rA - cAy
+  c.rAz = pAz + nz * rA - cAz
+  c.rBx = pBx - nx * rB - cBx
+  c.rBy = pBy - ny * rB - cBy
+  c.rBz = pBz - nz * rB - cBz
+  combineMaterials(store, a, b, c)
+}
+
 function detectCapsuleCapsule(store: RigidBodyStore, a: number, b: number, pool: ContactPool): void {
   const pos = store.positions,
     sz = store.size
@@ -374,40 +459,93 @@ function detectCapsuleCapsule(store: RigidBodyStore, a: number, b: number, pool:
   const q2x = cBx + aBx[0] * hB,
     q2y = cBy + aBx[1] * hB,
     q2z = cBz + aBx[2] * hB
-  closestPointsTwoSegments(p1x, p1y, p1z, q1x, q1y, q1z, p2x, p2y, p2z, q2x, q2y, q2z, _cpA, _cpB)
-  const dx = _cpB[0] - _cpA[0]
-  const dy = _cpB[1] - _cpA[1]
-  const dz = _cpB[2] - _cpA[2]
+
   const sumR = rA + rB
   const sumExt = sumR + CONTACT_MARGIN
-  const d2 = dx * dx + dy * dy + dz * dz
-  if (d2 > sumExt * sumExt) return
-  const d = Math.sqrt(d2)
-  let nx: number, ny: number, nz: number
-  if (d > 1e-6) {
-    nx = dx / d
-    ny = dy / d
-    nz = dz / d
-  } else {
-    nx = 0
-    ny = 1
-    nz = 0
+
+  // Primary contact: closest-pair on the two segments.
+  closestPointsTwoSegments(p1x, p1y, p1z, q1x, q1y, q1z, p2x, p2y, p2z, q2x, q2y, q2z, _cpA, _cpB)
+  emitCapsuleContact(
+    store,
+    a,
+    b,
+    pool,
+    _cpA[0],
+    _cpA[1],
+    _cpA[2],
+    _cpB[0],
+    _cpB[1],
+    _cpB[2],
+    rA,
+    rB,
+    sumR,
+    sumExt,
+    cAx,
+    cAy,
+    cAz,
+    cBx,
+    cBy,
+    cBz,
+  )
+
+  // Multi-point stabilization for nearly-parallel capsules. The closest-pair
+  // algorithm is degenerate when axes are parallel (denom = a·e − b² ≈ 0)
+  // and returns one arbitrary point — typically segment-A's start. That
+  // leaves the cloth free to rotate around the contact axis (visible as
+  // jitter) and gives only one push along the length, so a long capsule
+  // can pass through a thin one with insufficient resistance. Sampling at
+  // A's endpoints adds two contacts that pin both rotation and length-wise
+  // push, matching what Bullet's persistent manifold accumulates over
+  // frames via GJK + EPA.
+  const cosA = Math.abs(aAx[0] * aBx[0] + aAx[1] * aBx[1] + aAx[2] * aBx[2])
+  if (cosA > 0.9) {
+    closestPointOnSegment(p2x, p2y, p2z, q2x, q2y, q2z, p1x, p1y, p1z, _cpB)
+    emitCapsuleContact(
+      store,
+      a,
+      b,
+      pool,
+      p1x,
+      p1y,
+      p1z,
+      _cpB[0],
+      _cpB[1],
+      _cpB[2],
+      rA,
+      rB,
+      sumR,
+      sumExt,
+      cAx,
+      cAy,
+      cAz,
+      cBx,
+      cBy,
+      cBz,
+    )
+    closestPointOnSegment(p2x, p2y, p2z, q2x, q2y, q2z, q1x, q1y, q1z, _cpB)
+    emitCapsuleContact(
+      store,
+      a,
+      b,
+      pool,
+      q1x,
+      q1y,
+      q1z,
+      _cpB[0],
+      _cpB[1],
+      _cpB[2],
+      rA,
+      rB,
+      sumR,
+      sumExt,
+      cAx,
+      cAy,
+      cAz,
+      cBx,
+      cBy,
+      cBz,
+    )
   }
-  const c = pool.acquire()
-  c.bodyA = a
-  c.bodyB = b
-  c.nx = nx
-  c.ny = ny
-  c.nz = nz
-  c.depth = sumR - d
-  // Contact points are the closest-segment points pushed outward by each radius.
-  c.rAx = _cpA[0] + nx * rA - cAx
-  c.rAy = _cpA[1] + ny * rA - cAy
-  c.rAz = _cpA[2] + nz * rA - cAz
-  c.rBx = _cpB[0] - nx * rB - cBx
-  c.rBy = _cpB[1] - ny * rB - cBy
-  c.rBz = _cpB[2] - nz * rB - cBz
-  combineMaterials(store, a, b, c)
 }
 
 // --- Sphere–box (sphere = a, box = b) --------------------------------------

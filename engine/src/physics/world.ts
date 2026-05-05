@@ -83,6 +83,45 @@ export class World {
       solveConstraints(store, constraints, contacts, dt, this.solverIterations)
     }
 
+    // 3b. Position correction. Direct translation of penetrating bodies
+    //     along the contact normal — Bullet's split-impulse pattern. The
+    //     velocity-bias position correction inside solveConstraints (the
+    //     `posBias = depth · erp · invDt` line) routes position correction
+    //     through the velocity channel, where joint constraints in the same
+    //     SI loop can fight it back to zero each iteration. Direct position
+    //     translation can't be undone by anything else in the step, so a
+    //     joint pulling cloth into a leg can't keep the cloth penetrating.
+    //     Inverse-mass weighted so a kinematic body (invMass = 0) doesn't
+    //     move; only the dynamic body translates.
+    const POS_CORRECTION_FACTOR = 0.4
+    const POS_SLOP = 0.005
+    for (let ci = 0; ci < contacts.count; ci++) {
+      const c = contacts.get(ci)
+      if (c.depth <= POS_SLOP) continue
+      const imA = invMass[c.bodyA]
+      const imB = invMass[c.bodyB]
+      const total = imA + imB
+      if (total <= 0) continue
+      const correction = (c.depth - POS_SLOP) * POS_CORRECTION_FACTOR
+      const dx = correction * c.nx
+      const dy = correction * c.ny
+      const dz = correction * c.nz
+      const ai = c.bodyA * 3
+      const bi = c.bodyB * 3
+      if (imA > 0) {
+        const fA = imA / total
+        pos[ai + 0] -= dx * fA
+        pos[ai + 1] -= dy * fA
+        pos[ai + 2] -= dz * fA
+      }
+      if (imB > 0) {
+        const fB = imB / total
+        pos[bi + 0] += dx * fB
+        pos[bi + 1] += dy * fB
+        pos[bi + 2] += dz * fB
+      }
+    }
+
     // 4. Integrate transforms.
     for (let i = 0; i < N; i++) {
       if (types[i] !== RigidbodyType.Dynamic || invMass[i] <= 0) continue

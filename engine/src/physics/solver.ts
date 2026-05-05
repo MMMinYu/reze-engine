@@ -345,17 +345,15 @@ function solveContactRow(
   const jacInvN = 1 / denomN
 
   const relVelN = dvX * nx + dvY * ny + dvZ * nz
-  // Position bias: depth · ERP · invDt over dt's worth of velocity. Signed —
-  // positive depth pushes apart, depth ≤ 0 (within speculative margin but
-  // not touching) gives a small negative bias the push-only clamp on
-  // accumulated impulse silently drops to zero. Restitution kicks in only
-  // above the bounce threshold so resting contacts don't oscillate.
-  const posBias = c.depth * CONTACT_ERP * invDt
+  // No velocity-channel position bias — position correction is done
+  // directly in world.ts (split impulse). The velocity row only has to
+  // remove approach velocity (target = 0) plus restitution above the
+  // bounce threshold.
   let bounce = 0
   if (c.restitution > 0 && relVelN < -BOUNCE_THRESHOLD) {
     bounce = -c.restitution * relVelN
   }
-  const targetN = posBias + bounce
+  const targetN = bounce
   let dImpN = (targetN - relVelN) * jacInvN
   // Push-only clamp on accumulated impulse.
   const oldN = c.appliedNormalImpulse

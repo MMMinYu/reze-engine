@@ -106,8 +106,9 @@ export class RezePhysics {
 
     // Pull static & kinematic bodies along with their bones. Done once per
     // render frame — kinematic targets don't change between substeps, same
-    // as Bullet's internal pipeline.
-    this.syncFromBones(boneWorldMatrices)
+    // as Bullet's internal pipeline. Pass render dt so kinematic velocities
+    // can be derived from the bone-pose delta.
+    this.syncFromBones(boneWorldMatrices, dt)
 
     // Fixed-timestep substeps. At 60 fps render with fixedTimeStep = 1/75,
     // we run ~1.25 substeps per frame on average (1, 1, 1, 2, 1, 1, 1, 2…).
@@ -165,9 +166,13 @@ export class RezePhysics {
   }
 
   // Static (FollowBone) and Kinematic bodies read their transform from bones.
-  // Velocities are zeroed so they don't carry phantom momentum into contacts
-  // once the solver lands.
-  private syncFromBones(boneWorldMatrices: Mat4[]): void {
+  // Linear + angular velocities are derived from the bone-pose delta so the
+  // joint solver sees fast-moving kinematic bodies actually moving — without
+  // this, joints attached to a fast arm only see a *position* jump and can't
+  // drag dependent cloth bodies along at the kinematic's pace, so cloth
+  // visibly lags during quick limb motion. Mirrors Bullet's
+  // btRigidBody::saveKinematicState → btTransformUtil::calculateVelocity.
+  private syncFromBones(boneWorldMatrices: Mat4[], dt: number): void {
     const N = this.store.count
     const offsets = this.store.bodyOffsetMatrix
     const positions = this.store.positions
@@ -176,6 +181,7 @@ export class RezePhysics {
     const av = this.store.angularVelocities
     const types = this.store.type
     const boneIdx = this.store.boneIndex
+    const invDt = dt > 0 ? 1 / dt : 0
 
     for (let i = 0; i < N; i++) {
       const t = types[i]
@@ -187,21 +193,47 @@ export class RezePhysics {
 
       const i3 = i * 3
       const i4 = i * 4
+
+      // Save previous transform before overwriting — needed for velocity
+      // diff. invDt = 0 (first frame / reset) skips the diff and zeros
+      // velocities, matching the original behavior in those cases.
+      const oldPx = positions[i3 + 0], oldPy = positions[i3 + 1], oldPz = positions[i3 + 2]
+      const oldOx = orientations[i4 + 0], oldOy = orientations[i4 + 1]
+      const oldOz = orientations[i4 + 2], oldOw = orientations[i4 + 3]
+
       positions[i3 + 0] = _bodyMat[12]
       positions[i3 + 1] = _bodyMat[13]
       positions[i3 + 2] = _bodyMat[14]
       Mat4.toQuatFromArrayInto(_bodyMat, 0, _scratchQuat)
-      orientations[i4 + 0] = _scratchQuat.x
-      orientations[i4 + 1] = _scratchQuat.y
-      orientations[i4 + 2] = _scratchQuat.z
-      orientations[i4 + 3] = _scratchQuat.w
+      const newOx = _scratchQuat.x, newOy = _scratchQuat.y
+      const newOz = _scratchQuat.z, newOw = _scratchQuat.w
+      orientations[i4 + 0] = newOx
+      orientations[i4 + 1] = newOy
+      orientations[i4 + 2] = newOz
+      orientations[i4 + 3] = newOw
 
-      lv[i3 + 0] = 0
-      lv[i3 + 1] = 0
-      lv[i3 + 2] = 0
-      av[i3 + 0] = 0
-      av[i3 + 1] = 0
-      av[i3 + 2] = 0
+      if (invDt === 0) {
+        lv[i3 + 0] = 0; lv[i3 + 1] = 0; lv[i3 + 2] = 0
+        av[i3 + 0] = 0; av[i3 + 1] = 0; av[i3 + 2] = 0
+      } else {
+        lv[i3 + 0] = (_bodyMat[12] - oldPx) * invDt
+        lv[i3 + 1] = (_bodyMat[13] - oldPy) * invDt
+        lv[i3 + 2] = (_bodyMat[14] - oldPz) * invDt
+
+        // ω from quaternion delta. qDiff = qNew * conj(qOld); for the
+        // small-angle range typical of one render-frame's worth of bone
+        // motion, ω ≈ 2 · qDiff.xyz / dt. Pick the shortest-arc sign so
+        // qDiff and −qDiff (same rotation) don't double the angular speed.
+        const cox = -oldOx, coy = -oldOy, coz = -oldOz, cow = oldOw
+        const dx = newOw * cox + newOx * cow + newOy * coz - newOz * coy
+        const dy = newOw * coy - newOx * coz + newOy * cow + newOz * cox
+        const dz = newOw * coz + newOx * coy - newOy * cox + newOz * cow
+        const dw = newOw * cow - newOx * cox - newOy * coy - newOz * coz
+        const sign = dw < 0 ? -1 : 1
+        av[i3 + 0] = 2 * sign * dx * invDt
+        av[i3 + 1] = 2 * sign * dy * invDt
+        av[i3 + 2] = 2 * sign * dz * invDt
+      }
     }
   }
 
