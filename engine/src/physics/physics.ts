@@ -31,6 +31,16 @@ export class RezePhysics {
   private constraints: SixDofSpringConstraint[]
   private contacts: ContactPool
   private firstFrame = true
+  // Fixed-timestep accumulator. Matches Ammo's stepSimulation(dt, 10, 1/75)
+  // exactly: physics runs at a consistent 75 Hz regardless of render rate
+  // variance. Variable render dt makes spring impulse (∝ dt), damping
+  // (pow(1-d, dt)), and integration (pos += vel·dt) all change frame-to-frame
+  // — for a coupled cloth chain that prevents steady state and shows up as
+  // dress-shaking jitter that survives every other contact-side fix. Bullet
+  // doesn't have this problem because it always substeps internally.
+  private timeAccum = 0
+  private readonly fixedTimeStep = 1 / 75
+  private readonly maxSubSteps = 10
 
   constructor(rigidbodies: Rigidbody[], joints: Joint[] = [], options?: PhysicsOptions) {
     this.rigidbodies = rigidbodies
@@ -42,14 +52,26 @@ export class RezePhysics {
     this.contacts = new ContactPool()
   }
 
-  setGravity(gravity: Vec3): void { this.world.setGravity(gravity) }
-  getGravity(): Vec3 { return this.world.gravity }
-  getRigidbodies(): Rigidbody[] { return this.rigidbodies }
-  getJoints(): Joint[] { return this.joints }
-  getOptions(): PhysicsOptions { return this.options }
+  setGravity(gravity: Vec3): void {
+    this.world.setGravity(gravity)
+  }
+  getGravity(): Vec3 {
+    return this.world.gravity
+  }
+  getRigidbodies(): Rigidbody[] {
+    return this.rigidbodies
+  }
+  getJoints(): Joint[] {
+    return this.joints
+  }
+  getOptions(): PhysicsOptions {
+    return this.options
+  }
   // Direct SoA access for the debug renderer / future tooling. Treat as
   // read-only — mutating these arrays will break the simulator.
-  getStore(): RigidBodyStore { return this.store }
+  getStore(): RigidBodyStore {
+    return this.store
+  }
 
   getRigidbodyTransforms(): Array<{ position: Vec3; rotation: Quat }> {
     const out: Array<{ position: Vec3; rotation: Quat }> = []
@@ -82,11 +104,24 @@ export class RezePhysics {
       this.firstFrame = false
     }
 
-    // Pull static & kinematic bodies along with their bones.
+    // Pull static & kinematic bodies along with their bones. Done once per
+    // render frame — kinematic targets don't change between substeps, same
+    // as Bullet's internal pipeline.
     this.syncFromBones(boneWorldMatrices)
 
-    // Integrate dynamics + solve joint constraints + contacts.
-    this.world.step(this.store, this.constraints, this.contacts, dt)
+    // Fixed-timestep substeps. At 60 fps render with fixedTimeStep = 1/75,
+    // we run ~1.25 substeps per frame on average (1, 1, 1, 2, 1, 1, 1, 2…).
+    // The maxSubSteps cap prevents runaway after a long stall (tab
+    // backgrounded etc.) — if we hit it, we drop residual accumulation
+    // rather than letting debt pile up forever.
+    this.timeAccum += dt
+    let sub = 0
+    while (this.timeAccum >= this.fixedTimeStep && sub < this.maxSubSteps) {
+      this.world.step(this.store, this.constraints, this.contacts, this.fixedTimeStep)
+      this.timeAccum -= this.fixedTimeStep
+      sub++
+    }
+    if (sub === this.maxSubSteps) this.timeAccum = 0
 
     // Push dynamic body transforms back to their bones.
     this.applyDynamicsToBones(boneWorldMatrices)
@@ -120,8 +155,12 @@ export class RezePhysics {
       orientations[i4 + 2] = _scratchQuat.z
       orientations[i4 + 3] = _scratchQuat.w
 
-      lv[i3 + 0] = 0; lv[i3 + 1] = 0; lv[i3 + 2] = 0
-      av[i3 + 0] = 0; av[i3 + 1] = 0; av[i3 + 2] = 0
+      lv[i3 + 0] = 0
+      lv[i3 + 1] = 0
+      lv[i3 + 2] = 0
+      av[i3 + 0] = 0
+      av[i3 + 1] = 0
+      av[i3 + 2] = 0
     }
   }
 
@@ -157,8 +196,12 @@ export class RezePhysics {
       orientations[i4 + 2] = _scratchQuat.z
       orientations[i4 + 3] = _scratchQuat.w
 
-      lv[i3 + 0] = 0; lv[i3 + 1] = 0; lv[i3 + 2] = 0
-      av[i3 + 0] = 0; av[i3 + 1] = 0; av[i3 + 2] = 0
+      lv[i3 + 0] = 0
+      lv[i3 + 1] = 0
+      lv[i3 + 2] = 0
+      av[i3 + 0] = 0
+      av[i3 + 1] = 0
+      av[i3 + 2] = 0
     }
   }
 
@@ -180,8 +223,13 @@ export class RezePhysics {
       const i3 = i * 3
       const i4 = i * 4
       Mat4.fromPositionRotationInto(
-        positions[i3 + 0], positions[i3 + 1], positions[i3 + 2],
-        orientations[i4 + 0], orientations[i4 + 1], orientations[i4 + 2], orientations[i4 + 3],
+        positions[i3 + 0],
+        positions[i3 + 1],
+        positions[i3 + 2],
+        orientations[i4 + 0],
+        orientations[i4 + 1],
+        orientations[i4 + 2],
+        orientations[i4 + 3],
         _bodyMat,
       )
       Mat4.multiplyArrays(_bodyMat, 0, inv, i * 16, _boneMat, 0)

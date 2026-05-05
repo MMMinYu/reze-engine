@@ -41,11 +41,13 @@ import type { Contact, ContactPool } from "./contact"
 // Contact constraint parameters. Bullet defaults:
 //   - global ERP for contacts is 0.2 (softer than the 0.475 stop ERP for
 //     joint limits, since contacts shouldn't snap rigidly)
-//   - "slop" of ~0.04 means the solver ignores penetration shallower than
-//     this — keeps resting contacts from jittering
+//   - linearSlop = 0.0; the push-only impulse clamp + signed depth handle
+//     near-touch contacts without an explicit dead zone. A nonzero slop
+//     carves a sink-in band before push engages, which shows up as cloth
+//     sinking a few mm into the body and then jittering as the system
+//     cycles between sink → eject → sink.
 //   - bounce threshold: minimum approach speed for restitution to kick in
 const CONTACT_ERP = 0.2
-const CONTACT_SLOP = 0.04
 const BOUNCE_THRESHOLD = 2.0
 
 const _TA = new Float32Array(16)
@@ -343,13 +345,12 @@ function solveContactRow(
   const jacInvN = 1 / denomN
 
   const relVelN = dvX * nx + dvY * ny + dvZ * nz
-  // Position bias: ERP·max(0, depth − slop) · invDt; pushes overlapping bodies
-  // apart over dt's worth of velocity. Restitution kicks in only above the
-  // bounce threshold so resting contacts don't oscillate.
-  let posBias = 0
-  if (c.depth > CONTACT_SLOP) {
-    posBias = (c.depth - CONTACT_SLOP) * CONTACT_ERP * invDt
-  }
+  // Position bias: depth · ERP · invDt over dt's worth of velocity. Signed —
+  // positive depth pushes apart, depth ≤ 0 (within speculative margin but
+  // not touching) gives a small negative bias the push-only clamp on
+  // accumulated impulse silently drops to zero. Restitution kicks in only
+  // above the bounce threshold so resting contacts don't oscillate.
+  const posBias = c.depth * CONTACT_ERP * invDt
   let bounce = 0
   if (c.restitution > 0 && relVelN < -BOUNCE_THRESHOLD) {
     bounce = -c.restitution * relVelN
