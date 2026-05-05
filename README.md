@@ -1,6 +1,6 @@
 # Reze Engine
 
-**Zero-runtime-dependency** WebGPU engine for real-time MMD/PMX rendering. Pure TypeScript — renderer, animation, IK, physics, all hand-written. The only `dependencies` entry is `@webgpu/types` and that's types-only; no JS at runtime.
+**Zero-runtime-dependency** WebGPU engine for real-time MMD/PMX rendering. Renderer, animation, IK, and physics all in TypeScript.
 
 ![screenshot](./screenshot.png)
 
@@ -306,7 +306,7 @@ Note the asymmetry: rotation uses `rotateBones({ name, q }, 0)` (the tween-based
 
 ## Physics
 
-Hand-written sequential-impulse rigid-body solver, no external physics dependency. Targets PMX rigs (sphere / box / capsule colliders, 6DOF spring joints) at quality comparable to Bullet's defaults but in ~1.5k lines of TypeScript.
+In-house sequential-impulse rigid-body solver, no external physics dependency. Targets PMX rigs (sphere / box / capsule colliders, 6DOF spring joints) at quality comparable to Bullet's defaults in ~1.5k lines of TypeScript.
 
 ### Pipeline
 

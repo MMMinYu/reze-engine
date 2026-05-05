@@ -1,6 +1,6 @@
 # Reze Engine
 
-**Zero-runtime-dependency** WebGPU engine for real-time MMD/PMX rendering. Pure TypeScript — renderer, animation, IK, physics, all hand-written. The only `dependencies` entry is `@webgpu/types` and that's types-only; no JS at runtime.
+**Zero-runtime-dependency** WebGPU engine for real-time MMD/PMX rendering. Renderer, animation, IK, and physics all in TypeScript.
 
 ![screenshot](./screenshot.png)
 
@@ -116,26 +116,30 @@ Use a hidden `<input type="file" webkitdirectory multiple>` (or drag/drop) and p
 2. **`engine.loadModel(name, { files, pmxFile })`** — `pmxFile` selects which `.pmx` when the folder contains several.
 
 ```javascript
-import { Engine, parsePmxFolderInput, pmxFileAtRelativePath } from "reze-engine"
+import {
+  Engine,
+  parsePmxFolderInput,
+  pmxFileAtRelativePath,
+} from "reze-engine";
 
 // In <input onChange>:
-const picked = parsePmxFolderInput(e.target.files)
-e.target.value = ""
+const picked = parsePmxFolderInput(e.target.files);
+e.target.value = "";
 
 if (picked.status === "single") {
   const model = await engine.loadModel("myModel", {
     files: picked.files,
     pmxFile: picked.pmxFile,
-  })
+  });
 }
 
 if (picked.status === "multiple") {
   // Let the user choose `chosenPath` from picked.pmxRelativePaths, then:
-  const pmxFile = pmxFileAtRelativePath(picked.files, chosenPath)
+  const pmxFile = pmxFileAtRelativePath(picked.files, chosenPath);
   const model = await engine.loadModel("myModel", {
     files: picked.files,
     pmxFile,
-  })
+  });
 }
 ```
 
@@ -190,12 +194,12 @@ model.isClipApplySuspended()
 `model.exportVmd(name)` serialises a loaded clip back to the VMD binary format and returns an `ArrayBuffer`. Bone and morph names are Shift-JIS encoded for compatibility with standard MMD tools.
 
 ```javascript
-const buffer = model.exportVmd("idle")
-const blob = new Blob([buffer], { type: "application/octet-stream" })
-const link = document.createElement("a")
-link.href = URL.createObjectURL(blob)
-link.download = "idle.vmd"
-link.click()
+const buffer = model.exportVmd("idle");
+const blob = new Blob([buffer], { type: "application/octet-stream" });
+const link = document.createElement("a");
+link.href = URL.createObjectURL(blob);
+link.download = "idle.vmd";
+link.click();
 ```
 
 #### Playback
@@ -256,9 +260,9 @@ type GizmoDragEvent = {
   boneName: string
   boneIndex: number
   kind: "rotate" | "translate"
-  localRotation: Quat // target absolute local rotation
-  localTranslation: Vec3 // target absolute local translation
-  phase?: "start" | "end" // undefined during drag moves
+  localRotation: Quat       // target absolute local rotation
+  localTranslation: Vec3    // target absolute local translation
+  phase?: "start" | "end"   // undefined during drag moves
 }
 ```
 
@@ -279,21 +283,16 @@ onGizmoDrag: (e) => {
   if (e.phase === "end") return
   if (e.kind === "rotate")
     model.rotateBones({ [e.boneName]: e.localRotation }, 0) // 0 = instant write
-  else model.setBoneLocalTranslation(e.boneIndex, e.localTranslation)
+  else
+    model.setBoneLocalTranslation(e.boneIndex, e.localTranslation)
 }
 // Pressing play/seek auto-clears the suspend flag → animation resumes, edit is lost
 // (expected runtime-override semantic).
 
 // Keyframe edit (animation editor — studio-style).
 onGizmoDrag: (e) => {
-  if (e.phase === "start") {
-    beginUndoGroup()
-    return
-  }
-  if (e.phase === "end") {
-    commitUndoGroup()
-    return
-  }
+  if (e.phase === "start") { beginUndoGroup(); return }
+  if (e.phase === "end")   { commitUndoGroup(); return }
   const kf = findOrCreateKeyframe(clip, e.boneName, currentFrame)
   kf.rotation = e.localRotation
   kf.translation = e.localTranslation
@@ -307,7 +306,7 @@ Note the asymmetry: rotation uses `rotateBones({ name, q }, 0)` (the tween-based
 
 ## Physics
 
-Hand-written sequential-impulse rigid-body solver, no external physics dependency. Targets PMX rigs (sphere / box / capsule colliders, 6DOF spring joints) at quality comparable to Bullet's defaults but in ~1.5k lines of TypeScript.
+In-house sequential-impulse rigid-body solver, no external physics dependency. Targets PMX rigs (sphere / box / capsule colliders, 6DOF spring joints) at quality comparable to Bullet's defaults in ~1.5k lines of TypeScript.
 
 ### Pipeline
 
@@ -325,7 +324,7 @@ A fixed-timestep accumulator runs the substep at a constant **75 Hz** regardless
 - **Solver** — projected Gauss-Seidel sequential impulse, 10 iterations, joint rows + contact rows in the same loop. Joint constraints are 6DOF springs (3 linear, 3 angular) with stop-ERP for limit correction and a per-axis spring impulse driven by stiffness × position error.
 - **Narrowphase** — analytical per pair: sphere-sphere, sphere-capsule, sphere-box, capsule-capsule, capsule-box. Capsule-capsule emits multiple contact points along nearly-parallel axes for rotational stability (otherwise a single closest-point contact lets cloth pivot freely around the line through that point).
 - **Speculative contacts** — `CONTACT_MARGIN = 0.04` fires contacts at near-touch with signed depth. The push-only impulse clamp keeps them inert until actual overlap, but they prevent fast bodies from crossing a thin surface in a single substep.
-- **Split-impulse position correction** — penetration is resolved by a direct mass-weighted translation along the contact normal _outside_ the velocity solver, so joint pulls in the SI loop can't fight the contact's separation.
+- **Split-impulse position correction** — penetration is resolved by a direct mass-weighted translation along the contact normal *outside* the velocity solver, so joint pulls in the SI loop can't fight the contact's separation.
 - **Kinematic velocity propagation** — bone-driven kinematic bodies have their linear + angular velocities derived from the bone-pose delta each render frame, so joints attached to a fast limb feel the actual motion instead of a position teleport.
 - **Body sleeping** is disabled (cloth must always respond to bone motion); resting bodies rely on per-PMX damping to bleed off micro-velocity.
 
@@ -333,7 +332,7 @@ A fixed-timestep accumulator runs the substep at a constant **75 Hz** regardless
 
 ```javascript
 engine.setPhysicsEnabled(enabled)
-engine.resetPhysics() // re-snap bodies to bone poses, zero velocities
+engine.resetPhysics()  // re-snap bodies to bone poses, zero velocities
 ```
 
 That's the entire engine-level surface — physics options live on the PMX rig itself (mass, damping, friction, restitution, joint stiffness / limits, collision groups).
@@ -357,17 +356,17 @@ The `default` preset uses only A/B/E/G; NPR presets layer C (and sometimes D) on
 
 **NPR toolbox** — toon ramps (constant or fwidth-AA'd), HSV warm-shadow / cool-light remaps, fresnel + layer-weight rims, value-noise bump, 3D Voronoi metallic sparkle, BT.601-luminance-gated emission.
 
-| Preset         | Notes                                                                   |
-| -------------- | ----------------------------------------------------------------------- |
-| `default`      | Plain Principled, metallic=0, rough=0.5                                 |
-| `eye`          | Plain + post-eval emission ×1.5                                         |
-| `face`         | Toon + warm rim + dual-fresnel rim + bright-tex gate, noise bump        |
-| `body`         | Toon + warm rim + fresnel + facing rim, noise bump                      |
-| `hair`         | Toon + fresnel + bevel + bright-tex gate, mixed at 20% PBR              |
-| `cloth_smooth` | Toon + bevel + emission overlay (×18)                                   |
-| `cloth_rough`  | Same NPR as cloth_smooth, live noise bump, rough=0.82                   |
-| `metal`        | Toon + emission overlay (×8), voronoi base, metallic=1                  |
-| `stockings`    | Gradient × facing mask + HSV emission (×5), sheen=0.7, **alpha-hashed** |
+| Preset         | Notes                                                                           |
+| -------------- | ------------------------------------------------------------------------------- |
+| `default`      | Plain Principled, metallic=0, rough=0.5                                         |
+| `eye`          | Plain + post-eval emission ×1.5                                                 |
+| `face`         | Toon + warm rim + dual-fresnel rim + bright-tex gate, noise bump                |
+| `body`         | Toon + warm rim + fresnel + facing rim, noise bump                              |
+| `hair`         | Toon + fresnel + bevel + bright-tex gate, mixed at 20% PBR                      |
+| `cloth_smooth` | Toon + bevel + emission overlay (×18)                                           |
+| `cloth_rough`  | Same NPR as cloth_smooth, live noise bump, rough=0.82                           |
+| `metal`        | Toon + emission overlay (×8), voronoi base, metallic=1                          |
+| `stockings`    | Gradient × facing mask + HSV emission (×5), sheen=0.7, **alpha-hashed**         |
 
 Assign per-model with `engine.setMaterialPresets(name, map)`. Unlisted material names fall through to `default`.
 
