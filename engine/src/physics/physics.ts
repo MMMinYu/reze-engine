@@ -21,11 +21,9 @@ export class RezePhysics {
   private constraints: SixDofSpringConstraint[]
   private contacts: ContactPool
   private firstFrame = true
-  // Fixed-timestep accumulator: physics runs at 75 Hz regardless of render
-  // rate, so spring impulse, damping, and integration are deterministic.
   private timeAccum = 0
-  private readonly fixedTimeStep = 1 / 75
-  private readonly maxSubSteps = 10
+  private readonly fixedTimeStep = 1 / 60
+  private readonly maxSubSteps = 6
 
   constructor(rigidbodies: Rigidbody[], joints: Joint[] = []) {
     this.rigidbodies = rigidbodies

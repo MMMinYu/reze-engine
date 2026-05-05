@@ -40,6 +40,12 @@ export class RigidBodyStore {
   readonly bodyOffsetInverse: Float32Array // 16*N column-major
   private boneOffsetsReady = false
 
+  // Flat list of (i, j) pairs that survive the static-static + group/mask
+  // filter. None of those inputs change after construction, so building this
+  // once collapses 60k pair tests/step (349 bodies) down to a few thousand.
+  // Built lazily on first access.
+  private collisionPairs: Uint16Array | null = null
+
   constructor(rigidbodies: Rigidbody[]) {
     const N = rigidbodies.length
     this.count = N
@@ -246,6 +252,29 @@ export class RigidBodyStore {
 
   isBoneOffsetsReady(): boolean {
     return this.boneOffsetsReady
+  }
+
+  // Pair-filter inputs (invMass, group, mask) are immutable post-construction,
+  // so build the candidate-pair list once and reuse every step.
+  getCollisionPairs(): Uint16Array {
+    if (this.collisionPairs !== null) return this.collisionPairs
+    const N = this.count
+    const invMass = this.invMass
+    const group = this.collisionGroup
+    const mask = this.willCollideMask
+    const buf: number[] = []
+    for (let i = 0; i < N; i++) {
+      const gi = group[i]
+      const mi = mask[i]
+      const dynA = invMass[i] > 0
+      for (let j = i + 1; j < N; j++) {
+        if (!dynA && invMass[j] === 0) continue
+        if ((mi & group[j]) === 0 || (mask[j] & gi) === 0) continue
+        buf.push(i, j)
+      }
+    }
+    this.collisionPairs = new Uint16Array(buf)
+    return this.collisionPairs
   }
 }
 

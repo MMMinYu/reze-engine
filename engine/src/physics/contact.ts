@@ -37,27 +37,49 @@ export interface Contact {
   appliedNormalImpulse: number
   appliedFrictionImpulse1: number
   appliedFrictionImpulse2: number
+
+  // Per-substep cache. Written by the solver's setup pass, read by iter.
+  // Normal row:
+  cAxN: number; cAyN: number; cAzN: number   // rA × n
+  cBxN: number; cByN: number; cBzN: number   // rB × n
+  jacInvN: number
+  bounceVel: number   // restitution reference, captured at setup from initial relVelN
+  // Friction tangent 1:
+  t1x: number; t1y: number; t1z: number
+  cAxT1: number; cAyT1: number; cAzT1: number
+  cBxT1: number; cByT1: number; cBzT1: number
+  jacInvT1: number
+  // Friction tangent 2:
+  t2x: number; t2y: number; t2z: number
+  cAxT2: number; cAyT2: number; cAzT2: number
+  cBxT2: number; cByT2: number; cBzT2: number
+  jacInvT2: number
 }
 
 function makeContact(): Contact {
   return {
-    bodyA: 0,
-    bodyB: 0,
-    rAx: 0,
-    rAy: 0,
-    rAz: 0,
-    rBx: 0,
-    rBy: 0,
-    rBz: 0,
-    nx: 0,
-    ny: 0,
-    nz: 0,
+    bodyA: 0, bodyB: 0,
+    rAx: 0, rAy: 0, rAz: 0,
+    rBx: 0, rBy: 0, rBz: 0,
+    nx: 0, ny: 0, nz: 0,
     depth: 0,
     friction: 0,
     restitution: 0,
     appliedNormalImpulse: 0,
     appliedFrictionImpulse1: 0,
     appliedFrictionImpulse2: 0,
+    cAxN: 0, cAyN: 0, cAzN: 0,
+    cBxN: 0, cByN: 0, cBzN: 0,
+    jacInvN: 0,
+    bounceVel: 0,
+    t1x: 0, t1y: 0, t1z: 0,
+    cAxT1: 0, cAyT1: 0, cAzT1: 0,
+    cBxT1: 0, cByT1: 0, cBzT1: 0,
+    jacInvT1: 0,
+    t2x: 0, t2y: 0, t2z: 0,
+    cAxT2: 0, cAyT2: 0, cAzT2: 0,
+    cBxT2: 0, cByT2: 0, cBzT2: 0,
+    jacInvT2: 0,
   }
 }
 
@@ -958,26 +980,17 @@ function flipLastNormal(pool: ContactPool): void {
   c.nz = -c.nz
 }
 
-// O(N²) AABB pair test. For 30–100 PMX bodies that's <5000 checks per
-// step; SAP / dynamic AABB tree pay off above ~500 bodies. The pair filter
-// uses the AND form `(maskA & groupB) && (maskB & groupA)` — both sides
-// must agree, which is what PMX rigs are tuned against.
+// Iterate the prebuilt candidate-pair list and AABB-test each pair. The
+// static-static and group/mask filters were applied once at construction —
+// see RigidBodyStore.getCollisionPairs. SAP / dynamic AABB tree pay off
+// above ~500 bodies; below that this flat sweep wins on cache locality.
 export function findContacts(store: RigidBodyStore, pool: ContactPool): void {
   store.updateAabbs()
-  const N = store.count
-  const invMass = store.invMass
-  const group = store.collisionGroup
-  const mask = store.willCollideMask
-
-  for (let i = 0; i < N; i++) {
-    const gi = group[i]
-    const mi = mask[i]
-    const dynA = invMass[i] > 0
-    for (let j = i + 1; j < N; j++) {
-      if (!dynA && invMass[j] === 0) continue // both static — no resolution
-      if ((mi & group[j]) === 0 || (mask[j] & gi) === 0) continue
-      if (!aabbOverlap(store, i, j)) continue
-      generateContacts(store, i, j, pool)
-    }
+  const pairs = store.getCollisionPairs()
+  for (let p = 0; p < pairs.length; p += 2) {
+    const i = pairs[p]
+    const j = pairs[p + 1]
+    if (!aabbOverlap(store, i, j)) continue
+    generateContacts(store, i, j, pool)
   }
 }

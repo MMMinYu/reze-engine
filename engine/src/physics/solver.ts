@@ -2,6 +2,14 @@
 // Gauss-Seidel: per axis, target a relative velocity (limit correction +
 // spring), apply the impulse needed to reach it. Friction is two Coulomb
 // rows per contact, normal is push-only.
+//
+// Two passes per substep:
+//   1. SETUP — for each constraint and contact, compute every quantity that
+//      doesn't depend on lv/av (world axes, lever arms, Jacobian denominators,
+//      target velocities, friction tangent bases, restitution reference).
+//      These are constant during solve since pos/ori/inertia don't change.
+//   2. ITERATE — `iterations` passes that read the cache and apply impulses
+//      based on the current lv/av. ~2× faster than recomputing per iter.
 
 import { Mat4 } from "../math"
 import type { RigidBodyStore } from "./body"
@@ -16,12 +24,7 @@ const _TA = new Float32Array(16)
 const _TB = new Float32Array(16)
 const _bodyMatA = new Float32Array(16)
 const _bodyMatB = new Float32Array(16)
-const _linAxes = new Float32Array(9)   // 3 linear axes × xyz
-const _angAxes = new Float32Array(9)   // 3 angular axes × xyz
-const _linDiff = new Float32Array(3)
-const _angDiff = new Float32Array(3)
-const _rA = new Float32Array(3)
-const _rB = new Float32Array(3)
+const _angDiffScratch = new Float32Array(3)
 
 export function solveConstraints(
   store: RigidBodyStore,
@@ -36,234 +39,222 @@ export function solveConstraints(
   const invDt = 1 / dt
   const lv = store.linearVelocities
   const av = store.angularVelocities
-  const pos = store.positions
   const invMass = store.invMass
   const invInertia = store.invInertia
 
+  for (let c = 0; c < constraints.length; c++) {
+    setupConstraint(constraints[c], store, dt, invDt)
+  }
+  for (let ci = 0; ci < contacts.count; ci++) {
+    setupContactRow(contacts.get(ci), lv, av, invMass, invInertia)
+  }
+
   for (let iter = 0; iter < iterations; iter++) {
     for (let c = 0; c < constraints.length; c++) {
-      const con = constraints[c]
-      const a = con.bodyA
-      const b = con.bodyB
-      const imA = invMass[a]
-      const imB = invMass[b]
-      const iiA = invInertia[a]
-      const iiB = invInertia[b]
-      if (imA === 0 && imB === 0) continue
-
-      buildBodyMat(store, a, _bodyMatA)
-      buildBodyMat(store, b, _bodyMatB)
-      Mat4.multiplyArrays(_bodyMatA, 0, con.frameA, 0, _TA, 0)
-      Mat4.multiplyArrays(_bodyMatB, 0, con.frameB, 0, _TB, 0)
-
-      // Mass-weighted shared anchor: kinematic partner gets weight 1 so
-      // the anchor sits exactly on it; two dynamic bodies blend by inverse
-      // mass. Lever arms are measured from each CG to that shared anchor.
-      const ai = a * 3
-      const bi = b * 3
-      const weightA = imB === 0 ? 1 : imA / (imA + imB)
-      const weightB = 1 - weightA
-      const anchorX = _TA[12] * weightA + _TB[12] * weightB
-      const anchorY = _TA[13] * weightA + _TB[13] * weightB
-      const anchorZ = _TA[14] * weightA + _TB[14] * weightB
-      _rA[0] = anchorX - pos[ai + 0]
-      _rA[1] = anchorY - pos[ai + 1]
-      _rA[2] = anchorZ - pos[ai + 2]
-      _rB[0] = anchorX - pos[bi + 0]
-      _rB[1] = anchorY - pos[bi + 1]
-      _rB[2] = anchorZ - pos[bi + 2]
-
-      // Linear part: linearDiff = TA.basis^T · (TB.origin − TA.origin),
-      // axes = TA's columns 0/1/2 in world space.
-      const dxw = _TB[12] - _TA[12]
-      const dyw = _TB[13] - _TA[13]
-      const dzw = _TB[14] - _TA[14]
-      _linDiff[0] = _TA[0] * dxw + _TA[1] * dyw + _TA[2] * dzw
-      _linDiff[1] = _TA[4] * dxw + _TA[5] * dyw + _TA[6] * dzw
-      _linDiff[2] = _TA[8] * dxw + _TA[9] * dyw + _TA[10] * dzw
-
-      _linAxes[0] = _TA[0]; _linAxes[1] = _TA[1]; _linAxes[2] = _TA[2]
-      _linAxes[3] = _TA[4]; _linAxes[4] = _TA[5]; _linAxes[5] = _TA[6]
-      _linAxes[6] = _TA[8]; _linAxes[7] = _TA[9]; _linAxes[8] = _TA[10]
-
-      for (let i = 0; i < 3; i++) {
-        const lo = con.linearMin[i]
-        const hi = con.linearMax[i]
-        const curr = _linDiff[i]
-        const off = i * 3
-        const axx = _linAxes[off + 0]
-        const axy = _linAxes[off + 1]
-        const axz = _linAxes[off + 2]
-
-        // (rA × axis), (rB × axis): angular components of the linear Jacobian.
-        const cAx = _rA[1] * axz - _rA[2] * axy
-        const cAy = _rA[2] * axx - _rA[0] * axz
-        const cAz = _rA[0] * axy - _rA[1] * axx
-        const cBx = _rB[1] * axz - _rB[2] * axy
-        const cBy = _rB[2] * axx - _rB[0] * axz
-        const cBz = _rB[0] * axy - _rB[1] * axx
-        const cA2 = cAx * cAx + cAy * cAy + cAz * cAz
-        const cB2 = cBx * cBx + cBy * cBy + cBz * cBz
-        const denom = imA + imB + cA2 * iiA + cB2 * iiB
-        if (denom <= 0) continue
-        const jacInv = 1 / denom
-
-        // v_pivot = v_CG + ω × r.
-        const vAx = lv[ai + 0] + av[ai + 1] * _rA[2] - av[ai + 2] * _rA[1]
-        const vAy = lv[ai + 1] + av[ai + 2] * _rA[0] - av[ai + 0] * _rA[2]
-        const vAz = lv[ai + 2] + av[ai + 0] * _rA[1] - av[ai + 1] * _rA[0]
-        const vBx = lv[bi + 0] + av[bi + 1] * _rB[2] - av[bi + 2] * _rB[1]
-        const vBy = lv[bi + 1] + av[bi + 2] * _rB[0] - av[bi + 0] * _rB[2]
-        const vBz = lv[bi + 2] + av[bi + 0] * _rB[1] - av[bi + 1] * _rB[0]
-        const relVel = (vBx - vAx) * axx + (vBy - vAy) * axy + (vBz - vAz) * axz
-
-        let targetVel = 0
-        let active = false
-
-        if (lo <= hi) {
-          let err = 0
-          if (curr < lo) err = curr - lo
-          else if (curr > hi) err = curr - hi
-          if (err !== 0) {
-            targetVel = -err * STOP_ERP * invDt
-            active = true
-          }
-        }
-        if (con.springEnabled[i]) {
-          targetVel += -con.springStiffness[i] * (curr - con.equilibriumPoint[i]) * dt
-          active = true
-        }
-
-        if (active) {
-          const j = (targetVel - relVel) * jacInv
-          if (imA > 0) {
-            lv[ai + 0] -= j * imA * axx
-            lv[ai + 1] -= j * imA * axy
-            lv[ai + 2] -= j * imA * axz
-            av[ai + 0] -= j * iiA * cAx
-            av[ai + 1] -= j * iiA * cAy
-            av[ai + 2] -= j * iiA * cAz
-          }
-          if (imB > 0) {
-            lv[bi + 0] += j * imB * axx
-            lv[bi + 1] += j * imB * axy
-            lv[bi + 2] += j * imB * axz
-            av[bi + 0] += j * iiB * cBx
-            av[bi + 1] += j * iiB * cBy
-            av[bi + 2] += j * iiB * cBz
-          }
-        }
-      }
-
-      // Angular part: relative rotation TA^T·TB → Euler XYZ; axes from
-      // TA.col2 × TB.col0 (as Bullet's calculatedAxis derivation).
-      const r00 = _TA[0]*_TB[0] + _TA[1]*_TB[1] + _TA[2]*_TB[2]
-      const r01 = _TA[0]*_TB[4] + _TA[1]*_TB[5] + _TA[2]*_TB[6]
-      const r10 = _TA[4]*_TB[0] + _TA[5]*_TB[1] + _TA[6]*_TB[2]
-      const r11 = _TA[4]*_TB[4] + _TA[5]*_TB[5] + _TA[6]*_TB[6]
-      const r20 = _TA[8]*_TB[0] + _TA[9]*_TB[1] + _TA[10]*_TB[2]
-      const r21 = _TA[8]*_TB[4] + _TA[9]*_TB[5] + _TA[10]*_TB[6]
-      const r22 = _TA[8]*_TB[8] + _TA[9]*_TB[9] + _TA[10]*_TB[10]
-      matrixToEulerXYZ(r00, r01, r10, r11, r20, r21, r22, _angDiff)
-
-      const a2x = _TA[8],  a2y = _TA[9],  a2z = _TA[10]
-      const b0x = _TB[0],  b0y = _TB[1],  b0z = _TB[2]
-      // ax[1] = a2 × b0; ax[0] = ax[1] × a2; ax[2] = b0 × ax[1].
-      let yx = a2y * b0z - a2z * b0y
-      let yy = a2z * b0x - a2x * b0z
-      let yz = a2x * b0y - a2y * b0x
-      let l = Math.hypot(yx, yy, yz)
-      if (l > 1e-8) { const inv = 1/l; yx*=inv; yy*=inv; yz*=inv }
-      _angAxes[3] = yx; _angAxes[4] = yy; _angAxes[5] = yz
-      let xx = yy * a2z - yz * a2y
-      let xy = yz * a2x - yx * a2z
-      let xz = yx * a2y - yy * a2x
-      l = Math.hypot(xx, xy, xz)
-      if (l > 1e-8) { const inv = 1/l; xx*=inv; xy*=inv; xz*=inv }
-      _angAxes[0] = xx; _angAxes[1] = xy; _angAxes[2] = xz
-      let zx = b0y * yz - b0z * yy
-      let zy = b0z * yx - b0x * yz
-      let zz = b0x * yy - b0y * yx
-      l = Math.hypot(zx, zy, zz)
-      if (l > 1e-8) { const inv = 1/l; zx*=inv; zy*=inv; zz*=inv }
-      _angAxes[6] = zx; _angAxes[7] = zy; _angAxes[8] = zz
-
-      const angDenom = iiA + iiB
-      if (angDenom > 0) {
-        const angJacInv = 1 / angDenom
-
-        for (let i = 0; i < 3; i++) {
-          const idx = i + 3
-          const lo = con.angularMin[i]
-          const hi = con.angularMax[i]
-          const curr = _angDiff[i]
-          const off = i * 3
-          const axx = _angAxes[off + 0]
-          const axy = _angAxes[off + 1]
-          const axz = _angAxes[off + 2]
-
-          const relAv =
-            (av[bi + 0] - av[ai + 0]) * axx +
-            (av[bi + 1] - av[ai + 1]) * axy +
-            (av[bi + 2] - av[ai + 2]) * axz
-
-          // Sign flip vs linear: d(angDiff)/dt = −(ω_B − ω_A)·ax.
-          let targetVel = 0
-          let active = false
-
-          if (lo <= hi) {
-            let err = 0
-            if (curr < lo) err = curr - lo
-            else if (curr > hi) err = curr - hi
-            if (err !== 0) {
-              targetVel = err * STOP_ERP * invDt
-              active = true
-            }
-          }
-          if (con.springEnabled[idx]) {
-            targetVel += con.springStiffness[idx] * (curr - con.equilibriumPoint[idx]) * dt
-            active = true
-          }
-
-          if (active) {
-            const j = (targetVel - relAv) * angJacInv
-            if (iiA > 0) {
-              av[ai + 0] -= j * iiA * axx
-              av[ai + 1] -= j * iiA * axy
-              av[ai + 2] -= j * iiA * axz
-            }
-            if (iiB > 0) {
-              av[bi + 0] += j * iiB * axx
-              av[bi + 1] += j * iiB * axy
-              av[bi + 2] += j * iiB * axz
-            }
-          }
-        }
-      }
+      iterateConstraint(constraints[c], lv, av, invMass, invInertia)
     }
-
     for (let ci = 0; ci < contacts.count; ci++) {
-      solveContactRow(contacts.get(ci), lv, av, invMass, invInertia)
+      iterateContactRow(contacts.get(ci), lv, av, invMass, invInertia)
     }
   }
 }
 
-// Per-contact: one push-only normal row + two Coulomb friction rows
-// (impulse bound = ±μ·appliedNormalImpulse).
-function solveContactRow(
-  c: Contact,
+// SETUP: compute everything that doesn't depend on velocities. Caller
+// guarantees pos/ori don't change between this and the iter loop.
+function setupConstraint(
+  con: SixDofSpringConstraint,
+  store: RigidBodyStore,
+  dt: number,
+  invDt: number,
+): void {
+  const a = con.bodyA
+  const b = con.bodyB
+  const imA = store.invMass[a]
+  const imB = store.invMass[b]
+  const iiA = store.invInertia[a]
+  const iiB = store.invInertia[b]
+
+  con.cacheSkip = imA === 0 && imB === 0
+  if (con.cacheSkip) return
+
+  buildBodyMat(store, a, _bodyMatA)
+  buildBodyMat(store, b, _bodyMatB)
+  Mat4.multiplyArrays(_bodyMatA, 0, con.frameA, 0, _TA, 0)
+  Mat4.multiplyArrays(_bodyMatB, 0, con.frameB, 0, _TB, 0)
+
+  // Mass-weighted shared anchor (Bullet 2.75 m_AnchorPos).
+  const pos = store.positions
+  const ai = a * 3
+  const bi = b * 3
+  const weightA = imB === 0 ? 1 : imA / (imA + imB)
+  const weightB = 1 - weightA
+  const anchorX = _TA[12] * weightA + _TB[12] * weightB
+  const anchorY = _TA[13] * weightA + _TB[13] * weightB
+  const anchorZ = _TA[14] * weightA + _TB[14] * weightB
+  const rAx = anchorX - pos[ai + 0]
+  const rAy = anchorY - pos[ai + 1]
+  const rAz = anchorZ - pos[ai + 2]
+  const rBx = anchorX - pos[bi + 0]
+  const rBy = anchorY - pos[bi + 1]
+  const rBz = anchorZ - pos[bi + 2]
+  const lA = con.cacheLeverA
+  const lB = con.cacheLeverB
+  lA[0] = rAx; lA[1] = rAy; lA[2] = rAz
+  lB[0] = rBx; lB[1] = rBy; lB[2] = rBz
+
+  // linearDiff = TA.basis^T · (TB.origin − TA.origin); axes = TA columns 0/1/2.
+  const dxw = _TB[12] - _TA[12]
+  const dyw = _TB[13] - _TA[13]
+  const dzw = _TB[14] - _TA[14]
+  const linDiff0 = _TA[0] * dxw + _TA[1] * dyw + _TA[2] * dzw
+  const linDiff1 = _TA[4] * dxw + _TA[5] * dyw + _TA[6] * dzw
+  const linDiff2 = _TA[8] * dxw + _TA[9] * dyw + _TA[10] * dzw
+
+  const axes = con.cacheLinAxes
+  const cA = con.cacheLinCrossA
+  const cB = con.cacheLinCrossB
+  const jac = con.cacheLinJacInv
+  const tgt = con.cacheLinTargetVel
+  const act = con.cacheLinActive
+
+  for (let i = 0; i < 3; i++) {
+    const o = i * 3
+    const axx = i === 0 ? _TA[0] : i === 1 ? _TA[4] : _TA[8]
+    const axy = i === 0 ? _TA[1] : i === 1 ? _TA[5] : _TA[9]
+    const axz = i === 0 ? _TA[2] : i === 1 ? _TA[6] : _TA[10]
+    axes[o + 0] = axx
+    axes[o + 1] = axy
+    axes[o + 2] = axz
+
+    const cAx = rAy * axz - rAz * axy
+    const cAy = rAz * axx - rAx * axz
+    const cAz = rAx * axy - rAy * axx
+    const cBx = rBy * axz - rBz * axy
+    const cBy = rBz * axx - rBx * axz
+    const cBz = rBx * axy - rBy * axx
+    cA[o + 0] = cAx; cA[o + 1] = cAy; cA[o + 2] = cAz
+    cB[o + 0] = cBx; cB[o + 1] = cBy; cB[o + 2] = cBz
+
+    const denom = imA + imB +
+      (cAx * cAx + cAy * cAy + cAz * cAz) * iiA +
+      (cBx * cBx + cBy * cBy + cBz * cBz) * iiB
+    jac[i] = denom > 0 ? 1 / denom : 0
+
+    const lo = con.linearMin[i]
+    const hi = con.linearMax[i]
+    const curr = i === 0 ? linDiff0 : i === 1 ? linDiff1 : linDiff2
+    let target = 0
+    let active = 0
+    if (lo <= hi) {
+      let err = 0
+      if (curr < lo) err = curr - lo
+      else if (curr > hi) err = curr - hi
+      if (err !== 0) {
+        target = -err * STOP_ERP * invDt
+        active = 1
+      }
+    }
+    if (con.springEnabled[i]) {
+      target += -con.springStiffness[i] * (curr - con.equilibriumPoint[i]) * dt
+      active = 1
+    }
+    tgt[i] = target
+    act[i] = denom > 0 ? active : 0
+  }
+
+  // Angular: TA^T · TB → Euler XYZ; axes from TA.col2 × TB.col0.
+  const r00 = _TA[0]*_TB[0] + _TA[1]*_TB[1] + _TA[2]*_TB[2]
+  const r01 = _TA[0]*_TB[4] + _TA[1]*_TB[5] + _TA[2]*_TB[6]
+  const r10 = _TA[4]*_TB[0] + _TA[5]*_TB[1] + _TA[6]*_TB[2]
+  const r11 = _TA[4]*_TB[4] + _TA[5]*_TB[5] + _TA[6]*_TB[6]
+  const r20 = _TA[8]*_TB[0] + _TA[9]*_TB[1] + _TA[10]*_TB[2]
+  const r21 = _TA[8]*_TB[4] + _TA[9]*_TB[5] + _TA[10]*_TB[6]
+  const r22 = _TA[8]*_TB[8] + _TA[9]*_TB[9] + _TA[10]*_TB[10]
+  matrixToEulerXYZ(r00, r01, r10, r11, r20, r21, r22, _angDiffScratch)
+
+  const a2x = _TA[8],  a2y = _TA[9],  a2z = _TA[10]
+  const b0x = _TB[0],  b0y = _TB[1],  b0z = _TB[2]
+  let yx = a2y * b0z - a2z * b0y
+  let yy = a2z * b0x - a2x * b0z
+  let yz = a2x * b0y - a2y * b0x
+  let l = Math.hypot(yx, yy, yz)
+  if (l > 1e-8) { const inv = 1/l; yx*=inv; yy*=inv; yz*=inv }
+  let xx = yy * a2z - yz * a2y
+  let xy = yz * a2x - yx * a2z
+  let xz = yx * a2y - yy * a2x
+  l = Math.hypot(xx, xy, xz)
+  if (l > 1e-8) { const inv = 1/l; xx*=inv; xy*=inv; xz*=inv }
+  let zx = b0y * yz - b0z * yy
+  let zy = b0z * yx - b0x * yz
+  let zz = b0x * yy - b0y * yx
+  l = Math.hypot(zx, zy, zz)
+  if (l > 1e-8) { const inv = 1/l; zx*=inv; zy*=inv; zz*=inv }
+
+  const angAxes = con.cacheAngAxes
+  angAxes[0] = xx; angAxes[1] = xy; angAxes[2] = xz
+  angAxes[3] = yx; angAxes[4] = yy; angAxes[5] = yz
+  angAxes[6] = zx; angAxes[7] = zy; angAxes[8] = zz
+
+  const angDenom = iiA + iiB
+  con.cacheAngJacInv = angDenom > 0 ? 1 / angDenom : 0
+
+  const angTgt = con.cacheAngTargetVel
+  const angAct = con.cacheAngActive
+  for (let i = 0; i < 3; i++) {
+    const idx = i + 3
+    const lo = con.angularMin[i]
+    const hi = con.angularMax[i]
+    const curr = _angDiffScratch[i]
+    let target = 0
+    let active = 0
+    if (lo <= hi) {
+      let err = 0
+      if (curr < lo) err = curr - lo
+      else if (curr > hi) err = curr - hi
+      // Sign flip vs linear: d(angDiff)/dt = −(ω_B − ω_A)·ax.
+      if (err !== 0) {
+        target = err * STOP_ERP * invDt
+        active = 1
+      }
+    }
+    if (con.springEnabled[idx]) {
+      target += con.springStiffness[idx] * (curr - con.equilibriumPoint[idx]) * dt
+      active = 1
+    }
+    angTgt[i] = target
+    angAct[i] = angDenom > 0 ? active : 0
+  }
+}
+
+// ITER: read cache, compute relVel from current lv/av, apply impulse.
+function iterateConstraint(
+  con: SixDofSpringConstraint,
   lv: Float32Array,
   av: Float32Array,
   invMass: Float32Array,
   invInertia: Float32Array,
 ): void {
-  const ai = c.bodyA * 3, bi = c.bodyB * 3
-  const imA = invMass[c.bodyA], imB = invMass[c.bodyB]
-  const iiA = invInertia[c.bodyA], iiB = invInertia[c.bodyB]
-  if (imA === 0 && imB === 0) return
-  const rAx = c.rAx, rAy = c.rAy, rAz = c.rAz
-  const rBx = c.rBx, rBy = c.rBy, rBz = c.rBz
-  const nx = c.nx, ny = c.ny, nz = c.nz
+  if (con.cacheSkip) return
+  const a = con.bodyA
+  const b = con.bodyB
+  const ai = a * 3
+  const bi = b * 3
+  const imA = invMass[a]
+  const imB = invMass[b]
+  const iiA = invInertia[a]
+  const iiB = invInertia[b]
+
+  // Linear axes — relVel at the offset point: v_pivot = v_CG + ω × r.
+  const lA = con.cacheLeverA
+  const lB = con.cacheLeverB
+  const rAx = lA[0], rAy = lA[1], rAz = lA[2]
+  const rBx = lB[0], rBy = lB[1], rBz = lB[2]
+  const axes = con.cacheLinAxes
+  const cA = con.cacheLinCrossA
+  const cB = con.cacheLinCrossB
+  const jac = con.cacheLinJacInv
+  const tgt = con.cacheLinTargetVel
+  const act = con.cacheLinActive
 
   const vAx = lv[ai + 0] + av[ai + 1] * rAz - av[ai + 2] * rAy
   const vAy = lv[ai + 1] + av[ai + 2] * rAx - av[ai + 0] * rAz
@@ -271,11 +262,85 @@ function solveContactRow(
   const vBx = lv[bi + 0] + av[bi + 1] * rBz - av[bi + 2] * rBy
   const vBy = lv[bi + 1] + av[bi + 2] * rBx - av[bi + 0] * rBz
   const vBz = lv[bi + 2] + av[bi + 0] * rBy - av[bi + 1] * rBx
-  const dvX = vBx - vAx
-  const dvY = vBy - vAy
-  const dvZ = vBz - vAz
+  const dvx = vBx - vAx
+  const dvy = vBy - vAy
+  const dvz = vBz - vAz
 
-  // Normal row.
+  for (let i = 0; i < 3; i++) {
+    if (!act[i]) continue
+    const o = i * 3
+    const axx = axes[o + 0], axy = axes[o + 1], axz = axes[o + 2]
+    const relVel = dvx * axx + dvy * axy + dvz * axz
+    const j = (tgt[i] - relVel) * jac[i]
+    if (j === 0) continue
+    if (imA > 0) {
+      lv[ai + 0] -= j * imA * axx
+      lv[ai + 1] -= j * imA * axy
+      lv[ai + 2] -= j * imA * axz
+      av[ai + 0] -= j * iiA * cA[o + 0]
+      av[ai + 1] -= j * iiA * cA[o + 1]
+      av[ai + 2] -= j * iiA * cA[o + 2]
+    }
+    if (imB > 0) {
+      lv[bi + 0] += j * imB * axx
+      lv[bi + 1] += j * imB * axy
+      lv[bi + 2] += j * imB * axz
+      av[bi + 0] += j * iiB * cB[o + 0]
+      av[bi + 1] += j * iiB * cB[o + 1]
+      av[bi + 2] += j * iiB * cB[o + 2]
+    }
+  }
+
+  // Angular axes — relAv = ω_B − ω_A.
+  const angJacInv = con.cacheAngJacInv
+  if (angJacInv === 0) return
+  const angAxes = con.cacheAngAxes
+  const angTgt = con.cacheAngTargetVel
+  const angAct = con.cacheAngActive
+  const dax = av[bi + 0] - av[ai + 0]
+  const day = av[bi + 1] - av[ai + 1]
+  const daz = av[bi + 2] - av[ai + 2]
+  for (let i = 0; i < 3; i++) {
+    if (!angAct[i]) continue
+    const o = i * 3
+    const axx = angAxes[o + 0], axy = angAxes[o + 1], axz = angAxes[o + 2]
+    const relAv = dax * axx + day * axy + daz * axz
+    const j = (angTgt[i] - relAv) * angJacInv
+    if (j === 0) continue
+    if (iiA > 0) {
+      av[ai + 0] -= j * iiA * axx
+      av[ai + 1] -= j * iiA * axy
+      av[ai + 2] -= j * iiA * axz
+    }
+    if (iiB > 0) {
+      av[bi + 0] += j * iiB * axx
+      av[bi + 1] += j * iiB * axy
+      av[bi + 2] += j * iiB * axz
+    }
+  }
+}
+
+// SETUP: pre-compute Jacobians, friction basis, and the bounce reference
+// from the *initial* closing velocity (Bullet's pattern — captures restitution
+// before iter 1 zeroes out the approach).
+function setupContactRow(
+  c: Contact,
+  lv: Float32Array,
+  av: Float32Array,
+  invMass: Float32Array,
+  invInertia: Float32Array,
+): void {
+  const ai = c.bodyA * 3
+  const bi = c.bodyB * 3
+  const imA = invMass[c.bodyA]
+  const imB = invMass[c.bodyB]
+  const iiA = invInertia[c.bodyA]
+  const iiB = invInertia[c.bodyB]
+  const rAx = c.rAx, rAy = c.rAy, rAz = c.rAz
+  const rBx = c.rBx, rBy = c.rBy, rBz = c.rBz
+  const nx = c.nx, ny = c.ny, nz = c.nz
+
+  // Normal Jacobian.
   const cAxN = rAy * nz - rAz * ny
   const cAyN = rAz * nx - rAx * nz
   const cAzN = rAx * ny - rAy * nx
@@ -285,90 +350,172 @@ function solveContactRow(
   const denomN = imA + imB +
     (cAxN * cAxN + cAyN * cAyN + cAzN * cAzN) * iiA +
     (cBxN * cBxN + cByN * cByN + cBzN * cBzN) * iiB
-  if (denomN <= 0) return
-  const jacInvN = 1 / denomN
+  c.cAxN = cAxN; c.cAyN = cAyN; c.cAzN = cAzN
+  c.cBxN = cBxN; c.cByN = cByN; c.cBzN = cBzN
+  c.jacInvN = denomN > 0 ? 1 / denomN : 0
 
-  const relVelN = dvX * nx + dvY * ny + dvZ * nz
-  // Position correction is handled directly in world.ts (split impulse).
-  // Velocity row only removes approach + applies restitution above bounce.
-  let bounce = 0
-  if (c.restitution > 0 && relVelN < -BOUNCE_THRESHOLD) {
-    bounce = -c.restitution * relVelN
-  }
-  let dImpN = (bounce - relVelN) * jacInvN
-  const oldN = c.appliedNormalImpulse
-  let newN = oldN + dImpN
-  if (newN < 0) { newN = 0; dImpN = -oldN }
-  c.appliedNormalImpulse = newN
+  // Restitution reference, captured from initial relVelN.
+  const vAx = lv[ai + 0] + av[ai + 1] * rAz - av[ai + 2] * rAy
+  const vAy = lv[ai + 1] + av[ai + 2] * rAx - av[ai + 0] * rAz
+  const vAz = lv[ai + 2] + av[ai + 0] * rAy - av[ai + 1] * rAx
+  const vBx = lv[bi + 0] + av[bi + 1] * rBz - av[bi + 2] * rBy
+  const vBy = lv[bi + 1] + av[bi + 2] * rBx - av[bi + 0] * rBz
+  const vBz = lv[bi + 2] + av[bi + 0] * rBy - av[bi + 1] * rBx
+  const relVelN0 = (vBx - vAx) * nx + (vBy - vAy) * ny + (vBz - vAz) * nz
+  c.bounceVel = c.restitution > 0 && relVelN0 < -BOUNCE_THRESHOLD
+    ? -c.restitution * relVelN0
+    : 0
 
-  if (dImpN !== 0) {
-    if (imA > 0) {
-      lv[ai + 0] -= dImpN * imA * nx
-      lv[ai + 1] -= dImpN * imA * ny
-      lv[ai + 2] -= dImpN * imA * nz
-      av[ai + 0] -= dImpN * iiA * cAxN
-      av[ai + 1] -= dImpN * iiA * cAyN
-      av[ai + 2] -= dImpN * iiA * cAzN
-    }
-    if (imB > 0) {
-      lv[bi + 0] += dImpN * imB * nx
-      lv[bi + 1] += dImpN * imB * ny
-      lv[bi + 2] += dImpN * imB * nz
-      av[bi + 0] += dImpN * iiB * cBxN
-      av[bi + 1] += dImpN * iiB * cByN
-      av[bi + 2] += dImpN * iiB * cBzN
-    }
-  }
-
-  // Friction tangent basis. Pick the axis least aligned with n to avoid a
-  // near-zero cross product.
+  // Friction tangent basis. Pick the axis least aligned with n.
   let t1x: number, t1y: number, t1z: number
   if (Math.abs(nx) < 0.7071) { t1x = 0; t1y = -nz; t1z = ny }
   else { t1x = nz; t1y = 0; t1z = -nx }
-  const l = Math.hypot(t1x, t1y, t1z)
-  if (l < 1e-8) return
-  const tInv = 1 / l
-  t1x *= tInv; t1y *= tInv; t1z *= tInv
+  const tl = Math.hypot(t1x, t1y, t1z)
+  if (tl > 1e-8) {
+    const tInv = 1 / tl
+    t1x *= tInv; t1y *= tInv; t1z *= tInv
+  } else {
+    c.jacInvT1 = 0; c.jacInvT2 = 0
+    return
+  }
   const t2x = ny * t1z - nz * t1y
   const t2y = nz * t1x - nx * t1z
   const t2z = nx * t1y - ny * t1x
+  c.t1x = t1x; c.t1y = t1y; c.t1z = t1z
+  c.t2x = t2x; c.t2y = t2y; c.t2z = t2z
 
-  const muNormal = c.friction * c.appliedNormalImpulse
+  // Friction Jacobians.
+  const cAxT1 = rAy * t1z - rAz * t1y
+  const cAyT1 = rAz * t1x - rAx * t1z
+  const cAzT1 = rAx * t1y - rAy * t1x
+  const cBxT1 = rBy * t1z - rBz * t1y
+  const cByT1 = rBz * t1x - rBx * t1z
+  const cBzT1 = rBx * t1y - rBy * t1x
+  const denomT1 = imA + imB +
+    (cAxT1 * cAxT1 + cAyT1 * cAyT1 + cAzT1 * cAzT1) * iiA +
+    (cBxT1 * cBxT1 + cByT1 * cByT1 + cBzT1 * cBzT1) * iiB
+  c.cAxT1 = cAxT1; c.cAyT1 = cAyT1; c.cAzT1 = cAzT1
+  c.cBxT1 = cBxT1; c.cByT1 = cByT1; c.cBzT1 = cBzT1
+  c.jacInvT1 = denomT1 > 0 ? 1 / denomT1 : 0
 
-  applyFrictionRow(c, ai, bi, t1x, t1y, t1z,
-    rAx, rAy, rAz, rBx, rBy, rBz, dvX, dvY, dvZ,
-    imA, imB, iiA, iiB, lv, av, muNormal, 1)
-  applyFrictionRow(c, ai, bi, t2x, t2y, t2z,
-    rAx, rAy, rAz, rBx, rBy, rBz, dvX, dvY, dvZ,
-    imA, imB, iiA, iiB, lv, av, muNormal, 2)
+  const cAxT2 = rAy * t2z - rAz * t2y
+  const cAyT2 = rAz * t2x - rAx * t2z
+  const cAzT2 = rAx * t2y - rAy * t2x
+  const cBxT2 = rBy * t2z - rBz * t2y
+  const cByT2 = rBz * t2x - rBx * t2z
+  const cBzT2 = rBx * t2y - rBy * t2x
+  const denomT2 = imA + imB +
+    (cAxT2 * cAxT2 + cAyT2 * cAyT2 + cAzT2 * cAzT2) * iiA +
+    (cBxT2 * cBxT2 + cByT2 * cByT2 + cBzT2 * cBzT2) * iiB
+  c.cAxT2 = cAxT2; c.cAyT2 = cAyT2; c.cAzT2 = cAzT2
+  c.cBxT2 = cBxT2; c.cByT2 = cByT2; c.cBzT2 = cBzT2
+  c.jacInvT2 = denomT2 > 0 ? 1 / denomT2 : 0
 }
 
-function applyFrictionRow(
+// ITER: one push-only normal row + two Coulomb friction rows. Friction
+// bound depends on the *current* applied normal impulse, so it tightens
+// as the normal row converges.
+function iterateContactRow(
+  c: Contact,
+  lv: Float32Array,
+  av: Float32Array,
+  invMass: Float32Array,
+  invInertia: Float32Array,
+): void {
+  const imA = invMass[c.bodyA]
+  const imB = invMass[c.bodyB]
+  if (imA === 0 && imB === 0) return
+  const iiA = invInertia[c.bodyA]
+  const iiB = invInertia[c.bodyB]
+  const ai = c.bodyA * 3, bi = c.bodyB * 3
+  const rAx = c.rAx, rAy = c.rAy, rAz = c.rAz
+  const rBx = c.rBx, rBy = c.rBy, rBz = c.rBz
+
+  const vAx = lv[ai + 0] + av[ai + 1] * rAz - av[ai + 2] * rAy
+  const vAy = lv[ai + 1] + av[ai + 2] * rAx - av[ai + 0] * rAz
+  const vAz = lv[ai + 2] + av[ai + 0] * rAy - av[ai + 1] * rAx
+  const vBx = lv[bi + 0] + av[bi + 1] * rBz - av[bi + 2] * rBy
+  const vBy = lv[bi + 1] + av[bi + 2] * rBx - av[bi + 0] * rBz
+  const vBz = lv[bi + 2] + av[bi + 0] * rBy - av[bi + 1] * rBx
+  const dvx = vBx - vAx
+  const dvy = vBy - vAy
+  const dvz = vBz - vAz
+
+  // Normal row.
+  const jacInvN = c.jacInvN
+  if (jacInvN > 0) {
+    const nx = c.nx, ny = c.ny, nz = c.nz
+    const relVelN = dvx * nx + dvy * ny + dvz * nz
+    let dImpN = (c.bounceVel - relVelN) * jacInvN
+    const oldN = c.appliedNormalImpulse
+    let newN = oldN + dImpN
+    if (newN < 0) { newN = 0; dImpN = -oldN }
+    c.appliedNormalImpulse = newN
+    if (dImpN !== 0) {
+      const cAxN = c.cAxN, cAyN = c.cAyN, cAzN = c.cAzN
+      const cBxN = c.cBxN, cByN = c.cByN, cBzN = c.cBzN
+      if (imA > 0) {
+        lv[ai + 0] -= dImpN * imA * nx
+        lv[ai + 1] -= dImpN * imA * ny
+        lv[ai + 2] -= dImpN * imA * nz
+        av[ai + 0] -= dImpN * iiA * cAxN
+        av[ai + 1] -= dImpN * iiA * cAyN
+        av[ai + 2] -= dImpN * iiA * cAzN
+      }
+      if (imB > 0) {
+        lv[bi + 0] += dImpN * imB * nx
+        lv[bi + 1] += dImpN * imB * ny
+        lv[bi + 2] += dImpN * imB * nz
+        av[bi + 0] += dImpN * iiB * cBxN
+        av[bi + 1] += dImpN * iiB * cByN
+        av[bi + 2] += dImpN * iiB * cBzN
+      }
+    }
+  }
+
+  // Friction. Bound = ±μ · current normal impulse.
+  const muNormal = c.friction * c.appliedNormalImpulse
+  if (muNormal <= 0) return
+
+  // Re-read dv after the normal impulse possibly changed lv/av.
+  const vAx2 = lv[ai + 0] + av[ai + 1] * rAz - av[ai + 2] * rAy
+  const vAy2 = lv[ai + 1] + av[ai + 2] * rAx - av[ai + 0] * rAz
+  const vAz2 = lv[ai + 2] + av[ai + 0] * rAy - av[ai + 1] * rAx
+  const vBx2 = lv[bi + 0] + av[bi + 1] * rBz - av[bi + 2] * rBy
+  const vBy2 = lv[bi + 1] + av[bi + 2] * rBx - av[bi + 0] * rBz
+  const vBz2 = lv[bi + 2] + av[bi + 0] * rBy - av[bi + 1] * rBx
+  const dvx2 = vBx2 - vAx2
+  const dvy2 = vBy2 - vAy2
+  const dvz2 = vBz2 - vAz2
+
+  applyFrictionTangent(
+    c, ai, bi, dvx2, dvy2, dvz2,
+    c.t1x, c.t1y, c.t1z,
+    c.cAxT1, c.cAyT1, c.cAzT1, c.cBxT1, c.cByT1, c.cBzT1,
+    c.jacInvT1, muNormal, imA, imB, iiA, iiB, lv, av, 1,
+  )
+  applyFrictionTangent(
+    c, ai, bi, dvx2, dvy2, dvz2,
+    c.t2x, c.t2y, c.t2z,
+    c.cAxT2, c.cAyT2, c.cAzT2, c.cBxT2, c.cByT2, c.cBzT2,
+    c.jacInvT2, muNormal, imA, imB, iiA, iiB, lv, av, 2,
+  )
+}
+
+function applyFrictionTangent(
   c: Contact,
   ai: number, bi: number,
+  dvx: number, dvy: number, dvz: number,
   tx: number, ty: number, tz: number,
-  rAx: number, rAy: number, rAz: number,
-  rBx: number, rBy: number, rBz: number,
-  dvX: number, dvY: number, dvZ: number,
+  cAx: number, cAy: number, cAz: number,
+  cBx: number, cBy: number, cBz: number,
+  jacInv: number, muNormal: number,
   imA: number, imB: number, iiA: number, iiB: number,
   lv: Float32Array, av: Float32Array,
-  muNormal: number,
   slot: 1 | 2,
 ): void {
-  if (muNormal <= 0) return
-  const cAx = rAy * tz - rAz * ty
-  const cAy = rAz * tx - rAx * tz
-  const cAz = rAx * ty - rAy * tx
-  const cBx = rBy * tz - rBz * ty
-  const cBy = rBz * tx - rBx * tz
-  const cBz = rBx * ty - rBy * tx
-  const denom = imA + imB +
-    (cAx * cAx + cAy * cAy + cAz * cAz) * iiA +
-    (cBx * cBx + cBy * cBy + cBz * cBz) * iiB
-  if (denom <= 0) return
-  const jacInv = 1 / denom
-
-  const relVel = dvX * tx + dvY * ty + dvZ * tz
+  if (jacInv <= 0) return
+  const relVel = dvx * tx + dvy * ty + dvz * tz
   let dImp = -relVel * jacInv
   const old = slot === 1 ? c.appliedFrictionImpulse1 : c.appliedFrictionImpulse2
   let next = old + dImp

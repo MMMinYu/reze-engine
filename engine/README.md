@@ -317,7 +317,7 @@ predict velocities  → broadphase + narrowphase  → solve constraints (10 iter
                    → split-impulse position correction  → integrate transforms
 ```
 
-A fixed-timestep accumulator runs the substep at a constant **75 Hz** regardless of render rate, with up to 10 substeps per render frame. Constant `dt` keeps spring impulse, damping, and integration deterministic — without it, coupled cloth chains never reach steady state.
+A fixed-timestep accumulator runs the substep at a constant **60 Hz** regardless of render rate, with up to 6 substeps per render frame. Constant `dt` keeps spring impulse, damping, and integration deterministic — without it, coupled cloth chains never reach steady state.
 
 ### Implementation notes
 

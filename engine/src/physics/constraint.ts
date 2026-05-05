@@ -26,6 +26,23 @@ export interface SixDofSpringConstraint {
   springEnabled: Uint8Array     // length 6
   springStiffness: Float32Array // length 6 (k)
   equilibriumPoint: Float32Array// length 6, baked at setup time
+
+  // Per-substep cache. Filled by solver's setup pass once before SI iters,
+  // read by the velocity-only iter loop. None of these depend on lv/av — only
+  // on pos/ori/inertia which are constant during solve.
+  cacheSkip: boolean              // both bodies static — skip entirely
+  cacheLeverA: Float32Array       // 3: rA = anchor − posA (world-space)
+  cacheLeverB: Float32Array       // 3
+  cacheLinAxes: Float32Array      // 9: 3 linear axes × xyz, world-space
+  cacheLinCrossA: Float32Array    // 9: (rA × ax) per axis
+  cacheLinCrossB: Float32Array    // 9
+  cacheLinJacInv: Float32Array    // 3: 1/(im+im+cA²·ii+cB²·ii) per axis
+  cacheLinTargetVel: Float32Array // 3: limit ERP + spring drive, signed
+  cacheLinActive: Uint8Array      // 3
+  cacheAngAxes: Float32Array      // 9
+  cacheAngTargetVel: Float32Array // 3
+  cacheAngActive: Uint8Array      // 3
+  cacheAngJacInv: number          // 1 — same for all 3 angular axes
 }
 
 export const STOP_ERP = 0.475
@@ -102,6 +119,19 @@ export function buildConstraints(
       springEnabled,
       springStiffness,
       equilibriumPoint: new Float32Array(6),
+      cacheSkip: false,
+      cacheLeverA: new Float32Array(3),
+      cacheLeverB: new Float32Array(3),
+      cacheLinAxes: new Float32Array(9),
+      cacheLinCrossA: new Float32Array(9),
+      cacheLinCrossB: new Float32Array(9),
+      cacheLinJacInv: new Float32Array(3),
+      cacheLinTargetVel: new Float32Array(3),
+      cacheLinActive: new Uint8Array(3),
+      cacheAngAxes: new Float32Array(9),
+      cacheAngTargetVel: new Float32Array(3),
+      cacheAngActive: new Uint8Array(3),
+      cacheAngJacInv: 0,
     })
   }
 
