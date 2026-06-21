@@ -1139,11 +1139,6 @@ export class PmxLoader {
     const len = this.getInt32()
     if (len <= 0) return ""
 
-    // Debug: log problematic string lengths
-    if (len > 1000 || len < -1000) {
-      throw new RangeError(`Suspicious string length: ${len} at offset ${this.offset - 4}`)
-    }
-
     // Ensure we don't read beyond buffer bounds
     if (this.offset + len > this.view.buffer.byteLength) {
       throw new RangeError(`String length ${len} exceeds buffer bounds at offset ${this.offset - 4}`)

@@ -68,6 +68,14 @@ struct LightVP { viewProj: mat4x4f, };
 
 `;
 
+// ─── Group(0) + Group(1) only (no group(2)) ─────────────────────────
+// StarRail materials declare their own group(2) with a different layout
+// (8 bindings: color + uniform + ilm + ramp + sdf + matcap + sampler + coolRamp),
+// so they need this stripped version to avoid conflicting @group(2) declarations.
+
+export const COMMON_BINDINGS_GROUP01_WGSL = COMMON_BINDINGS_WGSL
+  .replace(/@group\(2\) @binding\(0\) var diffuseTexture:[^;]*;\n@group\(2\) @binding\(1\) var<uniform> material:[^;]*;\n/, '')
+
 // ─── Shadow sampler (3×3 PCF) ───────────────────────────────────────
 // 2048-map, normal-bias 0.08, depth-bias 0.001. Unrolled — Safari's Metal backend
 // doesn't unroll nested shadow loops reliably, and the early out on back-facing

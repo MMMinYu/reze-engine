@@ -67,8 +67,14 @@ struct VertexOutput {
   // Ratio proj[1][1]/proj[0][0] recovers the viewport aspect (width/height).
   let aspect = camera.projection[1][1] / camera.projection[0][0];
   let pixelDir = normalize(vec2f(clipNormal.x * aspect, clipNormal.y));
-  let ndcDir = vec2f(pixelDir.x / aspect, pixelDir.y);
-  let edgeScale = 0.0016;
+  // ndcDir must be normalized so outline thickness is uniform regardless
+  // of surface orientation (otherwise horizontal edges are thinner than vertical)
+  let ndcDir = normalize(vec2f(pixelDir.x / aspect, pixelDir.y));
+  // edgeScale: NDC units per PMX edgeSize.
+  // Pixels ≈ edgeSize * edgeScale * viewportHeight / 2 (one side)
+  // Target ≈ 1.5px per side for edgeSize=1.0 at 1080p:
+  //   edgeScale = 1.5 * 2 / (1.0 * 1080) ≈ 0.0028
+  let edgeScale = 0.0028;
   let offset = ndcDir * material.edgeSize * edgeScale * clipPos.w;
   output.position = vec4f(clipPos.xy + offset, clipPos.z, clipPos.w);
   return output;

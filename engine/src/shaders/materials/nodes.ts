@@ -12,6 +12,30 @@ export const NODES_WGSL = /* wgsl */ `
 // helpers below, halving LUT taps on the default Principled path.
 @group(0) @binding(9) var brdfLut: texture_2d<f32>;
 
+// ─── sRGB ↔ linear helpers (Blender color picker / texture values) ───
+
+fn srgb_to_linear_channel(x: f32) -> f32 {
+  if (x <= 0.04045) {
+    return x / 12.92;
+  }
+  return pow((x + 0.055) / 1.055, 2.4);
+}
+
+fn linear_to_srgb_channel(x: f32) -> f32 {
+  if (x <= 0.0031308) {
+    return x * 12.92;
+  }
+  return 1.055 * pow(x, 1.0 / 2.4) - 0.055;
+}
+
+fn srgb_to_linear(c: vec3f) -> vec3f {
+  return vec3f(srgb_to_linear_channel(c.r), srgb_to_linear_channel(c.g), srgb_to_linear_channel(c.b));
+}
+
+fn linear_to_srgb(c: vec3f) -> vec3f {
+  return vec3f(linear_to_srgb_channel(c.r), linear_to_srgb_channel(c.g), linear_to_srgb_channel(c.b));
+}
+
 // ─── RGB ↔ HSV ──────────────────────────────────────────────────────
 
 fn rgb_to_hsv(rgb: vec3f) -> vec3f {

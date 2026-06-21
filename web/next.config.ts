@@ -1,9 +1,16 @@
 import type { NextConfig } from "next"
-// import { join } from "path"
+import path from "path"
 
 const nextConfig: NextConfig = {
-  // outputFileTracingRoot: join(__dirname, ".."),
   devIndicators: false,
+  transpilePackages: ["reze-engine"],
+  webpack: (config) => {
+    config.resolve.alias = {
+      ...config.resolve.alias,
+      "reze-engine": path.resolve(__dirname, "../engine/src/index.ts"),
+    }
+    return config
+  },
 }
 
 export default nextConfig

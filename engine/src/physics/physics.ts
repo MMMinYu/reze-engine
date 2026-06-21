@@ -23,7 +23,7 @@ export class RezePhysics {
   private firstFrame = true
   private timeAccum = 0
   private readonly fixedTimeStep = 1 / 60
-  private readonly maxSubSteps = 6
+  private readonly maxSubSteps = 3
 
   constructor(rigidbodies: Rigidbody[], joints: Joint[] = []) {
     this.rigidbodies = rigidbodies

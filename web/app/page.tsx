@@ -1,7 +1,7 @@
 "use client"
 
 import Header from "@/components/header"
-import { Engine, EngineStats, Model, Vec3, type AnimationProgress } from "reze-engine"
+import { Engine, EngineStats, Model, Vec3, type AnimationProgress, type MaterialPresetMap } from "reze-engine"
 import { useCallback, useEffect, useRef, useState } from "react"
 import Loading from "@/components/loading"
 import { Button } from "@/components/ui/button"
@@ -25,7 +25,7 @@ function formatRemainingTime(current: number, duration: number): string {
 }
 
 /** Scene models: same order as load — transport + seek drive all entries together. */
-const SCENE_MODELS = [{ id: "serqet", clip: "m1" }] as const
+const SCENE_MODELS = [{ id: "fengjin", clip: "dance" }] as const
 
 export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -46,6 +46,9 @@ export default function Home() {
     playing: false,
     paused: false,
   })
+  const [materials, setMaterials] = useState<string[]>([])
+  const [hiddenMaterials, setHiddenMaterials] = useState<Set<string>>(new Set())
+  const [partsPanelOpen, setPartsPanelOpen] = useState(false)
   const seekResetRafRef = useRef<number | null>(null)
 
   // Sync progress from model (current/duration in seconds, name)
@@ -196,6 +199,17 @@ export default function Home() {
     [progress.duration],
   )
 
+  const toggleMaterial = useCallback((name: string) => {
+    const engine = engineRef.current
+    if (!engine) return
+    const next = new Set(hiddenMaterials)
+    const willShow = next.has(name)
+    if (willShow) next.delete(name)
+    else next.add(name)
+    setHiddenMaterials(next)
+    engine.setMaterialVisible(SCENE_MODELS[0].id, name, willShow)
+  }, [hiddenMaterials])
+
   const initEngine = useCallback(async () => {
     if (!canvasRef.current) {
       setLoading(false)
@@ -204,50 +218,54 @@ export default function Home() {
     try {
       const engine = new Engine(canvasRef.current, {
         camera: { distance: 31.5, target: new Vec3(0, 11.5, 0) },
-        bloom: { color: new Vec3(0.9, 0.3, 0.6) },
+        bloom: { enabled: false },
+        sun: { strength: 6.5, direction: new Vec3(-0.296, -0.500, 0.814) },
+        world: { color: new Vec3(0.05, 0.05, 0.05), strength: 1.0 },
       })
       engineRef.current = engine
+      ;(window as any).__engine = engine
       await engine.init()
 
-      const m1 = await engine.loadModel(SCENE_MODELS[0].id, "/models/塞尔凯特/塞尔凯特.pmx")
+      const m1 = await engine.loadModel(SCENE_MODELS[0].id, "/models/风堇/model.pmx")
 
       modelsRef.current = [m1]
 
+      const matNames = m1.getMaterials().map((mat) => mat.name)
+      setMaterials(matNames)
+      setHiddenMaterials(new Set())
+
       engine.setMaterialPresets(SCENE_MODELS[0].id, {
-        eye: ["眼睛", "眼白", "目白", "右瞳", "左瞳", "眉毛"],
-        face: ["脸", "face01"],
-        body: ["皮肤", "skin"],
-        hair: ["头发", "hair_f"],
-        cloth_smooth: [
-          "衣服",
-          "裙子",
-          "裙带",
-          "裙布",
-          "外套",
-          "外套饰",
-          "裤子",
-          "裤子0",
-          "腿环",
-          "发饰",
-          "鞋子",
-          "鞋子饰",
-          "shirt",
-          "shoes",
-          "shorts",
-          "trigger",
-          "dress",
-          "hair_accessory",
-          "cloth01_shoes",
+        sr_face: ["颜", "颜+"],
+        sr_hair: ["髪", "髪1"],
+        sr_body: ["身体", "手臂", "指甲"],
+        sr_clothes: [
+          "内衣", "吊带", "项圈", "项圈环",
+          "衣1", "衣2", "衣金属", "衣饰",
+          "袖", "袖口", "袖金属", "袖饰",
+          "裙", "裙1",
+          "帽子", "帽球", "帽结", "帽金属",
+          "披肩", "披风", "披风金属",
+          "头饰", "蝴蝶结", "蝴蝶结+", "结花边",
+          "鞋子", "鞋饰", "领结", "领金属",
+          "挂金属", "背金属", "足金属", "袖球",
+          "脖子", "眼罩", "眼罩金属",
+          "发圈", "铃铛", "表",
+          "乳贴", "乳钉", "乳首结",
+          "口枷金属1", "口枷金属2", "口球", "口球带1", "口球带2", "口球扣",
+          "结花边+",  // 回退：texture有alpha镂空，depthBias会导致白色填充
         ],
-        stockings: ["袜子", "stockings"],
-        metal: ["metal01", "earring"],
+        sr_clothes_inner: [
+          "衣1+", "袖+", "裙+", "裙1+",
+          "帽结+", "头饰+",
+          "披肩+", "披风+",
+        ],
+        sr_eye: ["目", "目光", "白目", "眉睫", "舌", "齿", "口"],
+        metal: ["金属"],
       })
 
-      engine.addGround({
-        diffuseColor: new Vec3(1, 0.3, 0.6),
-      })
+      // engine.addGround()
 
-      await m1.loadVmd(SCENE_MODELS[0].clip, "/animations/One More Last Time.vmd")
+      // await m1.loadVmd(SCENE_MODELS[0].clip, "/animations/dance.vmd")
 
       engine.runRenderLoop(() => setStats(engine.getStats()))
 
@@ -360,6 +378,41 @@ export default function Home() {
                 {formatRemainingTime(progress.current, progress.duration)}
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {!loading && !engineError && materials.length > 0 && (
+        <div className="absolute top-16 right-4 z-[60] pointer-events-auto">
+          <div className="bg-black/40 backdrop-blur-xs rounded-lg overflow-hidden max-h-[calc(100vh-8rem)] flex flex-col">
+            <button
+              onClick={() => setPartsPanelOpen((v) => !v)}
+              className="px-3 py-2 text-white text-sm font-medium hover:bg-white/10 transition-colors text-left flex items-center justify-between"
+            >
+              <span>部件显示</span>
+              <span className="text-xs opacity-70">{partsPanelOpen ? "收起" : "展开"}</span>
+            </button>
+            {partsPanelOpen && (
+              <div className="overflow-y-auto px-3 py-2 space-y-1 min-w-[10rem] max-h-[calc(100vh-12rem)]">
+                {materials.map((name) => {
+                  const visible = !hiddenMaterials.has(name)
+                  return (
+                    <label
+                      key={name}
+                      className="flex items-center gap-2 text-white/90 text-xs hover:bg-white/10 px-1 py-1 rounded cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={visible}
+                        onChange={() => toggleMaterial(name)}
+                        className="accent-emerald-500"
+                      />
+                      <span className="truncate">{name}</span>
+                    </label>
+                  )
+                })}
+              </div>
+            )}
           </div>
         </div>
       )}

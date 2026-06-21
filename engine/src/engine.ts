@@ -22,6 +22,16 @@ import { METAL_SHADER_WGSL } from "./shaders/materials/metal"
 import { BODY_SHADER_WGSL } from "./shaders/materials/body"
 import { EYE_SHADER_WGSL } from "./shaders/materials/eye"
 import { STOCKINGS_SHADER_WGSL } from "./shaders/materials/stockings"
+import { SR_FACE_SHADER_WGSL } from "./shaders/materials/starrail/face"
+import { SR_HAIR_SHADER_WGSL } from "./shaders/materials/starrail/hair"
+import { SR_BODY_SHADER_WGSL } from "./shaders/materials/starrail/body"
+import { SR_CLOTHES_SHADER_WGSL, SR_CLOTHES_INNER_SHADER_WGSL } from "./shaders/materials/starrail/clothes"
+import { SR_EYE_SHADER_WGSL } from "./shaders/materials/starrail/eye"
+import { SR_MMD_SHADER_WGSL } from "./shaders/materials/starrail/mmd"
+import { SR_EDGE_SHADER_WGSL } from "./shaders/materials/starrail/edge"
+import { SR_STOCKING_SHADER_WGSL } from "./shaders/materials/starrail/stocking"
+import { SR_SPECIAL_SHADER_WGSL } from "./shaders/materials/starrail/special"
+import { STARRAIL_MATERIAL_UNIFORM_SIZE } from "./shaders/materials/starrail/bindings"
 import { BRDF_LUT_SIZE, BRDF_LUT_BAKE_WGSL } from "./shaders/dfg_lut"
 import { LTC_MAG_LUT_SIZE, LTC_MAG_LUT_DATA } from "./shaders/ltc_mag_lut"
 import { SHADOW_DEPTH_SHADER_WGSL } from "./shaders/passes/shadow"
@@ -50,6 +60,16 @@ export type MaterialPreset =
   | "metal"
   | "cloth_smooth"
   | "cloth_rough"
+  | "sr_face"
+  | "sr_hair"
+  | "sr_body"
+  | "sr_clothes"
+  | "sr_clothes_inner"
+  | "sr_eye"
+  | "sr_mmd"
+  | "sr_edge"
+  | "sr_stocking"
+  | "sr_special"
 
 export type MaterialPresetMap = Partial<Record<MaterialPreset, string[]>>
 
@@ -59,6 +79,45 @@ function resolvePreset(materialName: string, map: MaterialPresetMap | undefined)
     if (names && names.includes(materialName)) return preset as MaterialPreset
   }
   return "default"
+}
+
+/** Try to find a manifest entry for a PMX material name.
+ *  Manifest entries may use names like "actual_颜.001" while PMX uses "颜",
+ *  so we try exact match first, then strip "actual_" prefix and ".NNN" suffix. */
+/** Simple traditional→simplified Chinese character map for material name matching. */
+const TRAD_TO_SIMP: Record<string, string> = {
+  '結': '结', '帶': '带', '髮': '发', '鈴': '铃',
+  '鏈': '链', '網': '网', '頭': '头', '飾': '饰',
+}
+
+function tradToSimp(s: string): string {
+  return s.replace(/[結帶髮鈴鏈網頭飾]/g, c => TRAD_TO_SIMP[c] ?? c)
+}
+
+function findManifestMaterial(
+  manifestMaterials: StarRailManifest["materials"] | undefined,
+  pmxMaterialName: string,
+): StarRailManifest["materials"][string] | undefined {
+  if (!manifestMaterials) return undefined
+  // 1. Exact match
+  if (manifestMaterials[pmxMaterialName]) return manifestMaterials[pmxMaterialName]
+  // 2. Strip "actual_" prefix and ".NNN" suffix (e.g. "actual_颜.001" -> "颜")
+  const stripped = pmxMaterialName.replace(/^actual_/, "").replace(/\.\d+$/, "")
+  if (stripped !== pmxMaterialName && manifestMaterials[stripped]) return manifestMaterials[stripped]
+  // 3. Traditional→Simplified Chinese fallback
+  const simp = tradToSimp(pmxMaterialName)
+  if (simp !== pmxMaterialName && manifestMaterials[simp]) return manifestMaterials[simp]
+  const simpStripped = tradToSimp(stripped)
+  if (simpStripped !== stripped && manifestMaterials[simpStripped]) return manifestMaterials[simpStripped]
+  return undefined
+}
+
+/** Infer a MaterialPreset from a manifest entry's preset field. */
+function presetFromManifest(entry: StarRailManifest["materials"][string] | undefined): MaterialPreset | undefined {
+  if (!entry) return undefined
+  const p = entry.preset
+  if (p === "sr_face" || p === "sr_hair" || p === "sr_body" || p === "sr_clothes" || p === "sr_eye" || p === "sr_mmd" || p === "sr_edge" || p === "sr_stocking" || p === "sr_special") return p
+  return undefined
 }
 
 export type RaycastCallback = (
@@ -114,11 +173,11 @@ export type BloomOptions = {
 }
 
 export const DEFAULT_BLOOM_OPTIONS: BloomOptions = {
-  enabled: true,
-  threshold: 0.5,
+  enabled: false,
+  threshold: 0.8,
   knee: 0.5,
-  radius: 4.0,
-  color: new Vec3(1.0, 0.7247558832168579, 0.6487361788749695),
+  radius: 6.5,
+  color: new Vec3(1.0, 1.0, 1.0),
   intensity: 0.05,
   clamp: 0.0,
 }
@@ -132,10 +191,9 @@ export type ViewTransformOptions = {
   look: "default" | "medium_high_contrast"
 }
 
-// Matches the reference Blender project: Filmic view, Medium High Contrast look,
-// exposure 0.3, gamma 1.0, sRGB display, no curves.
+// Matches Blender: Filmic view, High Contrast look, exposure 0.0, gamma 1.0.
 export const DEFAULT_VIEW_TRANSFORM: ViewTransformOptions = {
-  exposure: 0.6,
+  exposure: 0.0,
   gamma: 1.0,
   look: "medium_high_contrast",
 }
@@ -209,6 +267,38 @@ interface PickDrawCall {
   bindGroup: GPUBindGroup
 }
 
+interface StarRailManifestTextureEntry {
+  color?: string
+  ilm?: string
+  warm_ramp?: string
+  cool_ramp?: string
+  ramp?: string
+  sdf?: string
+  matcap?: string
+}
+
+interface StarRailManifestMaterial {
+  preset: string
+  textures: StarRailManifestTextureEntry
+  uniforms?: {
+    rampStrength?: number
+    coolStrength?: number
+    specularPower?: number
+    specularStrength?: number
+    rimStrength?: number
+    emissionStrength?: number
+    useSDF?: number
+    useMatcap?: number
+    useRamp?: number
+    useCoolRamp?: number
+  }
+}
+
+interface StarRailManifest {
+  version: number
+  materials: Record<string, StarRailManifestMaterial>
+}
+
 interface ModelInstance {
   name: string
   model: Model
@@ -229,6 +319,7 @@ interface ModelInstance {
   pickDrawCalls: PickDrawCall[]
   hiddenMaterials: Set<string>
   materialPresets: MaterialPresetMap | undefined
+  manifest: StarRailManifest | null
   physics: RezePhysics | null
   vertexBufferNeedsUpdate: boolean
 }
@@ -269,6 +360,18 @@ export class Engine {
   private eyePipeline!: GPURenderPipeline
   private hairOverEyesPipeline!: GPURenderPipeline
   private stockingsPipeline!: GPURenderPipeline
+  private srFacePipeline!: GPURenderPipeline
+  private srHairPipeline!: GPURenderPipeline
+  private srHairOverEyesPipeline!: GPURenderPipeline
+  private srBodyPipeline!: GPURenderPipeline
+  private srClothesPipeline!: GPURenderPipeline
+  private srClothesInnerPipeline!: GPURenderPipeline
+  private srEyePipeline!: GPURenderPipeline
+  private srEdgePipeline!: GPURenderPipeline
+  private srStockingPipeline!: GPURenderPipeline
+  private srSpecialPipeline!: GPURenderPipeline
+  private srPerMaterialBindGroupLayout!: GPUBindGroupLayout
+  private srSampler!: GPUSampler
   private groundShadowPipeline!: GPURenderPipeline
   private groundShadowBindGroupLayout!: GPUBindGroupLayout
   private outlinePipeline!: GPURenderPipeline
@@ -445,7 +548,7 @@ export class Engine {
   private materialSampler!: GPUSampler
   private fallbackMaterialTexture!: GPUTexture
   private textureCache = new Map<string, GPUTexture>()
-  private mipBlitPipeline: GPURenderPipeline | null = null
+  private mipBlitPipelines: Record<string, GPURenderPipeline> = {}
   private mipBlitSampler: GPUSampler | null = null
   private _nextDefaultModelId = 0
 
@@ -629,6 +732,11 @@ export class Engine {
       throw new Error("Failed to get WebGPU context.")
     }
     this.context = context
+
+    // DEBUG: Capture WebGPU validation errors
+    this.device.addEventListener('uncapturederror', (event) => {
+      console.error('[WebGPU ERROR]', event.error.message, event.error)
+    })
 
     this.presentationFormat = navigator.gpu.getPreferredCanvasFormat()
 
@@ -936,6 +1044,43 @@ export class Engine {
       ],
     })
 
+    // StarRail 专用 per-material bind group layout（group 2）：
+    //   binding(0) colorTexture（语义同 diffuseTexture）
+    //   binding(1) StarRailMaterialUniforms（160 字节，见 starrail/bindings.ts）
+    //   binding(2-5) ilm/ramp/sdf/matcap 贴图
+    //   binding(6) 共用 srSampler
+    //   binding(7) coolRampTexture（可选冷暖双 ramp）
+    // group(0)/group(1) 与现有 9 个材质共享（COMMON_BINDINGS_GROUP01_WGSL）。
+    this.srPerMaterialBindGroupLayout = this.device.createBindGroupLayout({
+      label: "starrail per-material bind group layout",
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+        { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+        { binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+        { binding: 6, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+        { binding: 7, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+      ],
+    })
+
+    const srPipelineLayout = this.device.createPipelineLayout({
+      label: "starrail pipeline layout",
+      bindGroupLayouts: [
+        this.mainPerFrameBindGroupLayout,
+        this.mainPerInstanceBindGroupLayout,
+        this.srPerMaterialBindGroupLayout,
+      ],
+    })
+
+    // StarRail 材质共用一个 linear sampler（不按材质重复创建）。
+    this.srSampler = this.device.createSampler({
+      magFilter: "linear",
+      minFilter: "linear",
+      mipmapFilter: "linear",
+    })
+
     // perFrameBindGroup is created after shadow resources below
 
     this.modelPipeline = this.createRenderPipeline({
@@ -944,7 +1089,7 @@ export class Engine {
       shaderModule,
       vertexBuffers: fullVertexBuffers,
       fragmentTargets: sceneTargets,
-      cullMode: "none",
+      cullMode: "front",
       depthStencil: {
         format: "depth24plus-stencil8",
         depthWriteEnabled: true,
@@ -1100,6 +1245,212 @@ export class Engine {
       label: "stockings NPR pipeline",
       layout: mainPipelineLayout,
       shaderModule: stockingsShaderModule,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTargets: sceneTargets,
+      cullMode: "none",
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        depthWriteEnabled: true,
+        depthCompare: "less-equal",
+      },
+    })
+
+    // ─── StarRail NPR pipelines ────────────────────────────────────────
+    // group(0)/group(1) 与现有材质共享，group(2) 用 srPerMaterialBindGroupLayout
+    //（6 张贴图 + StarRailMaterialUniforms + 共用 sampler）。
+    const srFaceShaderModule = this.device.createShaderModule({ label: "sr_face WGSL", code: SR_FACE_SHADER_WGSL })
+    const srHairShaderModule = this.device.createShaderModule({ label: "sr_hair WGSL", code: SR_HAIR_SHADER_WGSL })
+    const srBodyShaderModule = this.device.createShaderModule({ label: "sr_body WGSL", code: SR_BODY_SHADER_WGSL })
+    const srClothesShaderModule = this.device.createShaderModule({ label: "sr_clothes WGSL", code: SR_CLOTHES_SHADER_WGSL })
+    const srEyeShaderModule = this.device.createShaderModule({ label: "sr_eye WGSL", code: SR_EYE_SHADER_WGSL })
+
+    this.srFacePipeline = this.createRenderPipeline({
+      label: "sr_face NPR pipeline",
+      layout: srPipelineLayout,
+      shaderModule: srFaceShaderModule,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTargets: sceneTargets,
+      cullMode: "none",
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        depthWriteEnabled: true,
+        depthCompare: "less-equal",
+      },
+    })
+
+    // sr_hair opaque: stencil != EYE_VALUE so fragments on top of eyes are skipped entirely —
+    // depth and color stay as the eye wrote them; the follow-up srHairOverEyesPipeline then
+    // draws those skipped fragments alpha-blended so the eye reads through the hair.
+    // [DEBUG-hair-pale-color] region debug-point sr-hair-debug-mode begin
+    // DEBUG_MODE pipeline-override: 0u=default (NPR 链输出), 4u=sunVal 灰阶.
+    // 旧版本未传 constants, pipeline 编译时使用了 shader 内默认的 4u, 头发永远显示 sunVal 灰阶
+    // → 颜色非常淡. 这里通过 constants 显式注入 0u, 让 shader 走 default 分支输出真实颜色.
+    this.srHairPipeline = this.device.createRenderPipeline({
+      label: "sr_hair NPR pipeline",
+      layout: srPipelineLayout,
+      vertex: { module: srHairShaderModule, buffers: fullVertexBuffers },
+      fragment: {
+        module: srHairShaderModule,
+        constants: { DEBUG_MODE: 0 },
+        targets: sceneTargets,
+      },
+      primitive: { cullMode: "none" },
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        depthWriteEnabled: true,
+        depthCompare: "less-equal",
+        stencilFront: { compare: "not-equal", failOp: "keep", depthFailOp: "keep", passOp: "keep" },
+        stencilBack: { compare: "not-equal", failOp: "keep", depthFailOp: "keep", passOp: "keep" },
+        stencilReadMask: 0xff,
+        stencilWriteMask: 0,
+      },
+      multisample: { count: Engine.MULTISAMPLE_COUNT },
+    })
+    // [DEBUG-hair-pale-color] region debug-point sr-hair-debug-mode end
+
+    // sr_hair over eyes: same shader with IS_OVER_EYES=true so alpha is scaled to 25%.
+    // Only fragments where eye stencil == EYE_VALUE pass; depth test still culls fragments
+    // that are further from camera than the eye. depthWriteEnabled=false keeps the eye's
+    // depth authoritative.
+    // [DEBUG-hair-pale-color] region debug-point sr-hair-eyes-debug-mode begin
+    this.srHairOverEyesPipeline = this.device.createRenderPipeline({
+      label: "sr_hair over eyes pipeline",
+      layout: srPipelineLayout,
+      vertex: { module: srHairShaderModule, buffers: fullVertexBuffers },
+      fragment: {
+        module: srHairShaderModule,
+        constants: { IS_OVER_EYES: 1, DEBUG_MODE: 0 },
+        targets: sceneTargets,
+      },
+      primitive: { cullMode: "none" },
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        depthWriteEnabled: false,
+        depthCompare: "less-equal",
+        stencilFront: { compare: "equal", failOp: "keep", depthFailOp: "keep", passOp: "keep" },
+        stencilBack: { compare: "equal", failOp: "keep", depthFailOp: "keep", passOp: "keep" },
+        stencilReadMask: 0xff,
+        stencilWriteMask: 0,
+      },
+      multisample: { count: Engine.MULTISAMPLE_COUNT },
+    })
+    // [DEBUG-hair-pale-color] region debug-point sr-hair-eyes-debug-mode end
+
+    this.srBodyPipeline = this.createRenderPipeline({
+      label: "sr_body NPR pipeline",
+      layout: srPipelineLayout,
+      shaderModule: srBodyShaderModule,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTargets: sceneTargets,
+      cullMode: "none",
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        depthWriteEnabled: true,
+        depthCompare: "less-equal",
+      },
+    })
+
+    // sr_clothes：单面渲染，正常写深度。
+    this.srClothesPipeline = this.createRenderPipeline({
+      label: "sr_clothes NPR pipeline",
+      layout: srPipelineLayout,
+      shaderModule: srClothesShaderModule,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTargets: sceneTargets,
+      cullMode: "front",
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        depthWriteEnabled: true,
+        depthCompare: "less-equal",
+      },
+    })
+
+    // sr_clothes_inner：披風+/披肩+法线指向体内，cullMode="front" 渲染 CW 面 + shader 翻转法线。
+    // 排序在 sr_clothes 之后。因三角顶点不同导致插值深度不同引起 z-fighting，
+    // 用 depthBias + clamp 确保深度始终通过。
+    const srClothesInnerShaderModule = this.device.createShaderModule({
+      label: "sr_clothes_inner WGSL",
+      code: SR_CLOTHES_INNER_SHADER_WGSL,
+    })
+    this.srClothesInnerPipeline = this.createRenderPipeline({
+      label: "sr_clothes_inner NPR pipeline",
+      layout: srPipelineLayout,
+      shaderModule: srClothesInnerShaderModule,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTargets: sceneTargets,
+      cullMode: "front",
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        depthWriteEnabled: true,
+        depthCompare: "less-equal",
+        depthBias: -10,
+         depthBiasSlopeScale: -1.0,
+         depthBiasClamp: -0.0001,
+      },
+    })
+
+    // sr_eye：与 eyePipeline 一致的 stencil write 设置——每个 fragment 写入
+    // stencil=EYE_VALUE，让后续 sr_hair/hair pass 能按 stencil 拆分透视效果。
+    // cullMode="front" + 负 depthBias 同 eyePipeline（MMD 后半眼球技巧）。
+    this.srEyePipeline = this.createRenderPipeline({
+      label: "sr_eye NPR pipeline",
+      layout: srPipelineLayout,
+      shaderModule: srEyeShaderModule,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTargets: sceneTargets,
+      cullMode: "front",
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        depthWriteEnabled: true,
+        depthCompare: "less-equal",
+        depthBias: -0.00005,
+        depthBiasSlopeScale: 0.0,
+        depthBiasClamp: 0.0,
+        stencilFront: { compare: "always", failOp: "keep", depthFailOp: "keep", passOp: "replace" },
+        stencilBack: { compare: "always", failOp: "keep", depthFailOp: "keep", passOp: "replace" },
+        stencilReadMask: 0xff,
+        stencilWriteMask: 0xff,
+      },
+    })
+
+    // sr_edge
+    const srEdgeShaderModule = this.device.createShaderModule({ label: "sr_edge WGSL", code: SR_EDGE_SHADER_WGSL })
+    this.srEdgePipeline = this.createRenderPipeline({
+      label: "sr_edge NPR pipeline",
+      layout: srPipelineLayout,
+      shaderModule: srEdgeShaderModule,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTargets: sceneTargets,
+      cullMode: "none",
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        depthWriteEnabled: true,
+        depthCompare: "less-equal",
+      },
+    })
+
+    // sr_stocking
+    const srStockingShaderModule = this.device.createShaderModule({ label: "sr_stocking WGSL", code: SR_STOCKING_SHADER_WGSL })
+    this.srStockingPipeline = this.createRenderPipeline({
+      label: "sr_stocking NPR pipeline",
+      layout: srPipelineLayout,
+      shaderModule: srStockingShaderModule,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTargets: sceneTargets,
+      cullMode: "none",
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        depthWriteEnabled: true,
+        depthCompare: "less-equal",
+      },
+    })
+
+    // sr_special
+    const srSpecialShaderModule = this.device.createShaderModule({ label: "sr_special WGSL", code: SR_SPECIAL_SHADER_WGSL })
+    this.srSpecialPipeline = this.createRenderPipeline({
+      label: "sr_special NPR pipeline",
+      layout: srPipelineLayout,
+      shaderModule: srSpecialShaderModule,
       vertexBuffers: fullVertexBuffers,
       fragmentTargets: sceneTargets,
       cullMode: "none",
@@ -1444,22 +1795,38 @@ export class Engine {
       code: COMPOSITE_SHADER_WGSL,
     })
 
+    // DEBUG: Check composite shader compilation (fire-and-forget)
+    compositeShader.getCompilationInfo().then(compInfo => {
+      for (const msg of compInfo.messages) {
+        console.log(`[SHADER] composite: ${msg.type} line ${msg.lineNum}: ${msg.message}`)
+      }
+    })
+
     const compositePipelineLayout = this.device.createPipelineLayout({
       bindGroupLayouts: [this.compositeBindGroupLayout],
     })
-    const makeCompositePipeline = (applyGamma: boolean, label: string): GPURenderPipeline =>
-      this.device.createRenderPipeline({
+    const makeCompositePipeline = (applyGamma: boolean, label: string): GPURenderPipeline => {
+      // Engine.viewTransform.look drives FILMIC_MODE at pipeline compile time:
+      //   "default"              → Filmic (medium contrast)  → FILMIC_MODE=0
+      //   "medium_high_contrast" → Filmic + High Contrast    → FILMIC_MODE=1
+      // 默认是 "medium_high_contrast" (与 StarRail 美术在 Blender 中使用的 View Transform
+      // 保持一致). 修改 look 不会即时生效: 需要重新创建 pipeline. 当前实现下,
+      // setViewTransformOptions() 仅切换 MHC/HC 着色参数, 不重建 composite pipeline —
+      // 这是与 web 站点的设计权衡 (避免运行时 pipeline churn).
+      const filmicMode = this.viewTransform.look === "medium_high_contrast" ? 1 : 0
+      return this.device.createRenderPipeline({
         label,
         layout: compositePipelineLayout,
         vertex: { module: compositeShader, entryPoint: "vs" },
         fragment: {
           module: compositeShader,
           entryPoint: "fs",
-          constants: { APPLY_GAMMA: applyGamma ? 1 : 0 },
+          constants: { APPLY_GAMMA: applyGamma ? 1 : 0, FILMIC_MODE: filmicMode },
           targets: [{ format: this.presentationFormat }],
         },
         primitive: { topology: "triangle-list" },
       })
+    }
     this.compositePipelineIdentity = makeCompositePipeline(false, "composite pipeline (gamma=1)")
     this.compositePipelineGamma = makeCompositePipeline(true, "composite pipeline (gamma!=1)")
 
@@ -2071,6 +2438,7 @@ export class Engine {
     this.lightData[1] = this.world.color.y * s
     this.lightData[2] = this.world.color.z * s
     this.lightData[3] = 0
+    console.log(`[ENGINE] World: color=(${this.world.color.x.toFixed(4)}, ${this.world.color.y.toFixed(4)}, ${this.world.color.z.toFixed(4)}), strength=${s}, ambient=(${this.lightData[0].toFixed(4)}, ${this.lightData[1].toFixed(4)}, ${this.lightData[2].toFixed(4)})`);
     this.updateLightBuffer()
   }
 
@@ -2087,6 +2455,7 @@ export class Engine {
     this.lightData[base + 5] = this.sun.color.y
     this.lightData[base + 6] = this.sun.color.z
     this.lightData[base + 7] = this.sun.strength
+    console.log(`[ENGINE] Sun[${index}]: dir=(${normalized.x.toFixed(4)}, ${normalized.y.toFixed(4)}, ${normalized.z.toFixed(4)}), color=(${this.sun.color.x.toFixed(4)}, ${this.sun.color.y.toFixed(4)}, ${this.sun.color.z.toFixed(4)}), strength=${this.sun.strength}`);
     if (index >= this.lightCount) this.lightCount = index + 1
     this.updateLightBuffer()
   }
@@ -2314,8 +2683,32 @@ export class Engine {
     const inst = this.modelInstances.get(modelName)
     if (!inst) return
     inst.materialPresets = presets
+    let needsRebuild = false
     for (const dc of inst.drawCalls) {
-      dc.preset = resolvePreset(dc.materialName, presets)
+      const newPreset = resolvePreset(dc.materialName, presets)
+      // Only override if the explicit map has a match; otherwise preserve
+      // any preset already inferred from manifest.json during setup.
+      if (newPreset !== "default") {
+        const wasStarRail = dc.preset.startsWith("sr_")
+        dc.preset = newPreset
+        const isStarRail = newPreset.startsWith("sr_")
+        // If the preset type changed (non-SR ↔ SR), the bind group layout
+        // won't match the new pipeline — we must rebuild bind groups.
+        if (wasStarRail !== isStarRail) needsRebuild = true
+      }
+    }
+    if (needsRebuild) {
+      // Rebuild all bind groups with the correct preset resolution.
+      // This is async but fire-and-forget; the next render frame will
+      // pick up the new bind groups once ready.
+      inst.drawCalls = [] // Clear existing draw calls before rebuild
+      this.setupMaterialsForInstance(inst).then(() => {
+        // Re-apply presets after rebuild (setupMaterials may reset to manifest-only presets)
+        for (const dc of inst.drawCalls) {
+          const p = resolvePreset(dc.materialName, presets)
+          if (p !== "default") dc.preset = p
+        }
+      })
     }
   }
 
@@ -2493,9 +2886,21 @@ export class Engine {
       pickDrawCalls: [],
       hiddenMaterials: new Set(),
       materialPresets: undefined,
+      manifest: null,
       physics,
       vertexBufferNeedsUpdate: false,
     }
+
+    // Try to load StarRail manifest.json from the model directory
+    try {
+      const manifestPath = joinAssetPath(basePath, "manifest.json")
+      const manifestBuffer = await assetReader.readBinary(manifestPath)
+      const manifestText = new TextDecoder().decode(manifestBuffer)
+      inst.manifest = JSON.parse(manifestText) as StarRailManifest
+    } catch {
+      // No manifest or invalid — keep null
+    }
+
     await this.setupMaterialsForInstance(inst)
     this.modelInstances.set(name, inst)
   }
@@ -2672,32 +3077,175 @@ export class Engine {
 
       let diffuseTexture = await loadTextureByIndex(mat.diffuseTextureIndex)
       if (!diffuseTexture) {
+        // Try manifest.json textures.color as fallback — PMX embedded texture
+        // paths often don't match the deployed directory structure, or the
+        // material may have no texture index at all (diffuseTextureIndex = -1).
+        const manifestEntry = findManifestMaterial(inst.manifest?.materials, mat.name)
+        const manifestColorPath = manifestEntry?.textures?.color
+        if (manifestColorPath) {
+          const logicalPath = joinAssetPath(inst.basePath, normalizeAssetPath(manifestColorPath))
+          diffuseTexture = await this.createTextureFromLogicalPath(inst, logicalPath)
+        }
+      }
+      if (!diffuseTexture) {
         console.warn(`${prefix}material "${mat.name}" has no loadable diffuse texture — using fallback`)
         diffuseTexture = this.fallbackMaterialTexture
       }
 
       const materialAlpha = mat.diffuse[3]
       const isTransparent = materialAlpha < 1.0 - 0.001
+      if (mat === materials[0]) console.log(`[ENGINE-DEBUG] First material "${mat.name}" diffuse=${mat.diffuse} alpha=${materialAlpha} transparent=${isTransparent}`)
+      // Resolve preset: explicit materialPresets map takes priority,
+      // then fall back to manifest.json preset field.
+      const manifestEntry = findManifestMaterial(inst.manifest?.materials, mat.name)
+      let preset = resolvePreset(mat.name, inst.materialPresets)
+      let presetSource = "default"
+      if (preset !== "default") {
+        presetSource = "page.tsx map"
+      } else {
+        const manifestPreset = presetFromManifest(manifestEntry)
+        if (manifestPreset) { preset = manifestPreset; presetSource = "manifest.json" }
+      }
+      console.log(`[ENGINE] Material "${mat.name}" → preset="${preset}" (via ${presetSource})`)
+      const isStarRail = preset.startsWith("sr_")
 
-      const materialUniformBuffer = this.createMaterialUniformBuffer(prefix + mat.name, materialAlpha, [
-        mat.diffuse[0],
-        mat.diffuse[1],
-        mat.diffuse[2],
-      ])
-      inst.gpuBuffers.push(materialUniformBuffer)
+      let bindGroup: GPUBindGroup
+      if (isStarRail) {
+        // StarRail 材质：160 字节 StarRailMaterialUniforms + 7 张贴图 + 共用 sampler。
+        // 字段偏移见 starrail/bindings.ts（vec3f+f32 配对，8 组 × 16 = 128，加 8 个尾随 f32 = 160）。
+        const srUniformData = new Float32Array(STARRAIL_MATERIAL_UNIFORM_SIZE / 4)
+        // [0-3]   faceFront(0,0,-1) + _pad0  (Blender 面部定位.001 旋转 -90° → FRONT=(0,0,-1))
+        srUniformData[0] = 0; srUniformData[1] = 0; srUniformData[2] = -1
+        // [4-7]   faceRight(1,0,0) + _pad1
+        srUniformData[4] = 1; srUniformData[5] = 0; srUniformData[6] = 0
+        // [8-11]  faceUp(0,1,0) + rampStrength
+        srUniformData[8] = 0; srUniformData[9] = 1; srUniformData[10] = 0
+        srUniformData[11] = 1.0 // rampStrength
+        // [12-15] warmColor(1,1,1) + coolStrength
+        srUniformData[12] = 1; srUniformData[13] = 1; srUniformData[14] = 1
+        srUniformData[15] = 1.0 // coolStrength
+        // [16-19] coolColor(0.8,0.8,0.9) + specularPower
+        srUniformData[16] = 0.8; srUniformData[17] = 0.8; srUniformData[18] = 0.9
+        srUniformData[19] = 20.0 // specularPower
+        // [20-23] specularColor(1,1,1) + specularStrength
+        srUniformData[20] = 1; srUniformData[21] = 1; srUniformData[22] = 1
+        srUniformData[23] = 1.0 // specularStrength
+        // [24-27] rimColor(1,1,1) + rimStrength
+        srUniformData[24] = 1; srUniformData[25] = 1; srUniformData[26] = 1
+        srUniformData[27] = 0.5 // rimStrength
+        // [28-31] emissionColor(0,0,0) + emissionStrength
+        srUniformData[28] = 0; srUniformData[29] = 0; srUniformData[30] = 0
+        srUniformData[31] = 0.0 // emissionStrength
+        // [32] alpha
+        srUniformData[32] = materialAlpha
+        // [33-35] useSDF / useMatcap / useRamp —— 按 preset 门控（与各 shader 实际使用对齐）
+        srUniformData[33] = preset === "sr_face" ? 1.0 : 0.0 // useSDF（仅 sr_face 用 SDF 脸部阴影）
+        srUniformData[34] = preset === "sr_eye" ? 0.0 : 1.0  // useMatcap（sr_eye 不用 matcap）
+        srUniformData[35] = preset === "sr_eye" ? 0.0 : 1.0  // useRamp（sr_eye 不用 ramp）
+        // [36-39] useCoolRamp + padding（填充保持 16 字节对齐）
+        srUniformData[36] = 0.0 // useCoolRamp — 下方加载 cool_ramp 后设置
+        srUniformData[37] = 0.0 // _pad2
+        srUniformData[38] = 0.0 // _pad3
+        srUniformData[39] = 0.0 // _pad4
 
-      const textureView = diffuseTexture.createView()
-      const bindGroup = this.device.createBindGroup({
-        label: `${prefix}material: ${mat.name}`,
-        layout: this.mainPerMaterialBindGroupLayout,
-        entries: [
-          { binding: 0, resource: textureView },
-          { binding: 1, resource: { buffer: materialUniformBuffer } },
-        ],
-      })
+        const srUniformBuffer = this.createUniformBuffer(`sr material: ${prefix}${mat.name}`, srUniformData)
+        inst.gpuBuffers.push(srUniformBuffer)
+
+        // Helper to load a StarRail texture from manifest entry or fallback
+        // Set linear=true for data textures (ILM, MetalMap) that Blender marks as Non-Color.
+        const loadSrTexture = async (path: string | undefined, linear = false): Promise<GPUTexture> => {
+          if (!path) return this.fallbackMaterialTexture
+          const logicalPath = joinAssetPath(inst.basePath, normalizeAssetPath(path))
+          const tex = await this.createTextureFromLogicalPath(inst, logicalPath, linear)
+          if (!tex) {
+            console.warn(`${prefix}material "${mat.name}": failed to load texture "${path}" — using fallback`)
+            return this.fallbackMaterialTexture
+          }
+          return tex
+        }
+
+        // Get manifest entry for this material (already resolved above via findManifestMaterial)
+        const manifestTextures = manifestEntry?.textures ?? {}
+
+        const ilmTexture = await loadSrTexture(manifestTextures.ilm, true)  // ILM is Non-Color data in Blender
+        // Ramp 贴图在 Blender 中是 sRGB colorspace, 需要硬件 sRGB→linear 解码.
+        // MCP 验证: Avatar_Hyacine_00_Hair_Warm_Ramp.png colorspace=sRGB
+        const rampTexture = await loadSrTexture(manifestTextures.warm_ramp ?? manifestTextures.ramp)
+        const coolRampTexture = await loadSrTexture(manifestTextures.cool_ramp)
+        const sdfTexture = await loadSrTexture(manifestTextures.sdf)
+        const matcapTexture = await loadSrTexture(manifestTextures.matcap)
+
+        // Set useCoolRamp flag after loading
+        const useCoolRamp = coolRampTexture !== this.fallbackMaterialTexture ? 1.0 : 0.0
+        srUniformData[36] = useCoolRamp
+
+        // Override uniforms from manifest entry (if provided)
+        const manifestUniforms = manifestEntry?.uniforms
+        if (manifestUniforms) {
+          console.log(`[ENGINE-DEBUG] Applying manifest uniforms for "${mat.name}":`, JSON.stringify(manifestUniforms))
+          // [11] rampStrength
+          if (manifestUniforms.rampStrength !== undefined) srUniformData[11] = manifestUniforms.rampStrength
+          // [15] coolStrength
+          if (manifestUniforms.coolStrength !== undefined) srUniformData[15] = manifestUniforms.coolStrength
+          // [19] specularPower
+          if (manifestUniforms.specularPower !== undefined) srUniformData[19] = manifestUniforms.specularPower
+          // [23] specularStrength
+          if (manifestUniforms.specularStrength !== undefined) srUniformData[23] = manifestUniforms.specularStrength
+          // [27] rimStrength
+          if (manifestUniforms.rimStrength !== undefined) srUniformData[27] = manifestUniforms.rimStrength
+          // [31] emissionStrength
+          if (manifestUniforms.emissionStrength !== undefined) srUniformData[31] = manifestUniforms.emissionStrength
+          // [33] useSDF
+          if (manifestUniforms.useSDF !== undefined) srUniformData[33] = manifestUniforms.useSDF
+          // [34] useMatcap
+          if (manifestUniforms.useMatcap !== undefined) srUniformData[34] = manifestUniforms.useMatcap
+          // [35] useRamp
+          if (manifestUniforms.useRamp !== undefined) srUniformData[35] = manifestUniforms.useRamp
+          // [36] useCoolRamp (already set above from texture, but allow manifest override)
+          if (manifestUniforms.useCoolRamp !== undefined) srUniformData[36] = manifestUniforms.useCoolRamp
+        }
+
+        // Debug: log key uniforms for hair materials
+        if (preset === "sr_hair") {
+          console.log(`[ENGINE] Hair "${mat.name}": useMatcap=${srUniformData[34]}, useCoolRamp=${srUniformData[36]}, alpha=${srUniformData[32]}, emissionStrength=${srUniformData[31]}`);
+        }
+
+        this.device.queue.writeBuffer(srUniformBuffer, 0, srUniformData)
+
+        bindGroup = this.device.createBindGroup({
+          label: `${prefix}sr material: ${mat.name}`,
+          layout: this.srPerMaterialBindGroupLayout,
+          entries: [
+            { binding: 0, resource: diffuseTexture.createView() }, // colorTexture
+            { binding: 1, resource: { buffer: srUniformBuffer } },  // srMaterial
+            { binding: 2, resource: ilmTexture.createView() },      // ilmTexture
+            { binding: 3, resource: rampTexture.createView() },     // rampTexture
+            { binding: 4, resource: sdfTexture.createView() },      // sdfTexture
+            { binding: 5, resource: matcapTexture.createView() },   // matcapTexture
+            { binding: 6, resource: this.srSampler },               // srSampler
+            { binding: 7, resource: coolRampTexture.createView() }, // coolRampTexture
+          ],
+        })
+      } else {
+        const materialUniformBuffer = this.createMaterialUniformBuffer(prefix + mat.name, materialAlpha, [
+          mat.diffuse[0],
+          mat.diffuse[1],
+          mat.diffuse[2],
+        ])
+        inst.gpuBuffers.push(materialUniformBuffer)
+
+        const textureView = diffuseTexture.createView()
+        bindGroup = this.device.createBindGroup({
+          label: `${prefix}material: ${mat.name}`,
+          layout: this.mainPerMaterialBindGroupLayout,
+          entries: [
+            { binding: 0, resource: textureView },
+            { binding: 1, resource: { buffer: materialUniformBuffer } },
+          ],
+        })
+      }
 
       const type: DrawCallType = isTransparent ? "transparent" : "opaque"
-      const preset = resolvePreset(mat.name, inst.materialPresets)
       inst.drawCalls.push({
         type,
         count: indexCount,
@@ -2764,7 +3312,13 @@ export class Engine {
       "transparent-outline": 3,
       ground: 4,
     }
-    const presetRank = (p: MaterialPreset): number => (p === "hair" ? 2 : p === "eye" ? 1 : 0)
+    const presetRank = (p: MaterialPreset): number => {
+      if (p === "hair" || p === "sr_hair") return 2
+      if (p === "eye" || p === "sr_eye") return 1
+      // sr_clothes_inner 在 clothes 之后绘制，防止被外层覆盖
+      if (p === "sr_clothes_inner") return 1
+      return 0
+    }
     inst.drawCalls.sort((a, b) => {
       const ta = typeOrder[a.type] - typeOrder[b.type]
       if (ta !== 0) return ta
@@ -2800,25 +3354,44 @@ export class Engine {
     return !inst.hiddenMaterials.has(drawCall.materialName)
   }
 
-  private async createTextureFromLogicalPath(inst: ModelInstance, logicalPath: string): Promise<GPUTexture | null> {
-    const cacheKey = logicalPath
+  private async createTextureFromLogicalPath(inst: ModelInstance, logicalPath: string, linear = false): Promise<GPUTexture | null> {
+    // Cache key includes format suffix to avoid returning wrong-format cached textures
+    const cacheKey = linear ? `${logicalPath}#linear` : logicalPath
     const cached = this.textureCache.get(cacheKey)
     if (cached) {
       return cached
     }
 
+    const tryPaths = [logicalPath]
+    // Fallback: try just the filename under a textures/ subdirectory
+    const baseName = logicalPath.split("/").pop()!
+    if (baseName !== logicalPath) {
+      tryPaths.push(inst.basePath + "textures/" + baseName)
+    }
+
+    let buffer: ArrayBuffer | null = null
+    for (const p of tryPaths) {
+      try {
+        buffer = await inst.assetReader.readBinary(p)
+        break
+      } catch { /* try next */ }
+    }
+    if (!buffer) return null
+
     try {
-      const buffer = await inst.assetReader.readBinary(logicalPath)
       const imageBitmap = await createImageBitmap(new Blob([buffer]), {
         premultiplyAlpha: "none",
         colorSpaceConversion: "none",
       })
 
       const mipLevelCount = Math.floor(Math.log2(Math.max(imageBitmap.width, imageBitmap.height))) + 1
+      // Data textures (ILM, MetalMap) use raw rgba8unorm — no sRGB decode.
+      // Color textures use rgba8unorm-srgb — hardware decodes sRGB→linear on sample.
+      const format: GPUTextureFormat = linear ? "rgba8unorm" : "rgba8unorm-srgb"
       const texture = this.device.createTexture({
         label: `texture: ${cacheKey}`,
         size: [imageBitmap.width, imageBitmap.height],
-        format: "rgba8unorm-srgb",
+        format,
         mipLevelCount,
         usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
       })
@@ -2840,35 +3413,41 @@ export class Engine {
   // Bilinear box-filter downsample per level. Reads srgb view (hardware linearizes on sample,
   // re-encodes on write), so intensities are filtered in linear space — matching EEVEE/Blender.
   private generateMipmaps(texture: GPUTexture, mipLevelCount: number) {
-    if (!this.mipBlitPipeline || !this.mipBlitSampler) {
-      this.mipBlitSampler = this.device.createSampler({
-        magFilter: "linear",
-        minFilter: "linear",
-        addressModeU: "clamp-to-edge",
-        addressModeV: "clamp-to-edge",
-      })
+    const fmt = texture.format as "rgba8unorm" | "rgba8unorm-srgb"
+    const isLinear = fmt === "rgba8unorm"
+    const cacheKey = isLinear ? "linear" : "srgb"
+    if (!this.mipBlitPipelines[cacheKey]) {
+      if (!this.mipBlitSampler) {
+        this.mipBlitSampler = this.device.createSampler({
+          magFilter: "linear",
+          minFilter: "linear",
+          addressModeU: "clamp-to-edge",
+          addressModeV: "clamp-to-edge",
+        })
+      }
       const module = this.device.createShaderModule({
         label: "mipmap blit",
         code: MIPMAP_BLIT_SHADER_WGSL,
       })
-      this.mipBlitPipeline = this.device.createRenderPipeline({
-        label: "mipmap blit pipeline",
+      this.mipBlitPipelines[cacheKey] = this.device.createRenderPipeline({
+        label: `mipmap blit pipeline (${cacheKey})`,
         layout: "auto",
         vertex: { module, entryPoint: "vs" },
-        fragment: { module, entryPoint: "fs", targets: [{ format: "rgba8unorm-srgb" }] },
+        fragment: { module, entryPoint: "fs", targets: [{ format: fmt }] },
         primitive: { topology: "triangle-list" },
       })
     }
+    const pipeline = this.mipBlitPipelines[cacheKey]
 
     const encoder = this.device.createCommandEncoder({ label: "mipgen" })
     for (let level = 1; level < mipLevelCount; level++) {
       const srcView = texture.createView({ baseMipLevel: level - 1, mipLevelCount: 1 })
       const dstView = texture.createView({ baseMipLevel: level, mipLevelCount: 1 })
       const bindGroup = this.device.createBindGroup({
-        layout: this.mipBlitPipeline.getBindGroupLayout(0),
+        layout: pipeline.getBindGroupLayout(0),
         entries: [
           { binding: 0, resource: srcView },
-          { binding: 1, resource: this.mipBlitSampler },
+          { binding: 1, resource: this.mipBlitSampler! },
         ],
       })
       const pass = encoder.beginRenderPass({
@@ -2876,7 +3455,7 @@ export class Engine {
           { view: dstView, clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: "clear", storeOp: "store" },
         ],
       })
-      pass.setPipeline(this.mipBlitPipeline)
+      pass.setPipeline(pipeline)
       pass.setBindGroup(0, bindGroup)
       pass.draw(3)
       pass.end()
@@ -3483,7 +4062,18 @@ export class Engine {
     }
 
     const pass = encoder.beginRenderPass(this.renderPassDescriptor)
-    if (hasModels) this.forEachInstance((inst) => this.renderOneModel(pass, inst))
+    if (hasModels) {
+      this.forEachInstance((inst) => {
+        if (inst.drawCalls.length === 0) {
+          console.warn(`[ENGINE] Model "${inst.name}" has 0 draw calls — nothing will render`)
+        } else {
+          const presets = inst.drawCalls.map(d => d.preset)
+          const uniquePresets = [...new Set(presets)]
+          console.log(`[ENGINE] Model "${inst.name}" rendering ${inst.drawCalls.length} draw calls (opaque: ${inst.drawCalls.filter(d => d.type === 'opaque').length}, transparent: ${inst.drawCalls.filter(d => d.type === 'transparent').length}) presets=${JSON.stringify(uniquePresets)}`)
+        }
+        this.renderOneModel(pass, inst)
+      })
+    }
     if (this.hasGround) this.renderGround(pass)
     pass.end()
 
@@ -3577,6 +4167,15 @@ export class Engine {
     if (preset === "body") return this.bodyPipeline
     if (preset === "eye") return this.eyePipeline
     if (preset === "stockings") return this.stockingsPipeline
+    if (preset === "sr_face") return this.srFacePipeline
+    if (preset === "sr_hair") return this.srHairPipeline
+    if (preset === "sr_body") return this.srBodyPipeline
+    if (preset === "sr_clothes") return this.srClothesPipeline
+    if (preset === "sr_clothes_inner") return this.srClothesInnerPipeline
+    if (preset === "sr_eye") return this.srEyePipeline
+    if (preset === "sr_edge") return this.srEdgePipeline
+    if (preset === "sr_stocking") return this.srStockingPipeline
+    if (preset === "sr_special") return this.srSpecialPipeline
     return this.modelPipeline
   }
 
@@ -3657,6 +4256,7 @@ export class Engine {
    * is off, so the eye's depth stays authoritative for anything drawn after.
    */
   private drawHairOverEyes(pass: GPURenderPassEncoder, inst: ModelInstance): void {
+    // Standard hair over eyes
     let bound = false
     for (const draw of inst.drawCalls) {
       if (draw.type !== "opaque" || draw.preset !== "hair" || !this.shouldRenderDrawCall(inst, draw)) continue
@@ -3665,6 +4265,19 @@ export class Engine {
         pass.setBindGroup(0, this.perFrameBindGroup)
         pass.setBindGroup(1, inst.mainPerInstanceBindGroup)
         bound = true
+      }
+      pass.setBindGroup(2, draw.bindGroup)
+      pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)
+    }
+    // StarRail hair over eyes — same stencil logic, separate pipeline layout
+    let srBound = false
+    for (const draw of inst.drawCalls) {
+      if (draw.type !== "opaque" || draw.preset !== "sr_hair" || !this.shouldRenderDrawCall(inst, draw)) continue
+      if (!srBound) {
+        pass.setPipeline(this.srHairOverEyesPipeline)
+        pass.setBindGroup(0, this.perFrameBindGroup)
+        pass.setBindGroup(1, inst.mainPerInstanceBindGroup)
+        srBound = true
       }
       pass.setBindGroup(2, draw.bindGroup)
       pass.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0)

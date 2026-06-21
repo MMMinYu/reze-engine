@@ -12,8 +12,11 @@
     "exports": {
         ".": {
             "types": "./dist/index.d.ts",
-            "import": "./dist/index.js"
-        }
+            "import": "./dist/index.js",
+            "require": "./dist/index.js",
+            "default": "./dist/index.js"
+        },
+        "./package.json": "./package.json"
     },
     "files": [
         "dist",
@@ -22,6 +25,7 @@
     "scripts": {
         "build": "tsc",
         "dev": "tsc --watch",
+        "clean": "npx rimraf dist",
         "prepublishOnly": "npm run build"
     },
     "keywords": [

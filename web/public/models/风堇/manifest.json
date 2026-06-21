@@ -1,0 +1,1498 @@
+{
+  "version": 1,
+  "model": "model.pmx",
+  "materials": {
+    "actual_口.001": {
+      "preset": "sr_eye",
+      "textures": {
+        "color": "textures/Avatar_Hyacine_00_Face_Color.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "actual_白目.001": {
+      "preset": "sr_eye",
+      "textures": {
+        "color": "textures/Avatar_Hyacine_00_Face_Color.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "actual_目.001": {
+      "preset": "sr_eye",
+      "textures": {
+        "color": "textures/Avatar_Hyacine_00_Face_Color.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "actual_目光.001": {
+      "preset": "sr_eye",
+      "textures": {
+        "color": "textures/Avatar_Hyacine_00_Face_Color.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "actual_眉睫.001": {
+      "preset": "sr_eye",
+      "textures": {
+        "color": "textures/Avatar_Hyacine_00_Face_Color.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "actual_舌.001": {
+      "preset": "sr_eye",
+      "textures": {
+        "color": "textures/Avatar_Hyacine_00_Face_Color.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "actual_颜.001": {
+      "preset": "sr_face",
+      "textures": {
+        "color": "textures/Avatar_Hyacine_00_Face_Color.png",
+        "ilm": "textures/Avatar_Hyacine_00_Body_LightMap_L.png",
+        "warm_ramp": "textures/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "sdf": "textures_blender/W_140_Girl_FaceMap_00.png",
+        "matcap": "textures/Avatar_Tex_MetalMap.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 1.0
+      },
+      "sdf_candidates": [
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png"
+      ]
+    },
+    "actual_髪.001": {
+      "preset": "sr_hair",
+      "textures": {
+        "color": "textures/Avatar_Hyacine_00_Hair_Color.png",
+        "ilm": "textures/Avatar_Hyacine_00_Hair_LightMap.png",
+        "warm_ramp": "textures/Avatar_Hyacine_00_Hair_Warm_Ramp.png",
+        "cool_ramp": "textures/Avatar_Hyacine_00_Hair_Cool_Ramp.png",
+        "matcap": "textures/hair_s.bmp.001.bmp"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "specularPower": 40.0,
+        "specularColor": [1.0, 0.95, 0.88],
+        "specularStrength": 0.3,
+        "rimColor": [0.8, 0.75, 0.7],
+        "rimStrength": 0.15,
+        "emissionColor": [1.0, 0.95, 0.9],
+        "emissionStrength": 0.05,
+        "useMatcap": 1.0,
+        "useSDF": 0.0,
+        "useCoolRamp": 1.0
+      }
+    },
+    "actual_齿.001": {
+      "preset": "sr_eye",
+      "textures": {
+        "color": "textures/Avatar_Hyacine_00_Face_Color.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "乳贴": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/乳贴.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "乳钉": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/配件.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "乳首结": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/Body3.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "内衣": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣2.png",
+        "ilm": "textures/neutral_lightmap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "发圈": {
+      "preset": "sr_hair",
+      "textures": {
+        "color": "textures/衣.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "specularPower": 40.0,
+        "specularColor": [1.0, 0.95, 0.88],
+        "specularStrength": 0.3,
+        "rimColor": [0.8, 0.75, 0.7],
+        "rimStrength": 0.15,
+        "emissionColor": [1.0, 0.95, 0.9],
+        "emissionStrength": 0.05,
+        "useMatcap": 1.0,
+        "useSDF": 0.0,
+        "useCoolRamp": 1.0
+      }
+    },
+    "口": {
+      "preset": "sr_eye",
+      "textures": {
+        "color": "textures_blender/Avatar_Hyacine_00_Face_Color.png_001"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "口枷金属1": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/配件.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "口枷金属2": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/配件.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "口球": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/配件.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "口球带1": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/配件.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "口球带2": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/配件.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "口球扣": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "吊带": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/吊带袜.png",
+        "ilm": "textures/neutral_lightmap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "头饰": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "头饰+": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "帽子": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "帽球": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "帽结": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/Avatar_Hyacine_00_Body_Color_A_L.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "帽结+": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/Avatar_Hyacine_00_Body_Color_A_L.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "帽金属": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/Avatar_Hyacine_00_Body_Color_A_L.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "手臂": {
+      "preset": "sr_body",
+      "textures": {
+        "color": "textures/Body3.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "sdf": "textures_blender/W_140_Girl_FaceMap_00.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_3.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      },
+      "sdf_candidates": [
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png"
+      ]
+    },
+    "披肩": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "披肩+": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "披风": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "披风+": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "披风金属": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/Avatar_Hyacine_00_Body_Color_A_L.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "挂金属": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/Avatar_Hyacine_00_Body_Color_A_L.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "指甲": {
+      "preset": "sr_body",
+      "textures": {
+        "color": "textures/Body3.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "sdf": "textures_blender/W_140_Girl_FaceMap_00.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_3.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      },
+      "sdf_candidates": [
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png"
+      ]
+    },
+    "白目": {
+      "preset": "sr_eye",
+      "textures": {
+        "color": "textures_blender/Avatar_Hyacine_00_Face_Color.png_001"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "目": {
+      "preset": "sr_eye",
+      "textures": {
+        "color": "textures_blender/Avatar_Hyacine_00_Face_Color.png_001"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "目光": {
+      "preset": "sr_eye",
+      "textures": {
+        "color": "textures_blender/Avatar_Hyacine_00_Face_Color.png_001"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "眉睫": {
+      "preset": "sr_eye",
+      "textures": {
+        "color": "textures_blender/Avatar_Hyacine_00_Face_Color.png_001"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "眼罩": {
+      "preset": "sr_eye",
+      "textures": {
+        "color": "textures/Blindfold Text.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "眼罩金属": {
+      "preset": "sr_eye",
+      "textures": {
+        "color": "textures/配件.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "结花边": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "结花边+": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "背金属": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/Avatar_Hyacine_00_Body_Color_A_L.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "脖子": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/Avatar_Hyacine_00_Body_Color_A_L.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_3.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "舌": {
+      "preset": "sr_eye",
+      "textures": {
+        "color": "textures_blender/Avatar_Hyacine_00_Face_Color.png_001"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "蝴蝶结": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "蝴蝶结+": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "衣1": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "衣1+": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "衣2": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣2.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "衣金屬": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/Avatar_Hyacine_00_Body_Color_A_L.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "衣金属": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/Avatar_Hyacine_00_Body_Color_A_L.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "衣饰": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣2.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "袖": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "袖+": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "袖口": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "袖金属": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/Avatar_Hyacine_00_Body_Color_A_L.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "袖饰": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "裙": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "裙+": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "裙1": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "裙1+": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "足金属": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/Avatar_Hyacine_00_Body_Color_A_L.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "Body": {
+      "preset": "sr_body",
+      "textures": {
+        "color": "textures/Body3.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "sdf": "textures_blender/W_140_Girl_FaceMap_00.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_3.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      },
+      "sdf_candidates": [
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png"
+      ]
+    },
+    "Arm": {
+      "preset": "sr_body",
+      "textures": {
+        "color": "textures/Body3.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "sdf": "textures_blender/W_140_Girl_FaceMap_00.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_3.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      },
+      "sdf_candidates": [
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png"
+      ]
+    },
+    "Neck": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/Avatar_Hyacine_00_Body_Color_A_L.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_3.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "身体": {
+      "preset": "sr_body",
+      "textures": {
+        "color": "textures/Body3.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "sdf": "textures_blender/W_140_Girl_FaceMap_00.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_3.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      },
+      "sdf_candidates": [
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png"
+      ]
+    },
+    "鞋": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "鞋饰": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "项圈": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/配件.png",
+        "ilm": "textures/neutral_lightmap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "项圈环": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/配件.png",
+        "ilm": "textures/neutral_lightmap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "领结": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/Avatar_Hyacine_00_Body_Color_A_L.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "领金属": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/Avatar_Hyacine_00_Body_Color_A_L.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "颜": {
+      "preset": "sr_face",
+      "textures": {
+        "color": "textures_blender/Avatar_Hyacine_00_Face_Color.png_001",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "sdf": "textures_blender/W_140_Girl_FaceMap_00.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 1.0
+      },
+      "sdf_candidates": [
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png"
+      ]
+    },
+    "颜+": {
+      "preset": "sr_face",
+      "textures": {
+        "color": "textures/颜赤.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "sdf": "textures_blender/W_140_Girl_FaceMap_00.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 1.0
+      },
+      "sdf_candidates": [
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png",
+        "textures_blender/W_140_Girl_FaceMap_00.png"
+      ]
+    },
+    "髪": {
+      "preset": "sr_hair",
+      "textures": {
+        "color": "textures/髪.png",
+        "ilm": "textures/Avatar_Hyacine_00_Hair_LightMap.png",
+        "warm_ramp": "textures/Avatar_Hyacine_00_Hair_Warm_Ramp.png",
+        "cool_ramp": "textures/Avatar_Hyacine_00_Hair_Cool_Ramp.png",
+        "matcap": "textures/hair_s.bmp.001_2.bmp"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "specularPower": 40.0,
+        "specularColor": [1.0, 0.95, 0.88],
+        "specularStrength": 0.3,
+        "rimColor": [0.8, 0.75, 0.7],
+        "rimStrength": 0.15,
+        "emissionColor": [1.0, 0.95, 0.9],
+        "emissionStrength": 0.05,
+        "useMatcap": 1.0,
+        "useSDF": 0.0,
+        "useCoolRamp": 1.0
+      }
+    },
+    "髪1": {
+      "preset": "sr_hair",
+      "textures": {
+        "color": "textures/髪.png",
+        "ilm": "textures/Avatar_Hyacine_00_Hair_LightMap.png",
+        "warm_ramp": "textures/Avatar_Hyacine_00_Hair_Warm_Ramp.png",
+        "cool_ramp": "textures/Avatar_Hyacine_00_Hair_Cool_Ramp.png",
+        "matcap": "textures/hair_s.bmp.001_2.bmp"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "specularPower": 40.0,
+        "specularColor": [1.0, 0.95, 0.88],
+        "specularStrength": 0.3,
+        "rimColor": [0.8, 0.75, 0.7],
+        "rimStrength": 0.15,
+        "emissionColor": [1.0, 0.95, 0.9],
+        "emissionStrength": 0.05,
+        "useMatcap": 1.0,
+        "useSDF": 0.0,
+        "useCoolRamp": 1.0
+      }
+    },
+    "齿": {
+      "preset": "sr_eye",
+      "textures": {
+        "color": "textures_blender/Avatar_Hyacine_00_Face_Color.png_001"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "淫纹1": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/bq.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "淫纹2": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/bq.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "表": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/bq.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "袖球": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/9.JPG"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "髪+": {
+      "preset": "sr_hair",
+      "textures": {
+        "color": "textures/髪_plus.png",
+        "ilm": "textures/Avatar_Hyacine_00_Hair_LightMap.png",
+        "warm_ramp": "textures/Avatar_Hyacine_00_Hair_Warm_Ramp.png",
+        "cool_ramp": "textures/Avatar_Hyacine_00_Hair_Cool_Ramp.png",
+        "matcap": "textures/1.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "specularPower": 40.0,
+        "specularColor": [1.0, 0.95, 0.88],
+        "specularStrength": 0.3,
+        "rimColor": [0.8, 0.75, 0.7],
+        "rimStrength": 0.15,
+        "emissionColor": [1.0, 0.95, 0.9],
+        "emissionStrength": 0.05,
+        "useMatcap": 1.0,
+        "useSDF": 0.0,
+        "useCoolRamp": 1.0,
+        "alpha": 1.0
+      }
+    },
+    "吊带袜_丝袜": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/Body3.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "白裤袜": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/Body3.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "胖次_丝袜": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/Body3.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "目影": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures_blender/Avatar_Hyacine_00_Face_Color.png_001",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "bell": {
+      "preset": "sr_eye",
+      "textures": {
+        "color": "textures/配件.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "inmon1": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/bq.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "inmon2": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/bq.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "铃铛": {
+      "preset": "sr_eye",
+      "textures": {
+        "color": "textures/配件.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "蝴蝶結": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "蝴蝶結+": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/衣.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "吊帶": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/吊带袜.png",
+        "ilm": "textures/neutral_lightmap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "吊帶襪": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/吊带袜.png",
+        "ilm": "textures/neutral_lightmap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "胖次": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/Body3.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "金属": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/Avatar_Hyacine_00_Body_Color_A_L.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    },
+    "biaoq": {
+      "preset": "sr_clothes",
+      "textures": {
+        "color": "textures/bq.png",
+        "ilm": "textures/LightMap.png",
+        "warm_ramp": "textures_blender/Avatar_Hyacine_00_Body_Warm_Ramp.png",
+        "cool_ramp": "textures_blender/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+      },
+      "uniforms": {
+        "rampStrength": 1.0,
+        "useSDF": 0.0
+      }
+    }
+  }
+}
