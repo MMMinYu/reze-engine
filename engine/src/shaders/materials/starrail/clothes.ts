@@ -33,7 +33,6 @@ ${STARRAIL_PRELUDE_WGSL}
   let corrected = color_correct(texColor.rgb);
 
   // ── 3. ILM 解码 ──
-  // Blender 衣服节点: ILM Red 未使用；Green/Blue 用于布林冯高光门控，Alpha 用于 ramp 行选择。
   let ilm = ilm_decode(ilmColor);
   let ilmGreen = ilm.y;
   let ilmBlue = ilm.z;
@@ -43,10 +42,9 @@ ${STARRAIL_PRELUDE_WGSL}
   let sunVal = virtual_sun(n, l, ilmGreen);
 
   // ── 5. Ramp 着色 ──
-  // Blender 虚拟日光 → ramp.Value 直连（无顶点 Map Range）
   let rampColor = ramp_lookup(sunVal, ilmAlpha, rampTexture, srSampler);
 
-  // ── 6. Matcap 高光（加法叠加）──
+  // ── 6. Matcap 高光 ──
   var matcapAdd = vec3f(0.0);
   if (srMaterial.useMatcap > 0.5) {
     let matcapColor = matcap_sample(n, camera.view, matcapTexture, srSampler);
@@ -55,17 +53,14 @@ ${STARRAIL_PRELUDE_WGSL}
     let matcapMulBlue = matcapDiv * ilmBlue;
     let specGate = select(0.0, 1.0, sunVal > 0.85);
     let specFinal = matcapMulBlue * specGate;
-    // Matcap highlight added on top of base color (not replacing it)
     matcapAdd = matcapColor * specFinal * 0.5;
   }
 
   // ── 7. 合成 ──
-  // Blender 衣服主合成: corrected × ramp；没有 AO 乘法（ILM Red 未使用）。
   let base = corrected * rampColor;
   let finalColor = base + matcapAdd;
 
   var out: FSOut;
-  // 响应 Engine 的 sun strength 设置（基准 5.0）
   let brightnessScale = light.lights[0].color.w / 5.0;
   out.color = vec4f(finalColor * brightnessScale, alpha);
   out.mask = vec4f(1.0, 1.0, 0.0, out.color.a);
@@ -107,7 +102,7 @@ ${STARRAIL_PRELUDE_WGSL}
   // ── 5. Ramp 着色 ──
   let rampColor = ramp_lookup(sunVal, ilmAlpha, rampTexture, srSampler);
 
-  // ── 6. Matcap 高光（加法叠加）──
+  // ── 6. Matcap 高光 ──
   var matcapAdd = vec3f(0.0);
   if (srMaterial.useMatcap > 0.5) {
     let matcapColor = matcap_sample(n, camera.view, matcapTexture, srSampler);
@@ -124,7 +119,6 @@ ${STARRAIL_PRELUDE_WGSL}
   let finalColor = base + matcapAdd;
 
   var out: FSOut;
-  // 响应 Engine 的 sun strength 设置（基准 5.0）
   let brightnessScale = light.lights[0].color.w / 5.0;
   out.color = vec4f(finalColor * brightnessScale, alpha);
   out.mask = vec4f(1.0, 1.0, 0.0, out.color.a);

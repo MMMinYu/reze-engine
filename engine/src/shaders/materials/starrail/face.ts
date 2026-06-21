@@ -45,7 +45,10 @@ ${STARRAIL_PRELUDE_WGSL}
   var out: FSOut;
   // 响应 Engine 的 sun strength 设置（基准 5.0）
   let brightnessScale = light.lights[0].color.w / 5.0;
-  out.color = vec4f(withShadow * brightnessScale, alpha);
+  // alpha: 取 material.alpha 与纹理 alpha 的较小值。
+  // 颜.png alpha=1.0 → 不透明；颜赤.png alpha=0.6-0.7 → 半透明叠加。
+  let effectiveAlpha = min(alpha, texColor.a);
+  out.color = vec4f(withShadow * brightnessScale, effectiveAlpha);
   out.mask = vec4f(1.0, 1.0, 0.0, out.color.a);
   return out;
 }

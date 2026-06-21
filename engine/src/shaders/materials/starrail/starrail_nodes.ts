@@ -104,7 +104,7 @@ fn virtual_sun(n: vec3f, l: vec3f, ilm_green: f32) -> f32 {
   let half_lambert = saturate(dot(n, l_scaled) * 0.5 + 0.5);
   let mixed = half_lambert * green_smooth;
   let step3 = mixed * 0.5 + 0.5;
-  return pow(step3, 2.0);  // 平方 — Blender: Math.001 POWER Value^2.0
+  return pow(step3, 2.0);
 }
 
 // ─── matcap / matcap.hair (子 Group: matcap, matcap.hair) ───────────

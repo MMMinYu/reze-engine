@@ -32,12 +32,15 @@ ${STARRAIL_PRELUDE_WGSL}
   let ilmColor = textureSample(ilmTexture, srSampler, input.uv);
 
   // ── 3. 虚拟日光 (半兰伯特 + 平方) ──
-  let sunVal = virtual_sun(n, l, ilmColor.g);
+  // MCP 核对: 身体变体_v17 里 ilm.clothes/ilm.hair 输出未连接。
+  // 虚拟日光的 Image 输入 = 固定灰色 (0.8,0.8,0.8)，不是 LightMap。
+  // Green=0.8 → smoothstep(0,0.2,0.8)=1.0。LightMap 纹路不影响身体光照。
+  let sunVal = virtual_sun(n, l, 0.8);
 
   // ── 4. Ramp 着色 ──
-  // MCP 核对: 外层 Map Range From 0,1 → To 0.15,0.99，然后进入 ramp 子组（inner 0.02,0.99）。
+  // MCP 核对: ramp 子组的 alpha 输入 = 0.0（未连接），不是 ilmColor.a。
   let sunMapped = 0.15 + saturate(sunVal) * 0.84;
-  let rampColor = ramp_lookup(sunMapped, ilmColor.a, rampTexture, srSampler);
+  let rampColor = ramp_lookup(sunMapped, 0.0, rampTexture, srSampler);
 
   // ── 5. 鼻尖阴影 ──
   let sdfColor = textureSample(sdfTexture, srSampler, input.uv);

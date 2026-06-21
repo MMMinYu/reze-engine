@@ -14,6 +14,7 @@ import {
   type AssetReader,
 } from "./asset-reader"
 import { DEFAULT_SHADER_WGSL } from "./shaders/materials/default"
+import { DECAL_SHADER_WGSL } from "./shaders/materials/decal"
 import { FACE_SHADER_WGSL } from "./shaders/materials/face"
 import { HAIR_SHADER_WGSL } from "./shaders/materials/hair"
 import { CLOTH_SMOOTH_SHADER_WGSL } from "./shaders/materials/cloth_smooth"
@@ -52,6 +53,7 @@ import { MIPMAP_BLIT_SHADER_WGSL } from "./shaders/passes/mipmap"
 // to presets; unmapped materials fall back to "default" (Principled BSDF).
 export type MaterialPreset =
   | "default"
+  | "decal"
   | "face"
   | "hair"
   | "body"
@@ -351,6 +353,7 @@ export class Engine {
   private resizeObserver: ResizeObserver | null = null
   private depthTexture!: GPUTexture
   private modelPipeline!: GPURenderPipeline
+  private decalPipeline!: GPURenderPipeline
   private facePipeline!: GPURenderPipeline
   private hairPipeline!: GPURenderPipeline
   private clothSmoothPipeline!: GPURenderPipeline
@@ -968,6 +971,11 @@ export class Engine {
       code: DEFAULT_SHADER_WGSL,
     })
 
+    const decalShaderModule = this.device.createShaderModule({
+      label: "decal cutout shader",
+      code: DECAL_SHADER_WGSL,
+    })
+
     const faceShaderModule = this.device.createShaderModule({
       label: "face NPR shader",
       code: FACE_SHADER_WGSL,
@@ -1094,6 +1102,22 @@ export class Engine {
         format: "depth24plus-stencil8",
         depthWriteEnabled: true,
         depthCompare: "less-equal",
+      },
+    })
+
+    this.decalPipeline = this.createRenderPipeline({
+      label: "decal cutout pipeline",
+      layout: mainPipelineLayout,
+      shaderModule: decalShaderModule,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTargets: sceneTargets,
+      cullMode: "none",
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        // 贴花不写深度 + 总是通过深度测试：贴花几何通常贴在身体表面（共面），
+        // 用 always 避免与身体表面的 z-fighting；透明像素由 shader discard 处理
+        depthWriteEnabled: false,
+        depthCompare: "always",
       },
     })
 
@@ -3075,17 +3099,30 @@ export class Engine {
       if (indexCount === 0) continue
       materialId++
 
-      let diffuseTexture = await loadTextureByIndex(mat.diffuseTextureIndex)
+      // Resolve preset first — needed to decide texture priority below
+      const manifestEntry = findManifestMaterial(inst.manifest?.materials, mat.name)
+      let preset = resolvePreset(mat.name, inst.materialPresets)
+      if (preset === "default") {
+        const manifestPreset = presetFromManifest(manifestEntry)
+        if (manifestPreset) preset = manifestPreset
+      }
+      const isStarRail = preset.startsWith("sr_")
+
+      // For StarRail materials, manifest's color texture takes priority over
+      // PMX diffuseTextureIndex — PMX often points to a wrong/shared texture.
+      // For non-SR materials, PMX texture is the primary source.
+      const manifestColorPath = manifestEntry?.textures?.color
+      let diffuseTexture: GPUTexture | null = null
+      if (isStarRail && manifestColorPath) {
+        const logicalPath = joinAssetPath(inst.basePath, normalizeAssetPath(manifestColorPath))
+        diffuseTexture = await this.createTextureFromLogicalPath(inst, logicalPath)
+      }
       if (!diffuseTexture) {
-        // Try manifest.json textures.color as fallback — PMX embedded texture
-        // paths often don't match the deployed directory structure, or the
-        // material may have no texture index at all (diffuseTextureIndex = -1).
-        const manifestEntry = findManifestMaterial(inst.manifest?.materials, mat.name)
-        const manifestColorPath = manifestEntry?.textures?.color
-        if (manifestColorPath) {
-          const logicalPath = joinAssetPath(inst.basePath, normalizeAssetPath(manifestColorPath))
-          diffuseTexture = await this.createTextureFromLogicalPath(inst, logicalPath)
-        }
+        diffuseTexture = await loadTextureByIndex(mat.diffuseTextureIndex)
+      }
+      if (!diffuseTexture && manifestColorPath) {
+        const logicalPath = joinAssetPath(inst.basePath, normalizeAssetPath(manifestColorPath))
+        diffuseTexture = await this.createTextureFromLogicalPath(inst, logicalPath)
       }
       if (!diffuseTexture) {
         console.warn(`${prefix}material "${mat.name}" has no loadable diffuse texture — using fallback`)
@@ -3094,20 +3131,6 @@ export class Engine {
 
       const materialAlpha = mat.diffuse[3]
       const isTransparent = materialAlpha < 1.0 - 0.001
-      if (mat === materials[0]) console.log(`[ENGINE-DEBUG] First material "${mat.name}" diffuse=${mat.diffuse} alpha=${materialAlpha} transparent=${isTransparent}`)
-      // Resolve preset: explicit materialPresets map takes priority,
-      // then fall back to manifest.json preset field.
-      const manifestEntry = findManifestMaterial(inst.manifest?.materials, mat.name)
-      let preset = resolvePreset(mat.name, inst.materialPresets)
-      let presetSource = "default"
-      if (preset !== "default") {
-        presetSource = "page.tsx map"
-      } else {
-        const manifestPreset = presetFromManifest(manifestEntry)
-        if (manifestPreset) { preset = manifestPreset; presetSource = "manifest.json" }
-      }
-      console.log(`[ENGINE] Material "${mat.name}" → preset="${preset}" (via ${presetSource})`)
-      const isStarRail = preset.startsWith("sr_")
 
       let bindGroup: GPUBindGroup
       if (isStarRail) {
@@ -3182,7 +3205,6 @@ export class Engine {
         // Override uniforms from manifest entry (if provided)
         const manifestUniforms = manifestEntry?.uniforms
         if (manifestUniforms) {
-          console.log(`[ENGINE-DEBUG] Applying manifest uniforms for "${mat.name}":`, JSON.stringify(manifestUniforms))
           // [11] rampStrength
           if (manifestUniforms.rampStrength !== undefined) srUniformData[11] = manifestUniforms.rampStrength
           // [15] coolStrength
@@ -3203,11 +3225,6 @@ export class Engine {
           if (manifestUniforms.useRamp !== undefined) srUniformData[35] = manifestUniforms.useRamp
           // [36] useCoolRamp (already set above from texture, but allow manifest override)
           if (manifestUniforms.useCoolRamp !== undefined) srUniformData[36] = manifestUniforms.useCoolRamp
-        }
-
-        // Debug: log key uniforms for hair materials
-        if (preset === "sr_hair") {
-          console.log(`[ENGINE] Hair "${mat.name}": useMatcap=${srUniformData[34]}, useCoolRamp=${srUniformData[36]}, alpha=${srUniformData[32]}, emissionStrength=${srUniformData[31]}`);
         }
 
         this.device.queue.writeBuffer(srUniformBuffer, 0, srUniformData)
@@ -4066,10 +4083,6 @@ export class Engine {
       this.forEachInstance((inst) => {
         if (inst.drawCalls.length === 0) {
           console.warn(`[ENGINE] Model "${inst.name}" has 0 draw calls — nothing will render`)
-        } else {
-          const presets = inst.drawCalls.map(d => d.preset)
-          const uniquePresets = [...new Set(presets)]
-          console.log(`[ENGINE] Model "${inst.name}" rendering ${inst.drawCalls.length} draw calls (opaque: ${inst.drawCalls.filter(d => d.type === 'opaque').length}, transparent: ${inst.drawCalls.filter(d => d.type === 'transparent').length}) presets=${JSON.stringify(uniquePresets)}`)
         }
         this.renderOneModel(pass, inst)
       })
@@ -4159,6 +4172,7 @@ export class Engine {
   }
 
   private pipelineForPreset(preset: MaterialPreset): GPURenderPipeline {
+    if (preset === "decal") return this.decalPipeline
     if (preset === "face") return this.facePipeline
     if (preset === "hair") return this.hairPipeline
     if (preset === "cloth_smooth") return this.clothSmoothPipeline
