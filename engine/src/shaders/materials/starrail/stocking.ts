@@ -393,6 +393,8 @@ fn hashed_alpha_threshold(co: vec3f) -> f32 {
   let normalTS_sample = textureSample(sockNormalTexture, sockSampler, adjustedUV);
 
   // Math.013(SockV3): 1.0 - Noise3d.Factor
+  // 经 MCP 核对 (SockV3.027): Math.013 SUBTRACT(1.0, Noise Texture[Factor])
+  // Noise Texture = 3D, scale=10, detail=0, distortion=0.52 → 即上方 noise3d
   let invFactor = 1.0 - noise3d;
   // Math.012(SockV3): FiberWidth × invFactor
   let scaledFiberWidth = fiberWidth * invFactor;
@@ -476,7 +478,8 @@ fn hashed_alpha_threshold(co: vec3f) -> f32 {
   var finalColor = fabric * (1.0 - T) + skinLit * T + sssLight;
 
   var out: FSOut;
-  out.color = vec4f(finalColor, alpha);
+  let brightnessScale = light.lights[0].color.w / 5.0;
+  out.color = vec4f(finalColor * brightnessScale, alpha);
   out.mask = vec4f(1.0, 1.0, 0.0, out.color.a);
   return out;
 }

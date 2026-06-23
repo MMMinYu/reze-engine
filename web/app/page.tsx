@@ -454,7 +454,7 @@ export default function Home() {
       const engine = new Engine(canvasRef.current, {
         camera: { distance: 31.5, target: new Vec3(0, 11.5, 0) },
         bloom: { enabled: false },
-        sun: { strength: 7.25, direction: new Vec3(0, -0.5, 1) },
+        sun: { strength: 5.0, direction: new Vec3(-0.296, -0.500, 0.814) },
         world: { color: new Vec3(0.05, 0.05, 0.05), strength: 1.0 },
         view: { exposure: 0.0 },
       })
@@ -503,6 +503,10 @@ export default function Home() {
           "乳贴", "乳钉", "乳首结",
           "口枷金属1", "口枷金属2", "口球", "口球带1", "口球带2", "口球扣",
           "结花边+",  // 回退：texture有alpha镂空，depthBias会导致白色填充
+          // 经 MCP 核对：Blender 中"金属"使用 StarRailShader.clothes-by@小二今天吃啥啊 节点组
+          // （与衣金属/袖金属等使用的 星铁@Minyu-Shader.clothes.001 结构完全相同）
+          // 非 Principled BSDF + Voronoi，故归入 sr_clothes 而非 metal 预设
+          "金属",
         ],
         sr_clothes_inner: [
           "衣1+", "袖+", "裙+", "裙1+",
@@ -515,7 +519,6 @@ export default function Home() {
         // 贴花材质：纹理 alpha 镂空（淫纹纹身贴花）
         // 颜+ 不放这里——它走 sr_face（manifest 已配置完整 NPR 贴图）
         decal: ["inmon1", "inmon2"],
-        metal: ["金属"],
         // 袖球：MMDTexUV sphere mapping + desaturation（经 MCP 核对 Blender 节点树）
         sr_special: ["袖球"],
       })

@@ -1259,7 +1259,7 @@
     "袖球": {
       "preset": "sr_special",
       "textures": {
-        "color": "textures/衣.png",
+        "color": "textures/Avatar_Hyacine_00_Body_Color_A_L.png",
         "ilm": "textures/LightMap.png",
         "warm_ramp": "textures/Avatar_Hyacine_00_Body_Warm_Ramp.png",
         "cool_ramp": "textures/Avatar_Hyacine_00_Body_Cool_Ramp.png",

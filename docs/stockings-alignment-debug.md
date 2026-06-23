@@ -944,3 +944,84 @@ Blender 4.x 的 `NodeEvaluateClosure` 是一种延迟求值机制：
 
 - `blend_method`: `BLEND` (alpha 混合)
 - `surface_render`: true
+
+---
+
+## 2026-06-23 MCP 完整核对 SockAIO.021 + SockV3.027（81 节点）
+
+### 问题现象
+丝袜材质渲染与 Blender 不一致，stocking.ts 末尾有 DEBUG 测试代码，noise3d_fixed 使用固定值 0.5。
+
+### MCP 核对结果
+
+#### 1. DEBUG 代码移除
+- stocking.ts 末尾 DEBUG 测试代码（输出固定 testFW/testResult）已移除
+- 恢复真实着色输出
+
+#### 2. noise3d_fixed TEMP 修复
+**修复前**（错误）：
+```wgsl
+// TEMP: 固定 noise3d=0.5 测试
+let noise3d_fixed = 0.5;
+let invFactor = 1.0 - noise3d_fixed;
+```
+
+**修复后**（正确，经 MCP 核对 SockV3.027 Math.013）：
+```wgsl
+// Math.013(SockV3): 1.0 - Noise3d.Factor
+// 经 MCP 核对 (SockV3.027): Math.013 SUBTRACT(1.0, Noise Texture[Factor])
+// Noise Texture = 3D, scale=10, detail=0, distortion=0.52 → 即上方 noise3d
+let invFactor = 1.0 - noise3d;
+```
+
+#### 3. SockAIO.021 完整节点树核对（81 节点）
+
+通过 MCP `execute_blender_code` 逐节点核对 Blender `SockAIO.021` 完整节点树（含 SockV3.027、ThighhighsInfoGen.023、PantyhoseThicknessSelector.023、ViewDependentCoverage.028、AdjustCellUV.028、BuildCellUV.028、MappingSDF.028、UVByRatio.028 子组）。
+
+**核对结论**：engine stocking.ts 与 Blender 节点连接基本一致，已修复的差异点：
+- BaseColor 使用纯白（非 Body3.png 贴图）✅
+- Alpha = thickness_gate × fiber_coverage（含厚度门控）✅
+- UVScale 内部乘 0.6667 ✅
+- Float Curve Factor=0 输出常量（FiberWidth=0.03, FiberThickness=0.025, FurAmount=0.01）✅
+- Roughness A/B 端正确（mix(0.85, 0.35, ...)）✅
+- Subsurface Scale 动态调整（mix(0.1, 0.001, Alpha)）✅
+- Specular Tint 动态混合 ✅
+- Normal Map UV 变换正确 ✅
+
+#### 4. 贴图绑定核对
+
+全部 7 张贴图已存在且正确绑定，无缺失文件：
+
+| # | 贴图 | 路径 | 状态 |
+|---|------|------|------|
+| 1 | color | textures/Body3.png | ✅ |
+| 2 | sock_sdf | textures/sock_tiled_sdf.png | ✅ |
+| 3 | sock_direction | textures/sock_tiled_direction.png | ✅（引擎声明但未使用） |
+| 4 | sock_normal | textures/sock_tiled_normal.png | ✅ |
+| 5 | thickness | textures/cf_panst_07_t.png | ✅ |
+| 6 | fur_layer | textures/Substance_graph_FurLayer.png | ✅ |
+| 7 | sdf_lut | textures/SDFLut.png | ✅（UseLut=0 时不使用，正确） |
+
+#### 5. 缺失公式清单
+
+经 MCP 核对，engine `eval_principled`（nodes.ts）为简化实现，缺少以下 4 项 Blender Principled BSDF 特性：
+
+| # | 缺失特性 | Blender 实现 | 引擎现状 | 影响 |
+|---|---------|------------|---------|------|
+| 1 | **各向异性高光（Anisotropic）** | sock_tiled_direction.png 的 RG 通道计算切线方向，IsFiber×Direction.X×50 计算各向异性旋转 | eval_principled 不支持各向异性 GGX | 纤维高光方向性缺失 |
+| 2 | **次表面散射（Subsurface）** | Principled BSDF Weight=0.4, Radius=(1,0.2,0.1), 动态 Scale=mix(0.1,0.001,Alpha) | 用 wrapped lighting 近似 | 皮肤透光感不足 |
+| 3 | **透射（Transmission）** | Principled BSDF Weight=0.3 | 用简单皮肤色混合 | 透光效果不准确 |
+| 4 | **Generated 坐标** | Blender 用 Generated（对象空间归一化 [0,1]） | 用 worldPos 近似 | noise3d 采样位置有偏差 |
+
+**sockDirectionTexture**（binding 3）和 **sdfLutTexture**（binding 7）已声明但未在 shader 代码中使用：
+- sockDirectionTexture 应驱动各向异性切线方向（缺失公式 #1）
+- sdfLutTexture 在 UseLut=0 时不使用（正确）
+
+### 验证状态
+- ✅ MCP 逐节点核对 SockAIO.021（81 节点）+ SockV3.027 完整子组
+- ✅ DEBUG 测试代码已移除
+- ✅ noise3d_fixed TEMP 已修复（使用实际 noise3d 值）
+- ✅ 全部 7 张贴图已存在且正确绑定
+- ✅ 4 项缺失公式已明确记录
+- ⚠️ 各向异性高光（Task 2.6）待实现 — 需扩展 eval_principled 支持 anisotropic
+- ⚠️ 需用户在浏览器中视觉验证丝袜渲染效果

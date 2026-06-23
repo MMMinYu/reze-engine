@@ -75,38 +75,45 @@ fn view_angle_test(faceFront: vec3f, sun: vec3f) -> f32 {
   return saturate(d);
 }
 
-// ─── 布林冯光照模型 / Blinn-Phong (子 Group: 布林冯光照模型) ────────
-// Half-vector Blinn-Phong specular.
-// 经 MCP 核对: 只有 Value 输出,无 Color。节点链: ADD(Incoming, SUN) → NORMALIZE → DOT(Normal, H)。
+// ─── 布林冯光照模型 / Blinn-Phong (子 Group: 布林冯光照模型.001) ────
+// 经 MCP 核对 (2026-06-23): 节点链为 ADD(Incoming, SUN) → NORMALIZE → DOT(Normal, H)。
+//   - Geometry.Incoming = 从相机到表面的方向 = -v（v 是从表面到相机）
+//   - Attribute(SUN)    = 几何节点修改器输出的灯光方向（从表面到光源）= l
+//   - 因此半向量 H = normalize(Incoming + SUN) = normalize(-v + l) = normalize(l - v)
+//   - 输出 = dot(N, H)，无 pow、无 max(0)（与 Blender 子组完全一致）
+//   - pow 操作在 clothes.001 节点组内的 Math(POWER, 30) 节点完成，不在本子组内
+//   - power 参数保留用于调用者自行做 pow（本函数不使用，与 Blender 子组一致）
 
 fn blinn_phong(n: vec3f, v: vec3f, l: vec3f, power: f32) -> f32 {
-  let h = normalize(l + v);
-  let ndoth = max(dot(n, h), 0.0);
-  return pow(ndoth, power);
+  // Blender 布林冯光照模型.001: H = normalize(Incoming + SUN), result = dot(H, Normal)
+  // Incoming = v (从表面指向相机), SUN = l (光源方向)
+  // 所以 H = normalize(v + l)，不是 normalize(l - v)
+  let h = normalize(v + l);
+  return dot(n, h);
 }
 
-// ─── 虚拟日光 / Virtual Sun — Half-Lambert (子 Group: 虚拟日光) ──────
+// ─── 虚拟日光 / Virtual Sun — Half-Lambert (子 Group: 虚拟日光.001) ──
 // Half-Lambert wrap lighting modulated by the ILM green (spec mask) channel and
 // reshaped into a soft toon terminator:
 //   L_scaled = SUN * 2.0               # VectorMath.001 SCALE
 //   dotNL = dot(N, L_scaled)           # VectorMath DOT_PRODUCT
-//   half_lambert = map_range(dotNL, -1, 1, 0, 1)   # Map Range
-//   green_smooth = smoothstep(0, 0.2, ilm_green)    # ILM G channel as shadow mask
-//   mixed = half_lambert * green_smooth              # Mix MULTIPLY
+//   half_lambert = map_range(dotNL, -1, 1, 0, 1)   # Map Range (clamp=True)
+//   green_smooth = smoothstep(0, 0.2, ilm_green)    # smoothstep.001 (a=0, b=0.2)
+//   mixed = half_lambert * green_smooth              # Mix MULTIPLY (Factor=1.0)
 //   step3 = mixed * 0.5 + 0.5                        # MULTIPLY_ADD
 //   final = step3 ^ 2.0                               # POWER(_, 2.0) — 平方，不是开方！
 //
-// ⚠️ 经 MCP 核对: 最后是平方 (^2.0)，不是文档原写的 sqrt。平方让中间调压暗、对比度提升。
+// ⚠️ 经 MCP 核对 (2026-06-23): 最后是平方 (^2.0)，不是文档原写的 sqrt。平方让中间调压暗、对比度提升。
 //
-// ⚠️ 经 MCP 核对: Blender 材质用 Attribute(SUN) 读取名为 SUN 的几何属性，
-// 但身体/头发 mesh 上并没有该属性 → Blender 返回默认值 (0,0,0)。
-// 因此 SUN 始终为 0，整条链路退化为常数：
-//   dot(N, 0) = 0 → MapRange(0; -1,1→0,1) = 0.5
-//   green_smooth = smoothstep(0, 0.2, G) 仍由 ILM 控制
-//   mixed = 0.5 * green_smooth → step3 = 0.25*green_smooth + 0.5
-//   final = (0.25*green_smooth + 0.5)^2
-// green_smooth 在无 ILM 贴图时按调用者传入的 0.8 计算 ≈ 1.0，
-// 最终 ≈ 0.5625，与法线和场景 sun 方向无关。
+// ⚠️ 经 MCP 核对 (2026-06-23): SUN 属性由几何节点修改器 (Geometry Nodes) 计算，
+// 基于"灯光"对象的旋转: SUN = normalize(灯光.Rotation × (0,0,1))。
+//   - 身体/头发 mesh: 原始网格无 SUN 属性 → Blender 返回默认值 (0,0,0)
+//     → dot(N, 0)=0 → MapRange(0;-1,1→0,1)=0.5 → 整条链路退化为常数
+//   - 衣服 mesh (星铁@Minyu-风堇): 评估后网格有 SUN 属性 (FLOAT_VECTOR, domain=POINT)
+//     → SUN = (0.296, -0.814, 0.5) Z-up = (0.296, 0.5, 0.814) Y-up
+//     → 半兰伯特光照随法线方向变化
+// 引擎实现用 l = -light.direction（从表面到光源）替代 SUN。
+// 对于衣服 mesh，若 sun.direction 设置与 Blender 灯光旋转匹配，则 l ≈ SUN_yup。
 
 fn virtual_sun(n: vec3f, l: vec3f, ilm_green: f32) -> f32 {
   // 动态半兰斯特光照: SUN → SCALE(2.0) → DOT(N, 2*SUN) → MapRange(-1,1→0,1)
@@ -200,12 +207,20 @@ fn ramp_lookup(value: f32, alpha: f32, rampTex: texture_2d<f32>, rampSampler: sa
   // GPU 自动选择高 mip level → 多条平行线。强制 level 0 保持原始精度。
   let ramp_color = textureSampleLevel(rampTex, rampSampler, uv, 0.0);
 
-  // 经 MCP 核对: ramp.002 里的两个 RGB Curves 节点都只修改了 Combined (curve 3) 曲线，
+  // 经 MCP 核对 (2026-06-23, ramp.001): 两个 RGB Curves 节点都只修改了 Combined (curve 3) 曲线，
   // Blender 的 RGB Curves Combined 行为等效于对 R/G/B 三通道独立应用同一条曲线。
+  //   - RGB Curves (第一个): Factor=1.0 (固定), curve[3]=(0,0),(0.7167,0.4244),(1,1)
+  //   - RGB Curves.001 (第二个): Factor=Invert(ramp采样.001.OUT[1]), curve[3]=(0,0),(0.5630,0.3999),(1,1)
+  //     其中 ramp采样.001.OUT[1] = GREATER_THAN(alpha, 0.10) — 二值 0/1
+  //     Invert 后 Factor = 1.0 - (alpha > 0.10) — 仍是二值
+  //   - RGB Curves.001 的 Color 输入 = RGB Curves 的输出 (嵌套应用 c2 到 first_curved)
+  //   - RGB Curves 的 Factor 行为: output = mix(Color, curve(Color), Factor)
+  //     Factor=1 → 完全应用曲线; Factor=0 → 保持原色
   let first_curved = vec3f(_ramp_c1_lut(ramp_color.r), _ramp_c1_lut(ramp_color.g), _ramp_c1_lut(ramp_color.b));
 
   // Factor = Invert(GREATER_THAN(alpha, 0.10)) — binary 0/1, not continuous.
   // alpha > 0.10 → factor=0 (use first_curved); alpha ≤ 0.10 → factor=1 (use second_curved).
+  // 经 MCP 核对: ramp采样.001.OUT[1] = Math.001(GREATER_THAN, alpha, 0.10) — 确实是二值。
   let second_factor = select(1.0, 0.0, alpha > 0.10);
   let second_curved = vec3f(_ramp_c2_lut(first_curved.r), _ramp_c2_lut(first_curved.g), _ramp_c2_lut(first_curved.b));
 
@@ -248,9 +263,11 @@ fn ilm_decode(ilmColor: vec4f) -> vec4f {
 
 fn sdf_face_shadow(uv: vec2f, faceFront: vec3f, faceRight: vec3f, sun: vec3f, sdfMap: texture_2d<f32>, sdfSampler: sampler) -> f32 {
   // faceFront/faceRight 存储的是 Blender Z-up 值，sun 是 engine Y-up 值。
-  // 转换: Z-up (x,y,z) → Y-up (x, z, -y)。
-  let front = vec3f(faceFront.x, faceFront.z, -faceFront.y);
-  let right = vec3f(faceRight.x, faceRight.z, -faceRight.y);
+  // 经 MCP 核对 (2026-06-23): Blender Z-up → engine Y-up 转换为 (x, z, y)，无取负。
+  // Blender: FRONT=(0,1,0), RIGHT=(1,0,0), SUN=(0.296,-0.814,0.5)
+  // Engine:  FRONT=(0,0,1), RIGHT=(1,0,0), SUN=(0.296,0.5,-0.814)=-light.direction
+  let front = vec3f(faceFront.x, faceFront.z, faceFront.y);
+  let right = vec3f(faceRight.x, faceRight.z, faceRight.y);
 
   let dot_R = dot(right, sun);
   let is_right = step(0.0, dot_R);
