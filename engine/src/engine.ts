@@ -28,9 +28,10 @@ import { SR_HAIR_SHADER_WGSL } from "./shaders/materials/starrail/hair"
 import { SR_BODY_SHADER_WGSL } from "./shaders/materials/starrail/body"
 import { SR_CLOTHES_SHADER_WGSL, SR_CLOTHES_INNER_SHADER_WGSL } from "./shaders/materials/starrail/clothes"
 import { SR_EYE_SHADER_WGSL } from "./shaders/materials/starrail/eye"
+import { SR_EYESHADOW_SHADER_WGSL } from "./shaders/materials/starrail/eyeshadow"
 import { SR_MMD_SHADER_WGSL } from "./shaders/materials/starrail/mmd"
 import { SR_EDGE_SHADER_WGSL } from "./shaders/materials/starrail/edge"
-import { SR_STOCKING_SHADER_WGSL } from "./shaders/materials/starrail/stocking"
+import { SR_STOCKING_SHADER_WGSL, STOCKING_MATERIAL_UNIFORM_SIZE } from "./shaders/materials/starrail/stocking"
 import { SR_SPECIAL_SHADER_WGSL } from "./shaders/materials/starrail/special"
 import { STARRAIL_MATERIAL_UNIFORM_SIZE } from "./shaders/materials/starrail/bindings"
 import { BRDF_LUT_SIZE, BRDF_LUT_BAKE_WGSL } from "./shaders/dfg_lut"
@@ -68,6 +69,7 @@ export type MaterialPreset =
   | "sr_clothes"
   | "sr_clothes_inner"
   | "sr_eye"
+  | "sr_eyeshadow"
   | "sr_mmd"
   | "sr_edge"
   | "sr_stocking"
@@ -118,7 +120,7 @@ function findManifestMaterial(
 function presetFromManifest(entry: StarRailManifest["materials"][string] | undefined): MaterialPreset | undefined {
   if (!entry) return undefined
   const p = entry.preset
-  if (p === "sr_face" || p === "sr_hair" || p === "sr_body" || p === "sr_clothes" || p === "sr_eye" || p === "sr_mmd" || p === "sr_edge" || p === "sr_stocking" || p === "sr_special") return p
+  if (p === "sr_face" || p === "sr_hair" || p === "sr_body" || p === "sr_clothes" || p === "sr_eye" || p === "sr_eyeshadow" || p === "sr_mmd" || p === "sr_edge" || p === "sr_stocking" || p === "sr_special") return p
   return undefined
 }
 
@@ -277,6 +279,13 @@ interface StarRailManifestTextureEntry {
   ramp?: string
   sdf?: string
   matcap?: string
+  // Stocking 专用贴图
+  sock_sdf?: string
+  sock_direction?: string
+  sock_normal?: string
+  thickness?: string
+  fur_layer?: string
+  sdf_lut?: string
 }
 
 interface StarRailManifestMaterial {
@@ -289,10 +298,23 @@ interface StarRailManifestMaterial {
     specularStrength?: number
     rimStrength?: number
     emissionStrength?: number
+    alpha?: number  // override material alpha (e.g. sr_eyeshadow)
     useSDF?: number
     useMatcap?: number
     useRamp?: number
     useCoolRamp?: number
+    useRGBCurves?: number  // sr_eye only: 1.0 = apply RGB Curves preprocessing
+    // Stocking 专用 uniforms
+    uvScale?: number
+    sockLength?: number
+    cuffLength?: number
+    transmissionWeight?: number
+    subsurfaceWeight?: number
+    roughness?: number
+    tensionIntensity?: number
+    thicknessAdjust?: number
+    uvRatio?: number
+    anisotropicRotation?: number
   }
 }
 
@@ -370,11 +392,14 @@ export class Engine {
   private srClothesPipeline!: GPURenderPipeline
   private srClothesInnerPipeline!: GPURenderPipeline
   private srEyePipeline!: GPURenderPipeline
+  private srEyeshadowPipeline!: GPURenderPipeline
   private srEdgePipeline!: GPURenderPipeline
   private srStockingPipeline!: GPURenderPipeline
   private srSpecialPipeline!: GPURenderPipeline
   private srPerMaterialBindGroupLayout!: GPUBindGroupLayout
+  private stockingPerMaterialBindGroupLayout!: GPUBindGroupLayout
   private srSampler!: GPUSampler
+  private sockRepeatSampler!: GPUSampler
   private groundShadowPipeline!: GPURenderPipeline
   private groundShadowBindGroupLayout!: GPUBindGroupLayout
   private outlinePipeline!: GPURenderPipeline
@@ -1082,11 +1107,50 @@ export class Engine {
       ],
     })
 
+    // Stocking 专用 per-material bind group layout（group 2）：
+    //   binding(0) colorTexture
+    //   binding(1) StockingMaterialUniforms（48 字节）
+    //   binding(2-7) sock_sdf/direction/normal/thickness/fur/sdf_lut 贴图
+    //   binding(8) sockSampler
+    this.stockingPerMaterialBindGroupLayout = this.device.createBindGroupLayout({
+      label: "stocking per-material bind group layout",
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+        { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+        { binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+        { binding: 6, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+        { binding: 7, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+        { binding: 8, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+      ],
+    })
+
+    const stockingPipelineLayout = this.device.createPipelineLayout({
+      label: "stocking pipeline layout",
+      bindGroupLayouts: [
+        this.mainPerFrameBindGroupLayout,
+        this.mainPerInstanceBindGroupLayout,
+        this.stockingPerMaterialBindGroupLayout,
+      ],
+    })
+
     // StarRail 材质共用一个 linear sampler（不按材质重复创建）。
     this.srSampler = this.device.createSampler({
       magFilter: "linear",
       minFilter: "linear",
       mipmapFilter: "linear",
+    })
+
+    // Stocking tiled 贴图专用 repeat sampler。SDF/direction/normal/texture
+    // 的 UV 缩放高达 900×3000，需要 Repeat 地址模式才能正确平铺。
+    this.sockRepeatSampler = this.device.createSampler({
+      magFilter: "linear",
+      minFilter: "linear",
+      mipmapFilter: "linear",
+      addressModeU: "repeat",
+      addressModeV: "repeat",
     })
 
     // perFrameBindGroup is created after shadow resources below
@@ -1287,6 +1351,7 @@ export class Engine {
     const srBodyShaderModule = this.device.createShaderModule({ label: "sr_body WGSL", code: SR_BODY_SHADER_WGSL })
     const srClothesShaderModule = this.device.createShaderModule({ label: "sr_clothes WGSL", code: SR_CLOTHES_SHADER_WGSL })
     const srEyeShaderModule = this.device.createShaderModule({ label: "sr_eye WGSL", code: SR_EYE_SHADER_WGSL })
+    const srEyeshadowShaderModule = this.device.createShaderModule({ label: "sr_eyeshadow WGSL", code: SR_EYESHADOW_SHADER_WGSL })
 
     this.srFacePipeline = this.createRenderPipeline({
       label: "sr_face NPR pipeline",
@@ -1389,7 +1454,10 @@ export class Engine {
       },
     })
 
-    // sr_clothes_inner：披風+/披肩+法线指向体内，cullMode="front" 渲染 CW 面 + shader 翻转法线。
+    // sr_clothes_inner：披風+/披肩+/衣1+/袖+/裙+ 等内层（+ 后缀）mesh。
+    // 经 MCP 核对 Blender: 内层 mesh 法线本来就朝内（背向相机），shader 不翻转法线。
+    // PMX 顶点顺序为 CW，WebGPU front_face 默认 ccw → CW 面被视为背面。
+    // cullMode="front" 剔除 CCW 面，保留 PMX 的 CW 面（与外层 sr_clothes 一致）。
     // 排序在 sr_clothes 之后。因三角顶点不同导致插值深度不同引起 z-fighting，
     // 用 depthBias + clamp 确保深度始终通过。
     const srClothesInnerShaderModule = this.device.createShaderModule({
@@ -1437,6 +1505,26 @@ export class Engine {
       },
     })
 
+    // sr_eyeshadow：目影专用，纯色半透明 (Transparent BSDF)
+    // 简单 depth-only + alpha blending，不写 stencil，不 bias
+    this.srEyeshadowPipeline = this.createRenderPipeline({
+      label: "sr_eyeshadow pipeline",
+      layout: srPipelineLayout,
+      shaderModule: srEyeshadowShaderModule,
+      vertexBuffers: fullVertexBuffers,
+      fragmentTargets: sceneTargets,
+      cullMode: "none",
+      depthStencil: {
+        format: "depth24plus-stencil8",
+        depthWriteEnabled: false,
+        depthCompare: "less-equal",
+        stencilFront: { compare: "always", failOp: "keep", depthFailOp: "keep", passOp: "keep" },
+        stencilBack: { compare: "always", failOp: "keep", depthFailOp: "keep", passOp: "keep" },
+        stencilReadMask: 0xff,
+        stencilWriteMask: 0xff,
+      },
+    })
+
     // sr_edge
     const srEdgeShaderModule = this.device.createShaderModule({ label: "sr_edge WGSL", code: SR_EDGE_SHADER_WGSL })
     this.srEdgePipeline = this.createRenderPipeline({
@@ -1453,11 +1541,11 @@ export class Engine {
       },
     })
 
-    // sr_stocking
+    // sr_stocking — 使用专用 stockingPipelineLayout（9 个 binding）
     const srStockingShaderModule = this.device.createShaderModule({ label: "sr_stocking WGSL", code: SR_STOCKING_SHADER_WGSL })
     this.srStockingPipeline = this.createRenderPipeline({
       label: "sr_stocking NPR pipeline",
-      layout: srPipelineLayout,
+      layout: stockingPipelineLayout,
       shaderModule: srStockingShaderModule,
       vertexBuffers: fullVertexBuffers,
       fragmentTargets: sceneTargets,
@@ -3130,14 +3218,80 @@ export class Engine {
       }
 
       const materialAlpha = mat.diffuse[3]
-      const isTransparent = materialAlpha < 1.0 - 0.001
+      // PMX diffuse[3]=0 是 MMD "不渲染" 标志，但 StarRail 材质（通过 manifest 映射）
+      // 应当可见。对这些材质强制视为不透明（alpha=1.0）。
+      const effectiveAlpha = (isStarRail && materialAlpha < 0.001) ? 1.0 : materialAlpha
+      // Manifest uniform alpha 可覆盖透明度（如 sr_eyeshadow 需要 alpha=0.5）
+      const manifestAlpha = manifestEntry?.uniforms?.alpha
+      const finalAlpha = manifestAlpha !== undefined ? manifestAlpha : effectiveAlpha
+      const isTransparent = finalAlpha < 1.0 - 0.001
 
       let bindGroup: GPUBindGroup
-      if (isStarRail) {
+      if (preset === "sr_stocking") {
+        // Stocking 材质：48 字节 StockingMaterialUniforms + 7 张贴图 + 共用 sampler。
+        // 专用 stockingPerMaterialBindGroupLayout（9 个 binding）。
+        const manifestUniforms = manifestEntry?.uniforms ?? {}
+        const manifestTextures = manifestEntry?.textures ?? {}
+        const sockUniformData = new Float32Array(STOCKING_MATERIAL_UNIFORM_SIZE / 4)
+        sockUniformData[0] = manifestUniforms.uvScale ?? 3000.0
+        sockUniformData[1] = manifestUniforms.sockLength ?? 0.75
+        sockUniformData[2] = manifestUniforms.cuffLength ?? 0.03
+        sockUniformData[3] = manifestUniforms.transmissionWeight ?? 0.3
+        sockUniformData[4] = manifestUniforms.subsurfaceWeight ?? 0.4
+        sockUniformData[5] = manifestUniforms.roughness ?? 0.35   // Mix.010 B 端 = Group Input Roughness
+        sockUniformData[6] = manifestUniforms.tensionIntensity ?? 0.8
+        sockUniformData[7] = manifestUniforms.thicknessAdjust ?? 0.0
+        sockUniformData[8] = manifestUniforms.uvRatio ?? 0.3
+        sockUniformData[9] = manifestUniforms.anisotropicRotation ?? 0.75
+        // [10-11] padding
+        sockUniformData[10] = 0.0
+        sockUniformData[11] = 0.0
+
+        const sockUniformBuffer = this.createUniformBuffer(`sr_stocking material: ${prefix}${mat.name}`, sockUniformData)
+        inst.gpuBuffers.push(sockUniformBuffer)
+
+        const loadSockTexture = async (path: string | undefined, linear = false): Promise<GPUTexture> => {
+          if (!path) return this.fallbackMaterialTexture
+          const logicalPath = joinAssetPath(inst.basePath, normalizeAssetPath(path))
+          const tex = await this.createTextureFromLogicalPath(inst, logicalPath, linear)
+          if (!tex) {
+            console.warn(`${prefix}material "${mat.name}": failed to load texture "${path}" — using fallback`)
+            return this.fallbackMaterialTexture
+          }
+          return tex
+        }
+
+        const sockSdfTexture = await loadSockTexture(manifestTextures.sock_sdf, true)
+        const sockDirectionTexture = await loadSockTexture(manifestTextures.sock_direction, true)
+        const sockNormalTexture = await loadSockTexture(manifestTextures.sock_normal, true)
+        const thicknessTexture = await loadSockTexture(manifestTextures.thickness, true)
+        const furLayerTexture = await loadSockTexture(manifestTextures.fur_layer, true)
+        const sdfLutTexture = await loadSockTexture(manifestTextures.sdf_lut, true)
+
+        bindGroup = this.device.createBindGroup({
+          label: `${prefix}sr_stocking material: ${mat.name}`,
+          layout: this.stockingPerMaterialBindGroupLayout,
+          entries: [
+            { binding: 0, resource: diffuseTexture.createView() },    // colorTexture
+            { binding: 1, resource: { buffer: sockUniformBuffer } },  // sockMaterial
+            { binding: 2, resource: sockSdfTexture.createView() },    // sockSdfTexture
+            { binding: 3, resource: sockDirectionTexture.createView() }, // sockDirectionTexture
+            { binding: 4, resource: sockNormalTexture.createView() }, // sockNormalTexture
+            { binding: 5, resource: thicknessTexture.createView() },  // thicknessTexture
+            { binding: 6, resource: furLayerTexture.createView() },   // furLayerTexture
+            { binding: 7, resource: sdfLutTexture.createView() },     // sdfLutTexture
+            { binding: 8, resource: this.sockRepeatSampler },             // sockSampler (repeat)
+          ],
+        })
+      } else if (isStarRail) {
         // StarRail 材质：160 字节 StarRailMaterialUniforms + 7 张贴图 + 共用 sampler。
         // 字段偏移见 starrail/bindings.ts（vec3f+f32 配对，8 组 × 16 = 128，加 8 个尾随 f32 = 160）。
         const srUniformData = new Float32Array(STARRAIL_MATERIAL_UNIFORM_SIZE / 4)
-        // [0-3]   faceFront(0,0,-1) + _pad0  (Blender 面部定位.001 旋转 -90° → FRONT=(0,0,-1))
+        // [0-3]   faceFront(0,0,-1) + _pad0
+        // Blender Z-up 中 FRONT=(0,0,-1)。PMX/engine 也是 Y-up 但此值与 Blender 一致
+        // （经 MCP 验证: dot((0,0,-1), SUN_yup=(0.296,0.500,-0.814))=0.814，
+        //  对应 Blender dot((0,0,-1), SUN_zup=(0.296,-0.814,0.500))=-0.5，但 SDF 阴影
+        //  效果在 dot=0.814 时与 Blender 视觉一致，故保留此值）。
         srUniformData[0] = 0; srUniformData[1] = 0; srUniformData[2] = -1
         // [4-7]   faceRight(1,0,0) + _pad1
         srUniformData[4] = 1; srUniformData[5] = 0; srUniformData[6] = 0
@@ -3159,8 +3313,8 @@ export class Engine {
         // [28-31] emissionColor(0,0,0) + emissionStrength
         srUniformData[28] = 0; srUniformData[29] = 0; srUniformData[30] = 0
         srUniformData[31] = 0.0 // emissionStrength
-        // [32] alpha
-        srUniformData[32] = materialAlpha
+        // [32] alpha — 使用 effectiveAlpha（已处理 PMX alpha=0 的 StarRail 材质）
+        srUniformData[32] = effectiveAlpha
         // [33-35] useSDF / useMatcap / useRamp —— 按 preset 门控（与各 shader 实际使用对齐）
         srUniformData[33] = preset === "sr_face" ? 1.0 : 0.0 // useSDF（仅 sr_face 用 SDF 脸部阴影）
         srUniformData[34] = preset === "sr_eye" ? 0.0 : 1.0  // useMatcap（sr_eye 不用 matcap）
@@ -3215,6 +3369,8 @@ export class Engine {
           if (manifestUniforms.specularStrength !== undefined) srUniformData[23] = manifestUniforms.specularStrength
           // [27] rimStrength
           if (manifestUniforms.rimStrength !== undefined) srUniformData[27] = manifestUniforms.rimStrength
+          // [32] alpha (override effectiveAlpha when specified in manifest)
+          if (manifestUniforms.alpha !== undefined) srUniformData[32] = manifestUniforms.alpha
           // [31] emissionStrength
           if (manifestUniforms.emissionStrength !== undefined) srUniformData[31] = manifestUniforms.emissionStrength
           // [33] useSDF
@@ -3225,6 +3381,8 @@ export class Engine {
           if (manifestUniforms.useRamp !== undefined) srUniformData[35] = manifestUniforms.useRamp
           // [36] useCoolRamp (already set above from texture, but allow manifest override)
           if (manifestUniforms.useCoolRamp !== undefined) srUniformData[36] = manifestUniforms.useCoolRamp
+          // [37] useRGBCurves (sr_eye only: 1.0 = apply RGB Curves preprocessing)
+          if (manifestUniforms.useRGBCurves !== undefined) srUniformData[37] = manifestUniforms.useRGBCurves
         }
 
         this.device.queue.writeBuffer(srUniformBuffer, 0, srUniformData)
@@ -3331,7 +3489,7 @@ export class Engine {
     }
     const presetRank = (p: MaterialPreset): number => {
       if (p === "hair" || p === "sr_hair") return 2
-      if (p === "eye" || p === "sr_eye") return 1
+      if (p === "eye" || p === "sr_eye" || p === "sr_eyeshadow") return 1
       // sr_clothes_inner 在 clothes 之后绘制，防止被外层覆盖
       if (p === "sr_clothes_inner") return 1
       return 0
@@ -4187,6 +4345,7 @@ export class Engine {
     if (preset === "sr_clothes") return this.srClothesPipeline
     if (preset === "sr_clothes_inner") return this.srClothesInnerPipeline
     if (preset === "sr_eye") return this.srEyePipeline
+    if (preset === "sr_eyeshadow") return this.srEyeshadowPipeline
     if (preset === "sr_edge") return this.srEdgePipeline
     if (preset === "sr_stocking") return this.srStockingPipeline
     if (preset === "sr_special") return this.srSpecialPipeline

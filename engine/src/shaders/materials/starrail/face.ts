@@ -18,7 +18,6 @@ ${STARRAIL_PRELUDE_WGSL}
 
   let n = normalize(input.normal);
   let v = normalize(camera.viewPos - input.worldPos);
-  let l = -light.lights[0].direction.xyz;
 
   // ── 1. 纹理采样 + 校色 ──
   let texColor = textureSample(colorTexture, srSampler, input.uv);
@@ -26,6 +25,9 @@ ${STARRAIL_PRELUDE_WGSL}
 
   // ── 2. SDF 脸部阴影 ──
   // 经 MCP 核对: dot(RIGHT,SUN)>0 判断左右，动态阈值 dot_F*0.5+0.5
+  // SUN 属性在 mesh 上不存在，Blender 默认 (0,0,0)；引擎用真实方向光驱动 SDF
+  // 以获得正面光照效果（Blender 的 HDRI 环境光提供类似效果）。
+  let l = -light.lights[0].direction.xyz;
   let sdfShadow = sdf_face_shadow(input.uv, srMaterial.faceFront, srMaterial.faceRight, l, sdfTexture, srSampler);
 
   // ── 3. Ramp 着色 ──

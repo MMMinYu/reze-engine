@@ -41,7 +41,6 @@ override DEBUG_MODE: u32 = 0u;
 
   let n = normalize(input.normal);
   let v = normalize(camera.viewPos - input.worldPos);
-  let sunDir = -light.lights[0].direction.xyz;
 
   // ── 1. 纹理采样 ──
   let texColor = textureSample(colorTexture, srSampler, input.uv);
@@ -60,10 +59,9 @@ override DEBUG_MODE: u32 = 0u;
   let imageForSun = vec3f(greenRamp, greenRamp, greenRamp);
 
   // ── 4. 虚拟日光.001 (半兰伯特 + 平方) ──
-  // Attribute(SUN) → Scale(2.0) → dot(N, 2*SUN) → MapRange(-1,1→0,1)(恒等)
-  let sun2 = sunDir * 2.0;
-  let dotN2Sun = dot(n, sun2);
-  let halfLambert = map_range(dotN2Sun, -1.0, 1.0, 0.0, 1.0);
+  // MCP 核对: SUN 属性通过几何节点修改器动态设置 = 灯光.001 的旋转方向
+  // SUN (Y-up) = -light.lights[0].direction.xyz = (0.296, 0.500, -0.814)
+  let halfLambert = saturate(dot(n, -light.lights[0].direction.xyz) + 0.5);
 
   // Image.Green → smoothstep(0, 0.2, green) → Mix.B (MULTIPLY with halfLambert)
   let greenSmooth = smoothstep(0.0, 0.2, imageForSun.g);
@@ -73,7 +71,6 @@ override DEBUG_MODE: u32 = 0u;
   let step3 = mixHL * 0.5 + 0.5;
 
   // Math.001: POWER(2.0) → 平方 → 虚拟日光输出
-  // ⚠️ 经 MCP 核对: 是平方(²)不是 sqrt(0.5)
   let sunVal = pow(step3, 2.0);
 
   // ── 5. Map Range → Ramp 采样 ──

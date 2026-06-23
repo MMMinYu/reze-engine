@@ -54,7 +54,7 @@ struct StarRailMaterialUniforms {
   useMatcap: f32,         // 1.0 = 启用 matcap
   useRamp: f32,           // 1.0 = 启用 toon ramp
   useCoolRamp: f32,       // 1.0 = 有 cool ramp 贴图，启用冷暖双 ramp
-  _pad2: f32,
+  useRGBCurves: f32,      // 1.0 = 启用 sr_eye RGB Curves 预处理（仅"目"材质）
   _pad3: f32,
   _pad4: f32,
 };

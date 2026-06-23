@@ -559,7 +559,8 @@
       },
       "uniforms": {
         "rampStrength": 1.0,
-        "useSDF": 0.0
+        "useSDF": 0.0,
+        "useRGBCurves": 1.0
       }
     },
     "目光": {
@@ -653,12 +654,13 @@
       }
     },
     "脖子": {
-      "preset": "sr_clothes",
+      "preset": "sr_body",
       "textures": {
         "color": "textures/Avatar_Hyacine_00_Body_Color_A_L.png",
         "ilm": "textures/LightMap.png",
         "warm_ramp": "textures/Avatar_Hyacine_00_Body_Warm_Ramp.png",
         "cool_ramp": "textures/Avatar_Hyacine_00_Body_Cool_Ramp.png",
+        "sdf": "textures_blender/W_140_Girl_FaceMap_00.png",
         "matcap": "textures/Avatar_Tex_MetalMap_3.png"
       },
       "uniforms": {
@@ -1255,7 +1257,7 @@
       }
     },
     "袖球": {
-      "preset": "sr_clothes",
+      "preset": "sr_special",
       "textures": {
         "color": "textures/衣.png",
         "ilm": "textures/LightMap.png",
@@ -1293,59 +1295,82 @@
       }
     },
     "吊带袜_丝袜": {
-      "preset": "sr_clothes",
+      "preset": "sr_stocking",
       "textures": {
         "color": "textures/Body3.png",
-        "ilm": "textures/LightMap.png",
-        "warm_ramp": "textures/Avatar_Hyacine_00_Body_Warm_Ramp.png",
-        "cool_ramp": "textures/Avatar_Hyacine_00_Body_Cool_Ramp.png",
-        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+        "sock_sdf": "textures/sock_tiled_sdf.png",
+        "sock_direction": "textures/sock_tiled_direction.png",
+        "sock_normal": "textures/sock_tiled_normal.png",
+        "thickness": "textures/cf_panst_07_t.png",
+        "fur_layer": "textures/Substance_graph_FurLayer.png",
+        "sdf_lut": "textures/SDFLut.png"
       },
       "uniforms": {
-        "rampStrength": 1.0,
-        "useSDF": 0.0
+        "uvScale": 3734.0,
+        "sockLength": 0.75,
+        "cuffLength": 0.03,
+        "transmissionWeight": 0.3,
+        "subsurfaceWeight": 0.4,
+        "roughness": 0.35,
+        "tensionIntensity": 0.8,
+        "thicknessAdjust": 0.0,
+        "uvRatio": 0.3,
+        "anisotropicRotation": 0.75
       }
     },
     "白裤袜": {
-      "preset": "sr_clothes",
+      "preset": "sr_stocking",
       "textures": {
         "color": "textures/Body3.png",
-        "ilm": "textures/LightMap.png",
-        "warm_ramp": "textures/Avatar_Hyacine_00_Body_Warm_Ramp.png",
-        "cool_ramp": "textures/Avatar_Hyacine_00_Body_Cool_Ramp.png",
-        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+        "sock_sdf": "textures/sock_tiled_sdf.png",
+        "sock_direction": "textures/sock_tiled_direction.png",
+        "sock_normal": "textures/sock_tiled_normal.png",
+        "thickness": "textures/cf_panst_02_t.png",
+        "fur_layer": "textures/Substance_graph_FurLayer.png",
+        "sdf_lut": "textures/SDFLut.png"
       },
       "uniforms": {
-        "rampStrength": 1.0,
-        "useSDF": 0.0
+        "uvScale": 3000.0,
+        "sockLength": 0.75,
+        "cuffLength": 0.03,
+        "transmissionWeight": 0.3,
+        "subsurfaceWeight": 0.4,
+        "roughness": 0.35,
+        "tensionIntensity": 0.8,
+        "thicknessAdjust": 0.0,
+        "uvRatio": 0.3,
+        "anisotropicRotation": 0.75
       }
     },
     "胖次_丝袜": {
-      "preset": "sr_clothes",
+      "preset": "sr_stocking",
       "textures": {
         "color": "textures/Body3.png",
-        "ilm": "textures/LightMap.png",
-        "warm_ramp": "textures/Avatar_Hyacine_00_Body_Warm_Ramp.png",
-        "cool_ramp": "textures/Avatar_Hyacine_00_Body_Cool_Ramp.png",
-        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+        "sock_sdf": "textures/sock_tiled_sdf.png",
+        "sock_direction": "textures/sock_tiled_direction.png",
+        "sock_normal": "textures/sock_tiled_normal.png",
+        "thickness": "textures/cf_panst_07_t.png",
+        "fur_layer": "textures/Substance_graph_FurLayer.png",
+        "sdf_lut": "textures/SDFLut.png"
       },
       "uniforms": {
-        "rampStrength": 1.0,
-        "useSDF": 0.0
+        "uvScale": 3000.0,
+        "sockLength": 0.75,
+        "cuffLength": 0.03,
+        "transmissionWeight": 0.3,
+        "subsurfaceWeight": 0.4,
+        "roughness": 0.35,
+        "tensionIntensity": 0.8,
+        "thicknessAdjust": 0.0,
+        "uvRatio": 0.3,
+        "anisotropicRotation": 0.75
       }
     },
     "目影": {
-      "preset": "sr_clothes",
-      "textures": {
-        "color": "textures_blender/Avatar_Hyacine_00_Face_Color.png_001",
-        "ilm": "textures/LightMap.png",
-        "warm_ramp": "textures/Avatar_Hyacine_00_Body_Warm_Ramp.png",
-        "cool_ramp": "textures/Avatar_Hyacine_00_Body_Cool_Ramp.png",
-        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
-      },
+      "preset": "sr_eyeshadow",
+      "textures": {},
       "uniforms": {
-        "rampStrength": 1.0,
-        "useSDF": 0.0
+        "alpha": 0.7786
       }
     },
     "bell": {
@@ -1439,17 +1464,27 @@
       }
     },
     "吊帶襪": {
-      "preset": "sr_clothes",
+      "preset": "sr_stocking",
       "textures": {
         "color": "textures/吊带袜.png",
-        "ilm": "textures/neutral_lightmap.png",
-        "warm_ramp": "textures/Avatar_Hyacine_00_Body_Warm_Ramp.png",
-        "cool_ramp": "textures/Avatar_Hyacine_00_Body_Cool_Ramp.png",
-        "matcap": "textures/Avatar_Tex_MetalMap_2.png"
+        "sock_sdf": "textures/sock_tiled_sdf.png",
+        "sock_direction": "textures/sock_tiled_direction.png",
+        "sock_normal": "textures/sock_tiled_normal.png",
+        "thickness": "textures/cf_panst_07_t.png",
+        "fur_layer": "textures/Substance_graph_FurLayer.png",
+        "sdf_lut": "textures/SDFLut.png"
       },
       "uniforms": {
-        "rampStrength": 1.0,
-        "useSDF": 0.0
+        "uvScale": 3000.0,
+        "sockLength": 0.75,
+        "cuffLength": 0.03,
+        "transmissionWeight": 0.3,
+        "subsurfaceWeight": 0.4,
+        "roughness": 0.35,
+        "tensionIntensity": 0.8,
+        "thicknessAdjust": 0.0,
+        "uvRatio": 0.3,
+        "anisotropicRotation": 0.75
       }
     },
     "胖次": {

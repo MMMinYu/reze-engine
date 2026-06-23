@@ -2,6 +2,8 @@
 // facing-rim mask drives a Mix Shader between an HSV-boosted emission and a sheen
 // Principled BSDF. Wyman hashed-alpha testing replaces the graph's Alpha=0.95 (which
 // would require TAA to hide the dither dots across every pixel).
+//
+// 增强: 透肉（fresnel 驱动皮肤透出）+ 织物纹理（程序化编织法线扰动）
 
 import { NODES_WGSL } from "./nodes"
 import { COMMON_MATERIAL_PRELUDE_WGSL } from "./common"
@@ -21,6 +23,46 @@ const STOCK_SHEEN_TINT: f32 = 0.5;
 const STOCK_RAMP002_P1: f32 = 0.9565;  // EASE [0→black, 0.9565→white]
 const STOCK_RAMPFACE_P1: f32 = 0.5435; // EASE [0→black, 0.5435→white]
 const STOCK_LW_BLEND: f32 = 0.4;       // Layer Weight Blend
+
+// ── 透肉 (sheer / skin-show-through) ──
+// Fresnel-driven skin undertone: at glancing angles, the stocking becomes
+// translucent and reveals warm skin color underneath.
+const SHEER_FACING_BLEND: f32 = 0.6;   // fresnel falloff sharpness
+const SHEER_STRENGTH: f32 = 0.45;      // max skin-through at edge (0=none, 1=full skin)
+const SKIN_UNDERTONE: vec3f = vec3f(0.98, 0.85, 0.76);  // warm skin tint
+
+// ── 织物纹理 (fabric weave bump) ──
+const FABRIC_SCALE: f32 = 90.0;        // threads per UV unit — lower = coarser weave
+const FABRIC_BUMP_STRENGTH: f32 = 0.22; // bump perturbation strength
+
+// ── 1. 程序化编织纹理 ──
+// Generates a fine over-under woven fabric height field from UV.
+// Returns 0–1 height where raised threads = 1, gap between threads = 0.
+fn fabric_weave_height(uv: vec2f) -> f32 {
+  let su = uv * FABRIC_SCALE;
+  // Thread bands via smoothstep on fractional UV — raised where near thread center
+  let tw = 0.35;  // thread half-width relative to pitch
+  let uf = abs(fract(su.x) - 0.5);
+  let vf = abs(fract(su.y) - 0.5);
+  let warp_h = 1.0 - smoothstep(0.5 - tw, 0.5, uf);
+  let weft_h = 1.0 - smoothstep(0.5 - tw, 0.5, vf);
+  // Weave: max of warp and weft heights — raised where either thread present
+  var weave = max(warp_h, weft_h);
+  // Micro-irregularity from noise to break up perfect periodicity
+  let micro = _noise3(vec3f(su * 0.4, 0.3)) * 0.15;
+  weave = saturate(weave + micro);
+  return weave;
+}
+
+// ── 2. 透肉 (sheer) factor ──
+// Returns 0 (opaque stocking) to 1 (max skin showing through).
+// Concentrated on grazing angles via facing-ratio fresnel.
+fn sheer_factor(n: vec3f, v: vec3f) -> f32 {
+  // layer_weight_facing: 0 = facing center, 1 = edge-on
+  let facing = layer_weight_facing(SHEER_FACING_BLEND, n, v);
+  // Remap so sheer only kicks in at mid-to-edge range
+  return smoothstep(0.35, 1.0, facing);
+}
 
 // Wyman & McGuire "Hashed Alpha Testing" (2017) — world-space hash with derivative-aware
 // pixel-scale selection, matches Blender EEVEE prepass_frag.glsl::hashed_alpha_threshold.
@@ -79,6 +121,17 @@ fn ramp_ease_s(f: f32, p0: f32, p1: f32) -> f32 {
   let combined_alpha = material.alpha * tex_s.a;
   if (combined_alpha < hashed_alpha_threshold(input.worldPos)) { discard; }
 
+  // ═══ 织物纹理 BUMP ═══
+  // Generate procedural woven fabric height and perturb the normal before lighting.
+  let fabric_h = fabric_weave_height(input.uv);
+  let n_fabric = bump_lh(FABRIC_BUMP_STRENGTH, fabric_h, n, input.worldPos);
+
+  // ═══ 透肉 (SHEER) ═══
+  // Fresnel-driven skin-show-through: at glancing angles the stocking appears
+  // more translucent, revealing a warm skin undertone tinted by the fabric color.
+  let sheer = sheer_factor(n_fabric, v);
+  let sheer_color = mix(tex_rgb, tex_rgb * SKIN_UNDERTONE, sheer * SHEER_STRENGTH);
+
   // ═══ NPR MASK ═══ TEX_COORD.Generated → Mapping(Rot=0,π/2,π/2, Loc=(1,1,1)) → Gradient.
   // The Blender mapping reduces to gradient.x = 1 - input.y (rot swaps axes, loc offsets).
   // We approximate Generated with UV since Y-up PMX has no object bbox in pipeline state.
@@ -90,7 +143,8 @@ fn ramp_ease_s(f: f32, p0: f32, p1: f32) -> f32 {
   let ramp001 = 1.0 - abs(2.0 * gradient - 1.0);
   let ramp002 = ramp_ease_s(ramp001, 0.0, STOCK_RAMP002_P1);
 
-  let facing = layer_weight_facing(STOCK_LW_BLEND, n, v);
+  // Facing mask computed with fabric-bumped normal for consistent detail
+  let facing = layer_weight_facing(STOCK_LW_BLEND, n_fabric, v);
   let ramp_face = ramp_ease_s(facing, 0.0, STOCK_RAMPFACE_P1);
 
   // Mix.001: MIX blend Fac=0.5, A=white, B=ramp_face
@@ -100,12 +154,14 @@ fn ramp_ease_s(f: f32, p0: f32, p1: f32) -> f32 {
   let mask = mix(mix001, lighten, 0.5);
 
   // ═══ EMISSION SHADER ═══ Hue=0.5 (identity), Sat=1.0, Val=5.0 (5× brightness), Fac=1.
-  let emission = hue_sat_id(1.0, 5.0, 1.0, tex_rgb);
+  // Uses sheer_color so emission also carries the skin-through tint.
+  let emission = hue_sat_id(1.0, 5.0, 1.0, sheer_color);
 
   // ═══ PRINCIPLED BSDF with sheen ═══ metallic=0.1, sheen=0.7, sheen_tint=0.5.
+  // Evaluated with fabric-bumped normal for surface detail, and sheer_color for skin tint.
   let principled = eval_principled(
-    PrincipledIn(tex_rgb, STOCK_METALLIC, STOCK_SPECULAR, STOCK_ROUGHNESS, 1e30, STOCK_SHEEN, STOCK_SHEEN_TINT),
-    n, l, v, sun, amb, shadow
+    PrincipledIn(sheer_color, STOCK_METALLIC, STOCK_SPECULAR, STOCK_ROUGHNESS, 1e30, STOCK_SHEEN, STOCK_SHEEN_TINT),
+    n_fabric, l, v, sun, amb, shadow
   );
 
   // MIX SHADER: Shader=Emission, Shader_001=Principled, Fac=mask

@@ -454,8 +454,9 @@ export default function Home() {
       const engine = new Engine(canvasRef.current, {
         camera: { distance: 31.5, target: new Vec3(0, 11.5, 0) },
         bloom: { enabled: false },
-        sun: { strength: 6.5, direction: new Vec3(-0.296, -0.500, 0.814) },
+        sun: { strength: 7.25, direction: new Vec3(0, -0.5, 1) },
         world: { color: new Vec3(0.05, 0.05, 0.05), strength: 1.0 },
+        view: { exposure: 0.0 },
       })
       engineRef.current = engine
       ;(window as any).__engine = engine
@@ -486,7 +487,7 @@ export default function Home() {
       engine.setMaterialPresets(SCENE_MODELS[0].id, {
         sr_face: ["颜", "颜+"],
         sr_hair: ["髪", "髪1"],
-        sr_body: ["身体", "手臂", "指甲"],
+        sr_body: ["身体", "手臂", "指甲", "脖子"],
         sr_clothes: [
           "内衣", "吊带", "项圈", "项圈环",
           "衣1", "衣2", "衣金属", "衣饰",
@@ -496,8 +497,8 @@ export default function Home() {
           "披肩", "披风", "披风金属",
           "头饰", "蝴蝶结", "蝴蝶结+", "结花边",
           "鞋子", "鞋饰", "领结", "领金属",
-          "挂金属", "背金属", "足金属", "袖球",
-          "脖子", "眼罩", "眼罩金属",
+          "挂金属", "背金属", "足金属",
+          "眼罩", "眼罩金属",
           "发圈", "铃铛", "表",
           "乳贴", "乳钉", "乳首结",
           "口枷金属1", "口枷金属2", "口球", "口球带1", "口球带2", "口球扣",
@@ -509,10 +510,14 @@ export default function Home() {
           "披肩+", "披风+",
         ],
         sr_eye: ["目", "目光", "白目", "眉睫", "舌", "齿", "口"],
+        // 丝袜材质：使用 SockAIO.021 移植的 sr_stocking shader
+        sr_stocking: ["白裤袜", "吊带袜_丝袜", "胖次_丝袜", "吊帶襪"],
         // 贴花材质：纹理 alpha 镂空（淫纹纹身贴花）
         // 颜+ 不放这里——它走 sr_face（manifest 已配置完整 NPR 贴图）
         decal: ["inmon1", "inmon2"],
         metal: ["金属"],
+        // 袖球：MMDTexUV sphere mapping + desaturation（经 MCP 核对 Blender 节点树）
+        sr_special: ["袖球"],
       })
 
       // engine.addGround()

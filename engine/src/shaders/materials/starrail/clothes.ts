@@ -78,8 +78,9 @@ ${STARRAIL_PRELUDE_WGSL}
   let alpha = srMaterial.alpha;
   if (alpha < 0.001) { discard; }
 
-  // 法线翻转：内层面料的法线指向体内，翻转后正确光照
-  let n = -normalize(input.normal);
+  // 经 MCP 核对 Blender: 内层 mesh 法线本来就朝内（背向相机），
+  // Blender shader 不翻转法线。引擎与 Blender 保持一致，不翻转。
+  let n = normalize(input.normal);
   let v = normalize(camera.viewPos - input.worldPos);
   let l = -light.lights[0].direction.xyz;
 

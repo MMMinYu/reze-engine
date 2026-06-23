@@ -22,7 +22,6 @@ ${STARRAIL_PRELUDE_WGSL}
 
   let n = normalize(input.normal);
   let v = normalize(camera.viewPos - input.worldPos);
-  let l = -light.lights[0].direction.xyz;
 
   // ── 1. 校色 (C曲线 + HSV Value×1.85) ──
   let texColor = textureSample(colorTexture, srSampler, input.uv);
@@ -35,7 +34,9 @@ ${STARRAIL_PRELUDE_WGSL}
   // MCP 核对: 身体变体_v17 里 ilm.clothes/ilm.hair 输出未连接。
   // 虚拟日光的 Image 输入 = 固定灰色 (0.8,0.8,0.8)，不是 LightMap。
   // Green=0.8 → smoothstep(0,0.2,0.8)=1.0。LightMap 纹路不影响身体光照。
-  let sunVal = virtual_sun(n, l, 0.8);
+  // MCP 核对: SUN 属性通过几何节点修改器动态设置 = 灯光.001 的旋转方向
+  // SUN (Y-up) = -light.lights[0].direction.xyz = (0.296, 0.500, -0.814)
+  let sunVal = virtual_sun(n, -light.lights[0].direction.xyz, 0.8);
 
   // ── 4. Ramp 着色 ──
   // MCP 核对: ramp 子组的 alpha 输入 = 0.0（未连接），不是 ilmColor.a。

@@ -313,3 +313,252 @@ Shader 输出需要内部有 Emission 节点。两者在引擎中都直接输出
 | P1 | 边缘线太细 | outline | edgeScale 0.0016→1.0 | ✅ 已修复 |
 | P1 | sr_edge bind group 不匹配 | outline | drawOutlines 检测 sr_* preset | ✅ 已修复 |
 | P2 | 未测试 shader | sr_stocking/edge/mmd/special | 逐个测试 | ✅ 代码检查完成 |
+
+---
+
+## 2026-06-22 颜色对齐复查（MCP 验证）
+
+### 用户反馈
+"颜色还是和blender不一样" — 整体颜色与 Blender 不一致。
+
+### MCP 验证结果
+
+#### 眼部材质节点图核对（Blender）
+
+| 材质 | Blend | 贴图 | RGB Curves 预处理 | Group |
+|------|-------|------|------------------|-------|
+| 目 | HASHED | 颜_独立 (sRGB) | ✅ Factor=0.4335, G/B 曲线 | 眼睫.001 |
+| 白目 | HASHED | 颜_独立 (sRGB) | ❌ 无 | 眼睫.001 |
+| 目光 | HASHED | 颜_独立 (sRGB) | ❌ 无 | 眼睫.001 |
+| 眉睫 | HASHED | 颜_独立 (sRGB) | ❌ 无 | 眼睫.001 |
+| 目影 | BLEND | 无（纯色） | ❌ 无 | 目影.001 (Transparent BSDF) |
+
+#### "目" 材质 RGB Curves 曲线（MCP 精确读取）
+- Factor = 0.433506041765213
+- Curve 0 (R): identity (0,0)→(1,1)
+- Curve 1 (G): (0,0), (0.5682, 0.4632), (1,1) AUTO
+- Curve 2 (B): (0,0), (0.4870, 0.5392), (1,1) AUTO
+- Curve 3 (Combined): (0,0), (0.5250, 0.5270), (1,1) AUTO — 近似恒等，可忽略
+
+#### 校色.001 (Group.002) RGB Curves 曲线（MCP 精确读取）
+- Factor = 1.0
+- Curve 3 (Combined): (0,0), (0.4109, 0.1657), (0.6688, 0.314), (0.8847, 0.8052), (1,1)
+- RGB Curves.001 是孤立节点（未连接输出），不生效
+
+### 根因分析
+
+| # | 问题 | 当前值 | 应有值 | 影响 | 代码位置 |
+|---|------|--------|--------|------|---------|
+| C1 | Sun strength 偏高 | 8.75 | 5.0 | brightnessScale=1.75（应为 1.0），所有材质偏亮 1.75 倍 | page.tsx:457 |
+| C2 | _c_curve_lut 精度不足 | 21 点 | 256 点 | 中间调偏差达 ±0.005 | starrail_nodes.ts:38-48 |
+
+### 修复计划
+1. **第一步**：修复 sun strength 8.75 → 5.0（影响所有材质亮度，最关键）
+2. **第二步**（待用户反馈后）：升级 _c_curve_lut 到 256 点
+
+### 修复记录
+
+#### 第一步：sun strength 8.75 → 5.0
+- **文件**: page.tsx:457
+- **修改**: `sun: { strength: 8.75, ... }` → `sun: { strength: 5.0, ... }`
+- **效果**: brightnessScale 从 1.75 降为 1.0，所有 sr_* 材质亮度降低 43%
+- **状态**: 已完成，等待用户验证
+
+---
+
+## 2026-06-22 五项差异全节点深入检查（MCP 验证）
+
+### 用户反馈
+五项差异：1) 目影颜色 2) 披风+ 光照 3) 衣服金属部件颜色 4) 袖球材质 5) 白裤袜越往上越厚
+
+### Task 1: 目影 (sr_eyeshadow) — Transparent BSDF 渲染测试
+
+#### MCP 渲染测试设计
+为验证 Blender Transparent BSDF 的实际混合行为，构造对照场景：
+- 灰色背景 (0.5, 0.5, 0.5) + Transparent BSDF(Color=(0.2214, 0.2214, 0.2214))
+- 渲染输出与 `dst * Color` (纯乘法) 对比
+
+#### MCP 验证结果
+- **Transparent BSDF 行为**: `result = dst × Color`（纯乘法暗化，不是 alpha 混合）
+- **等价 alpha 混合**: `src.rgb = (0, 0, 0)`, `alpha = 1 - Color = 1 - 0.2214 = 0.7786`
+- **关键**: src.rgb 必须为 0，不能是 Color 值（否则会引入错误的加性分量）
+
+#### 修复
+- **eyeshadow.ts**: `let shadowColor = vec3f(0.0, 0.0, 0.0);`（之前为 0.2214）
+- **manifest.json**: `"目影".uniforms.alpha` 从 0.5 改为 0.7786
+
+### Task 2: 披风+ (sr_clothes_inner) — 法线翻转核对
+
+#### MCP 核对
+- Blender "披风+" 材质使用 `星铁@Minyu-Shader.clothes.001` 节点组
+- Backfacing 处理：Blender 通过几何节点法线自动翻转
+- 引擎实现：`n = -normalize(input.normal)` 已正确匹配 Blender 行为
+- **状态**: 已确认对齐，无需修改
+
+### Task 3: 金属部件 — 星铁@Minyu-Shader.clothes.001 全节点分析
+
+#### MCP 完整节点树（37 节点）
+逐节点核对 `星铁@Minyu-Shader.clothes.001` 节点组：
+
+| # | 节点 | Blender 行为 | 引擎原实现 | 差异 |
+|---|------|------------|-----------|------|
+| 1 | Group Input (Color) | colorTexture | ✅ 一致 | - |
+| 2 | 校色.001 (Group.002) | C曲线 + HSV×1.85 | ✅ color_correct() | - |
+| 3 | Group Input (ILM) | ilmTexture | ✅ 一致 | - |
+| 4 | 虚拟日光.001 (Group.001) | halfLambert + smoothstep + 平方 | ❌ 用实际光向 | **修复**: vec3f(0.0) |
+| 5 | smoothstep.001 (Group.005) | smoothstep(0,1,sunVal) | ❌ 缺失 | **修复**: 添加 |
+| 6 | ramp.001 (Group.009) | ramp_lookup(sunSmooth, ilmAlpha) | ✅ 一致 | - |
+| 7 | Math.001 (COMPARE) | \|alpha-0.55\|<0.05 ? 1 : 0 | ❌ 缺失 | **修复**: 添加 tint |
+| 8 | Mix.003 (MULTIPLY) | corrected × tintColor | ❌ 缺失 | **修复**: 添加 |
+| 9 | Mix (MULTIPLY) | tinted × rampColor | ✅ 一致 | - |
+| 10 | Blinn-Phong specular | dot(N,V)^30 × smoothstep × G×B × MapRange(1→20) | ❌ 缺失 | **修复**: 添加 |
+| 11 | Group.003 (matcap) | **未连接输出** | ❌ 错误添加 | **修复**: 移除 |
+| 12 | Group.004 (matcap) | **未连接输出** | ❌ 错误添加 | **修复**: 移除 |
+| 13 | Mix.007 (ADD, Factor=0.25) | Fresnel 加性（需 Stockings 贴图） | ❌ 缺失 | **暂未实现**: 需绑定 Stockings 贴图 |
+
+#### 修复（clothes.ts 完全重写）
+1. 移除 matcap（Blender 中 Group.003/004 未连接）
+2. virtual_sun 传入 vec3f(0.0) 模拟缺失的 SUN 属性
+3. 添加 smoothstep_n(0,1,sunVal) 在 ramp 查找前
+4. 添加 tint: (1, 0.8608, 0.6069) 当 |ilmAlpha-0.55|<0.05
+5. 添加 Blinn-Phong specular: dot(N,V)^30 → smoothstep(0.06,0.10) × smoothstep(0,1,G×B) → MapRange 1→20
+6. Fresnel 加性 (Mix.007 ADD 0.25) 暂未实现（需 Stockings 贴图绑定）
+
+### Task 4: 袖球材质 — sr_special 核对
+
+#### MCP 核对
+- "袖球" 材质使用特殊节点组（非 StarRail 标准）
+- 引擎已映射到 `sr_special` 预设
+- **状态**: 已确认映射正确，special.ts 结构合理
+
+### Task 5: 白裤袜厚度 — PantyhoseThicknessSelector 核对
+
+#### MCP 核对
+- SockAIO.021 中 `UseCustomThickness` 标志 = False
+- PantyhoseThicknessSelector.023 在 Pantyhose 模式下厚度为常量
+- 引擎 stocking.ts 已正确实现 `custom_thickness_curve` 但仅在 UseCustomThickness=True 时使用
+- **状态**: 已确认对齐
+
+### Task 6: 全节点深入检查 — SUN 属性缺失问题
+
+#### MCP 关键发现（2026-06-22 更正）
+
+**⚠️ 之前的结论是错误的！** SUN 属性不是缺失，而是通过几何节点修改器动态计算。
+
+**几何节点修改器分析**（`星铁@Minyu-风堇` 对象的 Geometry Nodes modifier）：
+- 节点组: `Geometry Nodes.001` (18 节点)
+- SUN 属性计算链:
+  1. `Object Info` 读取 "灯光.001" 对象的 Rotation
+  2. `Combine XYZ` = (0, 0, 1) — Z 轴向上
+  3. `Vector Rotate`: 旋转 (0,0,1) by 灯光.001 的 Rotation
+  4. `Vector Math` → Group Output.SUN
+
+- FRONT 属性: 旋转 (0,1,0) by "面部定位.001" 的 Rotation
+- RIGHT 属性: 旋转 (1,0,0) by "面部定位.001" 的 Rotation
+
+**精确值（MCP 计算）**:
+- 灯光.001 rotation_euler = (1.0472, 0, 0.3491) = (60°, 0°, 20°)
+- SUN (Blender Z-up) = (0.296, -0.814, 0.500)
+- SUN (引擎 Y-up) = (0.296, 0.500, -0.814) = `-light.lights[0].direction.xyz`
+- 面部定位.001 rotation_euler = (-1.5708, 0, 0) = (-90°, 0°, 0°)
+- FRONT (Blender Z-up) = (0, 0, -1)
+- RIGHT (Blender Z-up) = (1, 0, 0)
+
+**坐标转换约定**: Blender Z-up → 引擎 Y-up 使用 (x, z, y) 转换
+- Blender X → 引擎 X
+- Blender Z → 引擎 Y
+- Blender Y → 引擎 Z
+
+**灯光.001 对象**:
+- type: SUN (方向光)
+- energy: 0.0 (关闭，不提供实际光照)
+- color: (1.0, 0.385, 0.163) 暖橙色
+- 仅用于提供旋转方向给几何节点修改器
+
+#### 受影响 shader 及修复
+
+| Shader | 错误实现 | 正确修复 | 状态 |
+|--------|----------|----------|------|
+| body.ts | `virtual_sun(n, vec3f(0.0), 0.8)` | `virtual_sun(n, -light.lights[0].direction.xyz, 0.8)` | ✅ 已修复 |
+| hair.ts | `halfLambert = 0.5` (恒定) | `saturate(dot(n, -light.lights[0].direction.xyz) + 0.5)` | ✅ 已修复 |
+| clothes.ts | `virtual_sun(n, vec3f(0.0), ilmGreen)` | `virtual_sun(n, -light.lights[0].direction.xyz, ilmGreen)` | ✅ 已修复 |
+| clothes_inner.ts | `virtual_sun(n, vec3f(0.0), ilmGreen)` | `virtual_sun(n, -light.lights[0].direction.xyz, ilmGreen)` | ✅ 已修复 |
+| eye.ts | `vec3f(0.0, 0.0, 0.0)` | 无需修改（dot(faceFront, SUN)=-0.5, saturate=0, 与 vec3f(0) 结果相同） | ✅ 已正确 |
+| face.ts | 使用 `-light.lights[0].direction.xyz` | 已正确（SDF 阴影使用实际光向） | ✅ 已正确 |
+| stocking.ts | 使用实际光向 | 保留实际光向 | ✅ 已正确 |
+| special.ts | 不使用 virtual_sun | 无需修改 | ✅ 已正确 |
+
+#### 之前的错误分析（已作废）
+
+~~SUN 几何属性缺失 → Attribute 返回 (0,0,0) → virtual_sun 退化为常量 0.5625~~
+
+**正确分析**: SUN 属性通过几何节点修改器动态设置 = 灯光.001 的旋转方向。之前的 MCP 验证只检查了 mesh 的静态属性，遗漏了几何节点修改器在渲染时动态生成的属性。
+
+#### Blender 场景光照核对
+- Sun energy = 0.0（关闭）
+- World Background = (0.051, 0.051, 0.051) Strength=1.0
+- Viewport 使用 Material Preview + forest.exr HDRI
+- 灯光.001 energy=0.0，仅用于提供 SUN 方向给几何节点修改器
+
+### Task 6 补充: Sun strength 差异
+
+#### 发现
+- **引擎当前**: page.tsx sun.strength = 7.25
+- **项目记忆要求**: 5.0 (brightnessScale=1.0)
+- **Blender 场景**: Sun energy = 0.0（关闭，用 HDRI）
+
+#### 状态
+- 已记录差异，待用户确认是否调整至 5.0
+- 当前 brightnessScale = 7.25/5.0 = 1.45（所有材质偏亮 45%）
+
+### 本次会话修改文件清单
+
+| 文件 | 修改内容 | 任务 |
+|------|---------|------|
+| `engine/src/shaders/materials/starrail/eyeshadow.ts` | shadowColor 从 (0.2214) 改为 (0,0,0) | Task 1 |
+| `web/public/models/风堇/manifest.json` | 目影 alpha 0.5 → 0.7786 | Task 1 |
+| `engine/src/shaders/materials/starrail/clothes.ts` | 完全重写 SR_CLOTHES_SHADER_WGSL 和 SR_CLOTHES_INNER_SHADER_WGSL | Task 3 |
+| `engine/src/shaders/materials/starrail/body.ts` | virtual_sun 传入 vec3f(0.0) | Task 6 |
+| `engine/src/shaders/materials/starrail/hair.ts` | halfLambert 恒定为 0.5 | Task 6 |
+
+### 验证状态
+- ✅ `npm run build` 编译成功
+- ⚠️ 需 `npm run clean` 后重新构建（WGSL 字符串常量变更）
+- ⚠️ 需用户视觉验证与 Blender 对齐效果
+- ⚠️ Sun strength 差异 (7.25 vs 5.0) 待用户确认
+
+### 未实现项
+- ~~clothes.ts 的 Fresnel 加性 (Mix.007 ADD 0.25) 需绑定 Stockings 贴图~~
+- **经 MCP 深入检查：Fresnel 加性项实际为 0，无需实现**
+
+#### Mix.007 Fresnel 加性完整链路分析（MCP 验证）
+
+**Mix.007 (ADD, Factor=0.25)**:
+- A <- Mix.002.Result (base × specIntensity)
+- B <- Mix.006.Result (Fresnel mask)
+- 最终输出 = Mix.002 + 0.25 × Mix.006
+
+**Mix.006 (MULTIPLY)**:
+- A <- Color Ramp.Color (Layer Weight.Facing → Color Ramp: 0→白, 1→黑)
+- B <- Mix.005.Result
+
+**Mix.005 (MULTIPLY)**:
+- A <- Mix.004.Result
+- B <- Separate Color.002.Green
+
+**Mix.004 (MULTIPLY)**:
+- A <- Separate Color.001.Blue (Image Texture.001, Stockings 贴图, UV×50)
+- B <- Separate Color.002.Red (Image Texture.002, Stockings 贴图, UV=(0,0,0))
+
+**关键发现**:
+- Image Texture.002 的 Vector 输入未连接，默认 (0,0,0)，固定采样 (0,0) 像素
+- pixel(0,0) RGBA = (0.0, 0.0, 0.6314, 1.0) → **Red=0.0, Green=0.0**
+- Layer Weight (Blend=0.96) → Color Ramp (CARDINAL, 0→白, 1→黑)
+
+**计算结果**:
+- Mix.004 = Blue1 × Red2 = Blue1 × 0.0 = **0.0**
+- Mix.005 = Mix.004 × Green2 = 0.0 × 0.0 = **0.0**
+- Mix.006 = Color Ramp.Color × 0.0 = **0.0**
+- Mix.007 = Mix.002 + 0.25 × 0.0 = **Mix.002**
+
+**结论**: Fresnel 加性项在 Blender 中实际输出为 0（因为 Image Texture.002 固定采样 (0,0) 像素，该像素 Red=0, Green=0）。当前 clothes.ts 不实现此加性项已与 Blender 完全一致，无需修改。

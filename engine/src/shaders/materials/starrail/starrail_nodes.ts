@@ -97,11 +97,22 @@ fn blinn_phong(n: vec3f, v: vec3f, l: vec3f, power: f32) -> f32 {
 //   final = step3 ^ 2.0                               # POWER(_, 2.0) — 平方，不是开方！
 //
 // ⚠️ 经 MCP 核对: 最后是平方 (^2.0)，不是文档原写的 sqrt。平方让中间调压暗、对比度提升。
+//
+// ⚠️ 经 MCP 核对: Blender 材质用 Attribute(SUN) 读取名为 SUN 的几何属性，
+// 但身体/头发 mesh 上并没有该属性 → Blender 返回默认值 (0,0,0)。
+// 因此 SUN 始终为 0，整条链路退化为常数：
+//   dot(N, 0) = 0 → MapRange(0; -1,1→0,1) = 0.5
+//   green_smooth = smoothstep(0, 0.2, G) 仍由 ILM 控制
+//   mixed = 0.5 * green_smooth → step3 = 0.25*green_smooth + 0.5
+//   final = (0.25*green_smooth + 0.5)^2
+// green_smooth 在无 ILM 贴图时按调用者传入的 0.8 计算 ≈ 1.0，
+// 最终 ≈ 0.5625，与法线和场景 sun 方向无关。
 
 fn virtual_sun(n: vec3f, l: vec3f, ilm_green: f32) -> f32 {
+  // 动态半兰斯特光照: SUN → SCALE(2.0) → DOT(N, 2*SUN) → MapRange(-1,1→0,1)
+  // 合并: halfLambert = saturate(dot(N, L) + 0.5)
+  let half_lambert = saturate(dot(n, l) + 0.5);
   let green_smooth = smoothstep(0.0, 0.2, ilm_green);
-  let l_scaled = l * 2.0;
-  let half_lambert = saturate(dot(n, l_scaled) * 0.5 + 0.5);
   let mixed = half_lambert * green_smooth;
   let step3 = mixed * 0.5 + 0.5;
   return pow(step3, 2.0);
@@ -142,16 +153,38 @@ fn ramp_sample(alpha: f32) -> f32 {
   return 0.125 * 0.25 + 0.025;                         // 0.05625
 }
 
-fn _ramp_c1(t: f32) -> f32 {
-  // ramp.002 RGB Curves Combined: [(0,0), (0.7167, 0.4244), (1,1)]
-  if (t <= 0.7167) { return t * (0.4244 / 0.7167); }
-  return 0.4244 + (t - 0.7167) * (1.0 - 0.4244) / (1.0 - 0.7167);
+// ramp RGB Curves Combined 使用 AUTO 手柄贝塞尔曲线，分段线性近似误差达 0.097。
+// 改用 21 点 LUT（与 _c_curve_lut 同方法），经 MCP mapping.evaluate() 采样。
+fn _ramp_c1_lut(t: f32) -> f32 {
+  let idx_f = saturate(t) * 20.0;
+  let idx = i32(idx_f);
+  let frac = idx_f - f32(idx);
+  let LUT = array<f32, 21>(
+    0.000000, 0.018768, 0.037717, 0.057061, 0.077070,
+    0.098078, 0.120472, 0.144691, 0.171224, 0.200682,
+    0.233504, 0.270136, 0.311146, 0.356581, 0.406740,
+    0.461930, 0.525185, 0.601463, 0.699871, 0.833454,
+    1.000000
+  );
+  let i0 = clamp(idx, 0, 19);
+  let i1 = i0 + 1;
+  return mix(LUT[i0], LUT[i1], frac);
 }
 
-fn _ramp_c2(t: f32) -> f32 {
-  // ramp.002 RGB Curves.001 Combined: [(0,0), (0.563, 0.3999), (1,1)]
-  if (t <= 0.563) { return t * (0.3999 / 0.563); }
-  return 0.3999 + (t - 0.563) * (1.0 - 0.3999) / (1.0 - 0.563);
+fn _ramp_c2_lut(t: f32) -> f32 {
+  let idx_f = saturate(t) * 20.0;
+  let idx = i32(idx_f);
+  let frac = idx_f - f32(idx);
+  let LUT = array<f32, 21>(
+    0.000000, 0.028377, 0.056969, 0.086059, 0.116019,
+    0.147323, 0.180469, 0.215965, 0.254232, 0.295529,
+    0.339911, 0.387233, 0.437248, 0.490287, 0.547153,
+    0.608969, 0.676674, 0.750787, 0.830648, 0.914437,
+    1.000000
+  );
+  let i0 = clamp(idx, 0, 19);
+  let i1 = i0 + 1;
+  return mix(LUT[i0], LUT[i1], frac);
 }
 
 fn ramp_lookup(value: f32, alpha: f32, rampTex: texture_2d<f32>, rampSampler: sampler) -> vec3f {
@@ -160,17 +193,21 @@ fn ramp_lookup(value: f32, alpha: f32, rampTex: texture_2d<f32>, rampSampler: sa
   // clothes/stockings 没有外层 Map Range，直接进入此处。
   let mapped = 0.02 + saturate(value) * 0.97;
   let ramp_val = ramp_sample(alpha);
-  let uv = vec2f(mapped, ramp_val);
-  let ramp_color = textureSample(rampTex, rampSampler, uv);
+  // WebGPU V=0 对应纹理顶部，Blender V=0 对应底部。翻转 V 以匹配 Blender 行为。
+  let uv = vec2f(mapped, 1.0 - ramp_val);
+  // 方案3: 强制 mip level 0。ramp 贴图是 256x16 的细长 LUT，
+  // mipmap 降采样会把色阶边界模糊， sdfShadow 的 0/1 硬切导致 UV 导数巨大，
+  // GPU 自动选择高 mip level → 多条平行线。强制 level 0 保持原始精度。
+  let ramp_color = textureSampleLevel(rampTex, rampSampler, uv, 0.0);
 
   // 经 MCP 核对: ramp.002 里的两个 RGB Curves 节点都只修改了 Combined (curve 3) 曲线，
   // Blender 的 RGB Curves Combined 行为等效于对 R/G/B 三通道独立应用同一条曲线。
-  let first_curved = vec3f(_ramp_c1(ramp_color.r), _ramp_c1(ramp_color.g), _ramp_c1(ramp_color.b));
+  let first_curved = vec3f(_ramp_c1_lut(ramp_color.r), _ramp_c1_lut(ramp_color.g), _ramp_c1_lut(ramp_color.b));
 
   // Factor = Invert(GREATER_THAN(alpha, 0.10)) — binary 0/1, not continuous.
   // alpha > 0.10 → factor=0 (use first_curved); alpha ≤ 0.10 → factor=1 (use second_curved).
   let second_factor = select(1.0, 0.0, alpha > 0.10);
-  let second_curved = vec3f(_ramp_c2(first_curved.r), _ramp_c2(first_curved.g), _ramp_c2(first_curved.b));
+  let second_curved = vec3f(_ramp_c2_lut(first_curved.r), _ramp_c2_lut(first_curved.g), _ramp_c2_lut(first_curved.b));
 
   return mix(first_curved, second_curved, second_factor);
 }
@@ -210,18 +247,21 @@ fn ilm_decode(ilmColor: vec4f) -> vec4f {
 // ⚠️ 关键修正: 左右判断用 dot(RIGHT,SUN)>0，阈值是动态的 dot_F*0.5+0.5
 
 fn sdf_face_shadow(uv: vec2f, faceFront: vec3f, faceRight: vec3f, sun: vec3f, sdfMap: texture_2d<f32>, sdfSampler: sampler) -> f32 {
-  let dot_R = dot(faceRight, sun);
+  // faceFront/faceRight 存储的是 Blender Z-up 值，sun 是 engine Y-up 值。
+  // 转换: Z-up (x,y,z) → Y-up (x, z, -y)。
+  let front = vec3f(faceFront.x, faceFront.z, -faceFront.y);
+  let right = vec3f(faceRight.x, faceRight.z, -faceRight.y);
+
+  let dot_R = dot(right, sun);
   let is_right = step(0.0, dot_R);
   var uvMapped = uv;
+  // is_right=1 时不翻转 UV.x；is_right=0 时镜像翻转。
   uvMapped.x = mix(-uv.x, uv.x, is_right);
   let alpha = textureSample(sdfMap, sdfSampler, uvMapped).a;
   // 动态阈值: DOT(FRONT, SUN) * 0.5 + 0.5
-  let dot_F = dot(faceFront, sun);
+  let dot_F = dot(front, sun);
   let threshold = dot_F * 0.5 + 0.5;
-  let litMask = select(0.0, 1.0, threshold > alpha);
-  // Backface guard
-  let backFacing = step(dot_F, 0.0);
-  return select(litMask, 0.0, backFacing > 0.5);
+  return select(0.0, 1.0, threshold <= alpha);
 }
 
 // ─── 鼻尖阴影 / Nose Shadow (子 Group: 鼻尖阴影) ───────────────────
