@@ -118,21 +118,16 @@ override DEBUG_MODE: u32 = 0u;
   if (IS_OVER_EYES) { outAlpha = outAlpha * 0.95; }
 
   var out: FSOut;
-  // 响应 Engine 的 sun strength 设置（基准 5.0）
-  let brightnessScale = light.lights[0].color.w / 5.0;
-  // Ambient 补偿: Blender Cycles 的 World Background (0.05) 通过间接光照为 emission 材质提供环境光。
-  // 引擎无间接光照，添加 ambient 项补偿整体暗度。仅作用于 default（真实输出），debug 分支保持原样。
-  let ambient = light.ambientColor.xyz * corrected;
   switch DEBUG_MODE {
-    case 1u: { out.color = vec4f(texColor.rgb * brightnessScale, outAlpha); }
-    case 2u: { out.color = vec4f(corrected * brightnessScale, outAlpha); }
-    case 3u: { out.color = vec4f(rampColor * brightnessScale, outAlpha); }
-    case 4u: { out.color = vec4f(sunVal * brightnessScale, sunVal * brightnessScale, sunVal * brightnessScale, outAlpha); }
-    case 5u: { out.color = vec4f(emissionColor * brightnessScale, outAlpha); }
-    case 6u: { out.color = vec4f(ilmGreen * brightnessScale, ilmGreen * brightnessScale, ilmGreen * brightnessScale, outAlpha); }
-    case 7u: { out.color = vec4f(greenSmooth * brightnessScale, greenSmooth * brightnessScale, greenSmooth * brightnessScale, outAlpha); }
-    case 8u: { out.color = vec4f(halfLambert * brightnessScale, halfLambert * brightnessScale, halfLambert * brightnessScale, outAlpha); }
-    default: { out.color = vec4f((emissionColor + ambient) * brightnessScale, outAlpha); }
+    case 1u: { out.color = vec4f(texColor.rgb, outAlpha); }
+    case 2u: { out.color = vec4f(corrected, outAlpha); }
+    case 3u: { out.color = vec4f(rampColor, outAlpha); }
+    case 4u: { out.color = vec4f(sunVal, sunVal, sunVal, outAlpha); }
+    case 5u: { out.color = vec4f(emissionColor, outAlpha); }
+    case 6u: { out.color = vec4f(ilmGreen, ilmGreen, ilmGreen, outAlpha); }
+    case 7u: { out.color = vec4f(greenSmooth, greenSmooth, greenSmooth, outAlpha); }
+    case 8u: { out.color = vec4f(halfLambert, halfLambert, halfLambert, outAlpha); }
+    default: { out.color = vec4f(emissionColor, outAlpha); }
   }
   out.mask = vec4f(1.0, 1.0, 0.0, out.color.a);
   return out;

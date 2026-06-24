@@ -44,18 +44,11 @@ ${STARRAIL_PRELUDE_WGSL}
   let base = corrected * rampColor;
   let withShadow = base * noseShadow;
 
-  // ── 6. Ambient 补偿 ──
-  // Blender Cycles 的 World Background (0.05) 通过间接光照为 emission 材质提供环境光。
-  // 引擎无间接光照，添加 ambient 项补偿整体暗度。
-  let ambient = light.ambientColor.xyz * corrected;
-
   var out: FSOut;
-  // 响应 Engine 的 sun strength 设置（基准 5.0）
-  let brightnessScale = light.lights[0].color.w / 5.0;
   // alpha: 取 material.alpha 与纹理 alpha 的较小值。
   // 颜.png alpha=1.0 → 不透明；颜赤.png alpha=0.6-0.7 → 半透明叠加。
   let effectiveAlpha = min(alpha, texColor.a);
-  out.color = vec4f((withShadow + ambient) * brightnessScale, effectiveAlpha);
+  out.color = vec4f(withShadow, effectiveAlpha);
   out.mask = vec4f(1.0, 1.0, 0.0, out.color.a);
   return out;
 }

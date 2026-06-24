@@ -86,14 +86,8 @@ fn eye_rgb_curves(c: vec3f) -> vec3f {
   // ── 6. 校色 (C曲线 + HSV×1.85) ──
   let corrected = color_correct(mixed);
 
-  // ── 7. Ambient 补偿 ──
-  // Blender Cycles 的 World Background (0.05) 通过间接光照为 emission 材质提供环境光。
-  // 引擎无间接光照，添加 ambient 项补偿整体暗度。
-  let ambient = light.ambientColor.xyz * corrected;
-
   var out: FSOut;
-  let brightnessScale = light.lights[0].color.w / 5.0;
-  out.color = vec4f((corrected + ambient) * brightnessScale, alpha);
+  out.color = vec4f(corrected, alpha);
   out.mask = vec4f(1.0, 1.0, 0.0, out.color.a);
   return out;
 }

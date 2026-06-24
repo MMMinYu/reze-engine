@@ -134,15 +134,8 @@ ${STARRAIL_PRELUDE_WGSL}
   // Mix.007 (ADD 0.25 × Fresnel) 经 MCP 验证 Fresnel=0，故省略
   let finalColor = base * specScaled;
 
-  // ── 15. Ambient 补偿 ──
-  // Blender Cycles 的 World Background (0.05) 通过间接光照为 emission 材质提供环境光。
-  // 引擎无间接光照，添加 ambient 项补偿整体暗度。
-  let ambient = light.ambientColor.xyz * corrected2;
-
-  // ── 16. 输出 (brightnessScale，与其他 sr_* 材质一致) ──
   var out: FSOut;
-  let brightnessScale = light.lights[0].color.w / 5.0;
-  out.color = vec4f((finalColor + ambient) * brightnessScale, alpha);
+  out.color = vec4f(finalColor, alpha);
   out.mask = vec4f(1.0, 1.0, 0.0, out.color.a);
   return out;
 }

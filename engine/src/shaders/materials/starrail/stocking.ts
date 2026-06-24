@@ -478,8 +478,7 @@ fn hashed_alpha_threshold(co: vec3f) -> f32 {
   var finalColor = fabric * (1.0 - T) + skinLit * T + sssLight;
 
   var out: FSOut;
-  let brightnessScale = light.lights[0].color.w / 5.0;
-  out.color = vec4f(finalColor * brightnessScale, alpha);
+  out.color = vec4f(finalColor, alpha);
   out.mask = vec4f(1.0, 1.0, 0.0, out.color.a);
   return out;
 }

@@ -71,14 +71,8 @@ ${STARRAIL_PRELUDE_WGSL}
   let specScaled = mix(1.0, 20.0, specIntensity);
   let finalColor = base * specScaled;
 
-  // ── 10. Ambient 补偿 ──
-  // Blender Cycles 的 World Background (0.05) 通过间接光照为 emission 材质提供环境光。
-  // 引擎无间接光照，添加 ambient 项补偿整体暗度。
-  let ambient = light.ambientColor.xyz * corrected;
-
   var out: FSOut;
-  let brightnessScale = light.lights[0].color.w / 5.0;
-  out.color = vec4f((finalColor + ambient) * brightnessScale, alpha);
+  out.color = vec4f(finalColor, alpha);
   out.mask = vec4f(1.0, 1.0, 0.0, out.color.a);
   return out;
 }
@@ -139,14 +133,8 @@ ${STARRAIL_PRELUDE_WGSL}
   let specScaled = mix(1.0, 20.0, specIntensity);
   let finalColor = base * specScaled;
 
-  // ── 10. Ambient 补偿 ──
-  // Blender Cycles 的 World Background (0.05) 通过间接光照为 emission 材质提供环境光。
-  // 引擎无间接光照，添加 ambient 项补偿整体暗度。
-  let ambient = light.ambientColor.xyz * corrected;
-
   var out: FSOut;
-  let brightnessScale = light.lights[0].color.w / 5.0;
-  out.color = vec4f((finalColor + ambient) * brightnessScale, alpha);
+  out.color = vec4f(finalColor, alpha);
   out.mask = vec4f(1.0, 1.0, 0.0, out.color.a);
   return out;
 }
